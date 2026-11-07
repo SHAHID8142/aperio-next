@@ -153,8 +153,9 @@ def test_environment_variables_not_captured(run_cli, project_dir, monkeypatch):
 
 
 def test_to_dict_schema_is_stable(run_cli, project_dir):
-    """The machine contract: top-level keys are pinned; the exported
-    context never contains the local filesystem path."""
+    """The machine contract: top-level keys are pinned (Feature 03 added
+    the documented additive 'plan' summary key); the exported context
+    never contains the local filesystem path."""
     run_cli("init", str(project_dir))
     context = load_context(project_dir)
     dumped = context.to_dict()
@@ -164,11 +165,13 @@ def test_to_dict_schema_is_stable(run_cli, project_dir):
         "brief",
         "decisions",
         "handoff",
+        "plan",
         "missing",
         "skipped_headings",
         "malformed_entries",
         "duplicate_decision_ids",
     }
+    assert dumped["plan"] is None  # no plan created yet: normal state
     assert set(dumped["state"].keys()) == {
         "schema_version",
         "name",
@@ -204,12 +207,14 @@ def test_cli_memory_json_machine_readable(run_cli, project_dir):
         "brief",
         "decisions",
         "handoff",
+        "plan",
         "missing",
         "skipped_headings",
         "malformed_entries",
         "duplicate_decision_ids",
     }
     assert data["state"]["name"] == project_dir.name
+    assert data["plan"] is None  # freshly initialized: no plan yet
 
 
 def test_cli_memory_json_via_subprocess(run_cli, project_dir):

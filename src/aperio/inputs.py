@@ -62,13 +62,15 @@ def read_json_fields(
     path: str | Path,
     required_fields: tuple[str, ...],
     optional_int_fields: tuple[str, ...] = (),
+    optional_str_fields: tuple[str, ...] = (),
 ) -> dict:
     """Read and validate a strict JSON fields file.
 
     ``optional_int_fields`` are known keys that may be present; when given
-    they must be non-negative integers (booleans rejected). Unknown keys —
-    anything outside ``required_fields`` and ``optional_int_fields`` — are
-    always rejected.
+    they must be non-negative integers (booleans rejected).
+    ``optional_str_fields`` likewise require non-empty strings when
+    present. Unknown keys — anything outside the required and optional
+    sets — are always rejected.
 
     :raises ValidationError: for any violation; the message names the file
         and the offending field.
@@ -96,7 +98,7 @@ def read_json_fields(
     if not isinstance(data, dict):
         raise ValidationError(f"input file {path} must contain a JSON object")
 
-    allowed = set(required_fields) | set(optional_int_fields)
+    allowed = set(required_fields) | set(optional_int_fields) | set(optional_str_fields)
     missing = [name for name in required_fields if name not in data]
     if missing:
         raise ValidationError(
@@ -108,8 +110,8 @@ def read_json_fields(
             f"input file {path} has unknown field(s): {', '.join(unknown)} "
             f"(expected: {', '.join(required_fields)}"
             + (
-                f"; optional: {', '.join(optional_int_fields)})"
-                if optional_int_fields
+                f"; optional: {', '.join(optional_int_fields + optional_str_fields)})"
+                if (optional_int_fields or optional_str_fields)
                 else ")"
             )
         )
@@ -129,6 +131,14 @@ def read_json_fields(
                 raise ValidationError(
                     f"input file {path}: field '{name}' must be a "
                     "non-negative integer"
+                )
+            fields[name] = value
+    for name in optional_str_fields:
+        if name in data:
+            value = data[name]
+            if not isinstance(value, str) or not value.strip():
+                raise ValidationError(
+                    f"input file {path}: field '{name}' must be a non-empty string"
                 )
             fields[name] = value
     return fields

@@ -46,6 +46,7 @@ from aperio.handoff import (
     read_handoff,
 )
 from aperio.paths import resolve_target
+from aperio.planstore import plan_summary
 from aperio.project import APERIO_DIR_NAME, aperio_dir_for, require_supported_state
 from aperio.schema import ProjectState
 
@@ -59,7 +60,8 @@ class ProjectContext:
     ``target`` is the resolved project location for display only; it is
     deliberately excluded from :meth:`to_dict` — an absolute filesystem
     path is machine-specific information and must not enter exported
-    context.
+    context. ``plan`` is the Feature-03 plan summary (None when the
+    project has no plan — a normal state).
     """
 
     state: ProjectState
@@ -67,6 +69,7 @@ class ProjectContext:
     brief: str | None
     decisions: list[DecisionEntry] | None
     handoff: HandoffRead | None
+    plan: dict | None
     missing: list[str] = field(default_factory=list)
     skipped_headings: int = 0
     malformed_entries: list[str] = field(default_factory=list)
@@ -76,8 +79,8 @@ class ProjectContext:
         """Stable machine-readable schema for ``aperio memory --json``.
 
         Contains only shareable context: state, brief, decisions, handoff,
-        and read metadata. Never ``.aperio/local/`` content, never the
-        local filesystem path.
+        the plan summary, and read metadata. Never ``.aperio/local/``
+        content, never the local filesystem path.
         """
         return {
             "reader_version": __version__,
@@ -106,6 +109,7 @@ class ProjectContext:
                 if self.handoff is not None
                 else None
             ),
+            "plan": self.plan,
             "missing": list(self.missing),
             "skipped_headings": self.skipped_headings,
             "malformed_entries": list(self.malformed_entries),
@@ -129,6 +133,7 @@ def load_context(project_path: str | Path) -> ProjectContext:
         brief=None,
         decisions=None,
         handoff=None,
+        plan=plan_summary(aperio_dir),
     )
 
     brief_path = aperio_dir / BRIEF_FILE_NAME

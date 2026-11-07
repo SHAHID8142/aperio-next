@@ -150,9 +150,11 @@ local/
 # (reserved by aperio; never committed).
 state.json.tmp
 handoff.md.tmp
+plan.json.tmp
 state.lock
 decisions.lock
 handoff.lock
+plan.lock
 """
 
 LOCAL_README_TEMPLATE = """\

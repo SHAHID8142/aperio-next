@@ -37,7 +37,7 @@ from pathlib import Path
 
 from aperio.errors import PathError, StateError
 
-LOCK_TIMEOUT_SECONDS = 10.0
+LOCK_TIMEOUT_SECONDS = 30.0
 _RETRY_SLEEP_SECONDS = 0.02
 
 

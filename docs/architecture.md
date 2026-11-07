@@ -1,4 +1,4 @@
-# Aperio Architecture — Features 01 & 02 (implemented)
+# Aperio Architecture — Features 01–03 (implemented)
 
 This document describes what Aperio **is today**. Planned capabilities are in
 [roadmap.md](roadmap.md) and are never described here as working.
@@ -16,6 +16,10 @@ memory.
   context, append-only decision recording, validated structured handoffs,
   and compare-and-swap phase updates — so an agent can continue work without
   the previous agent's conversation history.
+- Feature 03 delivers planning and execution tracking: a versioned plan
+  document, a dependency-validated task graph with an approval gate, and a
+  rigorous evidence-based task lifecycle. It manages plans and tasks; it
+  does NOT execute agents or implement autonomous coding.
 
 ## Explicit non-goals (for the whole project)
 
@@ -41,18 +45,22 @@ src/aperio/
 ├── errors.py      AperioError + PathError / NotInitializedError /
 │                  StateError / ValidationError
 ├── handoff.py     structured handoff: validate, render, replace (CAS option)
-├── inputs.py      strict JSON input files for CLI write commands
+├── inputs.py      strict input validation (JSON fields, line-separator rules)
+├── locks.py       advisory file locks: bounded wait, never stolen
 ├── memory.py      portable context read API (ProjectContext, load_context)
 ├── paths.py       safe path resolution policy (see below)
+├── planmodel.py   plan/task validation, dependency graph, lifecycle (pure)
+├── planstore.py   plan persistence: create/revise/approve/task-status under
+│                  plan.lock with single-snapshot byte-CAS
 ├── progress.py    phase updates (compare-and-swap state updates)
-├── project.py     init/status operations and file templates
+├── project.py     init/status operations, file templates, boundary checks
 └── schema.py      versioned state schema: validate, read, atomic write,
                    replace_state_if_unchanged (deliberate update path)
 ```
 
-Dependency direction is strictly downward: `cli → memory/decisions/handoff/
-progress → project/schema/paths → errors`. Nothing imports upward. The CLI
-layer is the only module allowed to print.
+Dependency direction is strictly downward: `cli → memory/planning/handoff/
+decisions/progress → project/schema/paths/locks → errors`. Nothing imports
+upward. The CLI layer is the only module allowed to print.
 
 ## Extension boundaries
 
@@ -108,28 +116,46 @@ Additionally:
 - I/O failures during writes (permissions, conflicting paths) surface
   as clean, actionable errors rather than tracebacks.
 
+## `.aperio/` project context (implemented)
+
+| Path | Role | Portable? |
+|------|------|-----------|
+| `state.json` | versioned, machine-readable state; single source of truth | yes |
+| `brief.md` | what the project is building and why | yes |
+| `decisions.md` | append-only decision log | yes |
+| `handoff.md` | current handoff notes (replaced, not appended) | yes |
+| `plan.json` | versioned plan + task graph (Feature 03; created via `plan-create`) | yes |
+| `.gitignore` | keeps `local/`, temp files, and locks out of any VCS | yes |
+| `local/` | machine-local and sensitive data | **no — never shared** |
+
+Schema v1 (`state.json`): `schema_version`, `name`, `created_at`,
+`updated_at`, `phase`, `aperio_version` — all required; unknown extra keys
+are tolerated for forward compatibility and preserved through supported
+updates; unknown *versions* abort rather than being modified.
+
 ## Feature 02: portable agent memory (implemented)
 
 ### Modules and commands
 
 | Command | Library entry point | Purpose |
 |---------|--------------------|---------|
-| `aperio memory <dir> [--json]` | `memory.load_context` | read the full shareable context (state, brief, decisions, handoff) with typed metadata |
+| `aperio memory <dir> [--json]` | `memory.load_context` | read the full shareable context (state, brief, decisions, handoff, plan summary) with typed metadata |
 | `aperio decision-add <dir> (--file <json> \| --title --context --decision --consequences)` | `decisions.append_decision` | append one decision; prints the assigned `DEC-NNNN` id |
 | `aperio handoff-write <dir> --file <json>` | `handoff.write_handoff` | validate and replace the structured handoff |
 | `aperio phase-set <dir> <phase>` | `progress.update_phase` | update the phase with lost-update detection |
 
 `memory --json` emits a stable schema (keys will not be removed or renamed
-within Feature 02; new keys may be added): `reader_version`, `state`,
+within a feature; new keys may be added): `reader_version`, `state`,
 `brief`, `decisions` (list or null when the file is missing), `handoff`
-(structured flag/version/fields/raw), `missing`, `skipped_headings`,
-`malformed_entries`, `duplicate_decision_ids`. It never contains
-`.aperio/local/` content, environment values, or the local filesystem
-path. A shareable file that is a live symlink is refused rather than read
-(a link could point at local or private data); dangling links are reported
-as missing for the brief/decisions/handoff files via `memory`, while a
-symlinked `state.json` — dangling or not — is refused outright, as are
-symlinked `decisions.md`/`handoff.md` for the direct library readers.
+(structured flag/version/revision/fields/raw), `plan` (Feature-03 summary
+or null), `missing`, `skipped_headings`, `malformed_entries`,
+`duplicate_decision_ids`. It never contains `.aperio/local/` content,
+environment values, or the local filesystem path. A shareable file that is
+a live symlink is refused rather than read (a link could point at local or
+private data); dangling links are reported as missing for the
+brief/decisions/handoff files via `memory`, while a symlinked `state.json`
+— dangling or not — is refused outright, as are symlinked
+`decisions.md`/`handoff.md`/`plan.json` for the direct library readers.
 
 ### Decision log grammar (normative)
 
@@ -236,6 +262,84 @@ Schema v1 is preserved by phase updates: only `phase`, `updated_at`, and
 no-op that does not bump `updated_at`. The decision log is the project's
 audit trail — phase transitions are not auto-logged.
 
+## Feature 03: planning, task graph & execution tracking (implemented)
+
+### Plan document (`.aperio/plan.json`, plan-schema v1)
+
+The plan is created explicitly (`aperio plan-create`) — it is **not**
+init-created, has no template, and is deliberately **not** part of
+`CONTEXT_FILES`/`aperio status` (status reports init-created context;
+plan presence is surfaced by `memory`, `plan-show`, and `task-list`).
+Stored dict-based: unknown keys found on disk are tolerated and preserved,
+while create/revise **input** is strictly validated — unknown and
+system-managed keys (schema_version, plan_version, approval, timestamps,
+aperio_version, and every task lifecycle key) are rejected at the input
+boundary. The `tasks` array order is not semantic; readers sort by id or
+topologically. Full schema: see `aperio/planmodel.py` and the README.
+
+### Plan lifecycle and revisions
+
+- `plan-create` (create-only, exclusive hard-link publish): every task
+  starts `pending` with no lifecycle history — fabricated completion at
+  create time is impossible. Revision 1, approval `draft`.
+- `plan-revise --revises N`: full content replacement; `N` must equal the
+  current `plan_version` (stale → conflict, nothing modified). Lifecycle
+  state (status/owner/blocked_reason/verification) is carried **verbatim**
+  for surviving task ids; new tasks start pending; **removing a non-pending
+  task is refused** (verification evidence must never be silently
+  destroyed). Every revision resets approval to draft — renewed approval
+  is required before execution tracking resumes (conservative by design:
+  no "material change" judgment calls). Agents must re-read the plan after
+  any revise; in-progress work is stranded until re-approval.
+- `plan-approve [--revision N] [--by LABEL]`: records the approval stamp
+  (`approved_revision` = the approved plan_version). This is an
+  **operational marker, not cryptographic proof** of human authorization —
+  the operator is responsible for genuine review; aperio never
+  auto-approves. Approval never bumps `plan_version`; re-approval
+  re-stamps. `approved_revision` is historical provenance ("what was
+  approved"), never a freshness predicate — consumers must use
+  `approval_status`/`approval_required`.
+- `plan_version` bumps on every saved change (revisions AND task-status
+  operations), which is what makes stale revise declarations detectable.
+
+### Task graph and lifecycle
+
+Task ids are `TASK-<digits>`, unique, and every `depends_on` must reference
+an existing task; self-dependencies and cycles (named in the error) are
+rejected at create/revise. **Readiness is derived, never stored**: a task
+is ready when it is `pending` and all dependencies are `completed` —
+blocked or reopened dependencies immediately de-ready dependents with no
+stored staleness.
+
+Stored statuses: `pending`, `in-progress`, `blocked`, `completed`.
+Transition table (everything else forbidden; nothing silent):
+
+| From | To | Requirements |
+|------|----|--------------|
+| pending | in-progress | `owner` (agent claiming) + all dependencies completed (re-checked at operation time) + approved plan |
+| pending / in-progress | blocked | `blocked_reason` |
+| blocked | pending | unblock: owner and reason cleared |
+| in-progress | completed | dependencies completed (re-checked) + `evidence` + `limitations` + `result == "passed"` in the same operation + approved plan |
+| completed | in-progress | explicit reopen; clears the verification block; refused while any dependent is in-progress or completed |
+
+`result == "failed"` records a verification attempt on the in-progress
+task (owner preserved); a failed verification can never be recorded as
+successful completion. Failure records are last-write — durable failure
+history belongs in the append-only decision log. Completion requires an
+approved plan; the plan being approved is an operational marker whose
+genuineness is the operator's responsibility.
+
+### Memory integration
+
+`aperio memory --json` gains the additive `plan` key: `null` when no plan
+exists (normal state; not added to `missing`), otherwise a concise summary
+— `{present, unsupported_schema, schema_version, plan_version,
+approval_status, approved_revision, approval_required, objective,
+task_counts, ready_task_ids, blocked_task_ids}`. File-level corruption is
+fatal (consistent with other shareable files); a newer plan-schema version
+degrades gracefully (an `unsupported_schema` marker, never fatal);
+live-symlinked plan files are refused; dangling links read as absent.
+
 ## Cross-agent portability principles (implemented)
 
 1. **Plain text, standard formats.** Everything portable is JSON or
@@ -253,15 +357,17 @@ audit trail — phase transitions are not auto-logged.
 ## How agents discover current project state
 
 1. Run `aperio memory <project-directory> --json` — one call returns the
-   validated state, brief, decision history, handoff, and metadata. (The
+   validated state, brief, decision history, handoff, plan summary (with
+   approval state, task counts, ready/blocked tasks), and metadata. (The
    Feature-01 commands `status` and raw `.aperio/state.json` remain
    equivalent starting points.)
 2. Check `schema_version` first: above the supported version → stop, report,
    never modify; below 1 → corrupt/unrecognized → report, never modify.
 3. Read `brief.md` → `decisions.md` (append-only history; damage is
-   reported in metadata) → `handoff.md` (current handoff; `structured`
-   flag tells you whether it is machine-parseable).
+   reported in metadata) → `handoff.md` (current handoff) → the plan
+   summary (approval state and task readiness).
 4. Write progress back through the APIs: `aperio decision-add` (append
    only), `aperio handoff-write` (validated replacement, optional CAS),
-   `aperio phase-set` (compare-and-swap). Never touch `local/` unless a
-   tool explicitly requires it.
+   `aperio phase-set` (compare-and-swap), `aperio task-status` (validated
+   transitions, evidence-required completion). Never touch `local/` unless
+   a tool explicitly requires it.

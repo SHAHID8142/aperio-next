@@ -1,10 +1,11 @@
 # aperio-next
 
 **Aperio** is a model-agnostic, multi-agent software development orchestrator.
-This repository contains **Features 01 and 02**: the project foundation
-(bootstrap and inspect portable project state) and portable agent memory
-(read shared context, record decisions, hand off work — so agents can
-continue without each other's conversation history).
+This repository contains **Features 01–03**: the project foundation
+(bootstrap and inspect portable project state), portable agent memory
+(read shared context, record decisions, hand off work), and project
+planning with a dependency-validated task graph and evidence-based
+execution tracking.
 
 Anything not listed below is **planned, not implemented**. See
 [docs/roadmap.md](docs/roadmap.md) for what is coming and
@@ -14,7 +15,8 @@ Anything not listed below is **planned, not implemented**. See
 
 - Implemented (Feature 01): `aperio --version`, `aperio init <project-directory>`, `aperio status <project-directory>`
 - Implemented (Feature 02): `aperio memory [--json]`, `aperio decision-add`, `aperio handoff-write`, `aperio phase-set`
-- Not implemented (by design, yet): task orchestration, task planning, project interviews, agent integrations
+- Implemented (Feature 03): `aperio plan-create`, `aperio plan-show [--json]`, `aperio plan-approve`, `aperio plan-revise`, `aperio task-list [--json]`, `aperio task-status`
+- Not implemented (by design, yet): agent execution/orchestration, autonomous coding, project interviews, agent integrations
 
 ## Requirements
 
@@ -72,6 +74,19 @@ aperio handoff-write ./my-project --file handoff.json --force
 # the filesystem cannot rule out a write in the final rename instant —
 # see docs/architecture.md for the exact guarantees)
 aperio phase-set ./my-project implementation
+
+# Planning and execution tracking (Feature 03)
+aperio plan-create ./my-project --file plan.json    # create the plan (draft, revision 1)
+aperio plan-show ./my-project                       # approval state, tasks, readiness
+aperio plan-show ./my-project --json                # full plan document
+aperio plan-approve ./my-project --by "team lead"   # record approval (operational
+                                                    # marker after genuine human review)
+aperio plan-revise ./my-project --file plan-v2.json --revises 1
+                                                    # new draft revision (resets approval)
+aperio task-list ./my-project                       # tasks with derived readiness
+aperio task-status ./my-project TASK-001 --status in-progress --owner agent-a
+aperio task-status ./my-project TASK-001 --status completed \
+  --evidence "all tests green" --limitations "none noted" --result passed
 ```
 
 ### `aperio init`
@@ -128,15 +143,37 @@ formats (returned as raw text, never fatal). Phase updates via `phase-set`
 use compare-and-swap so concurrent modifications that land before the
 final check are detected instead of silently lost.
 
+### Planning & execution tracking (Feature 03)
+
+`plan-create` stores a versioned plan (`.aperio/plan.json`, plan-schema v1)
+with objective, outcome, scope/exclusions, assumptions/risks, strategy,
+acceptance criteria, verification strategy, and a task graph. Tasks carry
+unique `TASK-NNNN` ids, deliverables, acceptance criteria, and
+dependencies; **readiness is derived** (pending + all dependencies
+completed), never stored. Transitions (`pending → in-progress →
+completed`, with `blocked` as an explicit side state) are validated:
+starting requires claiming ownership and satisfied dependencies;
+completion requires recorded verification evidence, limitations, and a
+`passed` result; reopening is explicit and refused while dependents rely
+on the completion. Execution tracking requires an **approved** plan —
+`plan-approve` records an operational marker (never cryptographic proof;
+genuine human review is the operator's responsibility) — and any
+`plan-revise` resets approval to draft. Revisions declare the
+`plan_version` they replace; stale declarations are refused. Plan revisions,
+approvals, and task transitions run under a coordination lock with
+single-snapshot byte-CAS persistence (plan creation is create-only via
+an exclusive hard-link publish). See [docs/architecture.md](docs/architecture.md).
+
 ## How agents discover current project state
 
 1. Run `aperio memory <project-directory> --json` (or `aperio status`, or
    read `.aperio/state.json` directly).
 2. Check `schema_version` first; treat unknown versions as "written by a newer Aperio" and stop.
-3. Read the brief, the append-only decision log, and the handoff (all
-   included in `memory --json`).
+3. Read the brief, the append-only decision log, the handoff, and the plan
+   summary (all included in `memory --json`): approval state, task counts,
+   and which tasks are ready or blocked.
 4. Record progress through the APIs: `decision-add`, `handoff-write`,
-   `phase-set`.
+   `phase-set`, `task-status`.
 5. Never store credentials anywhere under `.aperio/` except `.aperio/local/`, which is
    git-ignored and not portable by definition.
 
