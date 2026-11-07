@@ -38,6 +38,7 @@ from aperio.schema import (
     build_initial_state,
     read_state,
     state_path,
+    state_tmp_path,
     write_state,
 )
 
@@ -175,10 +176,21 @@ def _ensure_dir(path: Path) -> bool:
 
 
 def _ensure_file(path: Path, content: str) -> bool:
-    """Create ``path`` with ``content`` only if missing; return True if created."""
+    """Create ``path`` with ``content`` only if missing; return True if created.
+
+    Only a regular file counts as legitimately present. Any other occupant
+    (directory, FIFO, socket, ...) is an explicit error, never a silent
+    "present" report.
+    """
     _reject_symlink(path)
     if path.exists():
-        return False
+        if path.is_file():
+            return False
+        kind = "a directory" if path.is_dir() else "a special file"
+        raise PathError(
+            f"cannot write {path}: {kind} exists there; "
+            "remove it and re-run 'aperio init' to repair"
+        )
     try:
         path.write_text(content, encoding="utf-8")
     except OSError as exc:
@@ -190,14 +202,43 @@ def _remove_stale_state_tmp(aperio_dir: Path) -> bool:
     """Delete a leftover ``state.json.tmp`` from a crashed write, if any.
 
     ``state.json.tmp`` is a reserved Aperio temporary name (see schema.py).
-    Symlinks and directories are left alone and reported as errors by the
-    normal write path.
+    Only a stale *regular file* left by a crashed Aperio write is removed
+    (and the removal is reported, never silent). Any other conflicting path
+    is left untouched and rejected by :func:`_check_state_tmp_free`.
     """
-    stale = aperio_dir / f"{_STATE}.tmp"
+    stale = state_tmp_path(aperio_dir)
     if stale.exists() and not os.path.islink(stale) and stale.is_file():
-        stale.unlink()
+        try:
+            stale.unlink()
+        except OSError as exc:
+            raise PathError(
+                f"cannot remove stale temporary file {stale}: "
+                f"{exc.strerror or exc}; remove it manually and re-run "
+                "'aperio init'"
+            ) from None
         return True
     return False
+
+
+def _check_state_tmp_free(aperio_dir: Path) -> None:
+    """Require the reserved temporary name to be unobstructed.
+
+    A directory or symlink (live or dangling) at ``state.json.tmp`` would
+    break or redirect the next state write, so init fails with an
+    actionable error instead of proceeding or destroying the path.
+    """
+    tmp = state_tmp_path(aperio_dir)
+    if os.path.islink(tmp):
+        raise PathError(
+            f"refusing to follow symlink at {tmp} -> {os.path.realpath(tmp)}; "
+            "remove it and re-run 'aperio init' to repair"
+        )
+    if tmp.exists():
+        raise PathError(
+            f"conflicting path at reserved temporary file {tmp}: "
+            "something other than Aperio state occupies it; remove it and "
+            "re-run 'aperio init' to repair"
+        )
 
 
 # --- init ---------------------------------------------------------------------
@@ -220,9 +261,15 @@ def init_project(raw_path: str) -> InitResult:
     aperio_dir = aperio_dir_for(target)
     result = InitResult(target=target, already_initialized=False)
 
+    # A symlinked state file — live or dangling — is never followed or
+    # replaced during initialization: state integrity must not depend on
+    # anything outside the project directory.
+    state_file = state_path(aperio_dir)
+    _reject_symlink(state_file)
+
     # Validate existing state BEFORE writing anything else. A corrupt or
     # too-new state raises here and aborts the whole operation cleanly.
-    if state_path(aperio_dir).exists():
+    if state_file.exists():
         result.state = read_state(aperio_dir)
         result.already_initialized = True
 
@@ -233,6 +280,7 @@ def init_project(raw_path: str) -> InitResult:
 
     if _remove_stale_state_tmp(aperio_dir):
         result.removed.append(f"{APERIO_DIR_NAME}/{_STATE}.tmp")
+    _check_state_tmp_free(aperio_dir)
 
     if _ensure_dir(aperio_dir / LOCAL_DIR_NAME):
         result.created.append(f"{APERIO_DIR_NAME}/{LOCAL_DIR_NAME}/")

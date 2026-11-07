@@ -61,11 +61,12 @@ print.
 1. non-empty, NUL-free paths; `~` expansion; absolute form
 2. the filesystem root is rejected
 3. an existing target must be a directory — a regular file is rejected
-4. a symlink at the target is rejected; the same rejection is enforced for
-   every individual write target inside the project (`brief.md`,
-   `decisions.md`, `handoff.md`, `.gitignore`, `local/`, and the
-   intermediate `state.json.tmp`), so a planted symlink can never redirect
-   Aperio's writes outside the project directory
+4. a symlink at the target is rejected — live *or dangling* (a dangling
+   link must not cause the project to be created at its destination); the
+   same rejection is enforced for every individual write target inside the
+   project (`brief.md`, `decisions.md`, `handoff.md`, `.gitignore`,
+   `local/`, and `state.json` itself), so a planted symlink can never
+   redirect Aperio's writes outside the project directory
 5. symlinked *ancestor* components are followed transparently, because e.g.
    macOS `/tmp` is itself a symlink; the returned path is passed through
    `os.path.realpath`, so the location echoed back to the user is where the
@@ -74,8 +75,17 @@ print.
 Read-only operations (`status`) apply rules 1-2 only and may read through
 symlinks. This asymmetry is deliberate and documented.
 
-Additionally, `state.json.tmp` is a reserved Aperio temporary name; `init`
-removes a stale (non-symlink, regular-file) leftover from a crashed write.
+Additionally:
+
+- `state.json.tmp` is a **reserved** Aperio temporary name. On every `init`,
+  Aperio's own stale regular-file leftover from a crashed write is removed
+  (and reported); *any* other occupant — a directory, a symlink live or
+  dangling, or anything else — aborts `init` with an actionable error
+  instead of being destroyed or silently ignored.
+- A directory or other non-regular occupant at a context-file path (e.g.
+  `.aperio/brief.md`) is an explicit error, never a false "present" report.
+- I/O failures during state writes (permissions, conflicting paths) surface
+  as clean, actionable errors rather than tracebacks.
 
 ## `.aperio/` project state (implemented)
 

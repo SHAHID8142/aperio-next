@@ -74,6 +74,15 @@ def state_path(aperio_dir: Path) -> Path:
     return aperio_dir / STATE_FILE_NAME
 
 
+def state_tmp_path(aperio_dir: Path) -> Path:
+    """Path of the reserved atomic-write temporary file.
+
+    ``state.json.tmp`` is reserved by Aperio: init verifies it is free (or
+    removes Aperio's own stale regular-file leftover) before any operation.
+    """
+    return aperio_dir / (STATE_FILE_NAME + ".tmp")
+
+
 def write_state(aperio_dir: Path, state: ProjectState) -> None:
     """Write state atomically (write to a temp file, then replace).
 
@@ -81,17 +90,28 @@ def write_state(aperio_dir: Path, state: ProjectState) -> None:
     renames *over* a symlink at the target instead of following it, so the
     final state file cannot be redirected; the temp path itself is checked
     to keep even that intermediate write inside the project.
+
+    Any I/O failure (permissions, a conflicting path at the temp or target
+    name) raises StateError with an actionable message; conflicting content
+    is never silently destroyed.
     """
     target = state_path(aperio_dir)
-    tmp = target.with_name(STATE_FILE_NAME + ".tmp")
+    tmp = state_tmp_path(aperio_dir)
     if os.path.islink(tmp):
         raise StateError(
             f"refusing to follow symlink at {tmp}; "
             "remove it and re-run 'aperio init' to repair"
         )
     payload = json.dumps(asdict(state), indent=2) + "\n"
-    tmp.write_text(payload, encoding="utf-8")
-    tmp.replace(target)
+    try:
+        tmp.write_text(payload, encoding="utf-8")
+        tmp.replace(target)
+    except OSError as exc:
+        raise StateError(
+            f"cannot write project state at {target}: {exc.strerror or exc}; "
+            f"check for a conflicting path at {target} or {tmp}, remove it "
+            "manually if it is not Aperio content, and re-run 'aperio init'"
+        ) from None
 
 
 def read_state(aperio_dir: Path) -> ProjectState:

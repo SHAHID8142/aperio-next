@@ -7,9 +7,10 @@ Policy (implemented, not aspirational):
 3. The filesystem root (``/`` on POSIX, drive roots on Windows) is rejected.
 4. For writing operations: if the target path exists it must be a directory;
    a regular file is rejected so unrelated content can never be clobbered,
-   and a symlink at the target is rejected so writes can never be silently
-   redirected. The same rule is enforced per write target *inside* the
-   project (see ``project._ensure_file`` / ``project._ensure_dir``), not
+   and a symlink at the target is rejected — live *or dangling* — so writes
+   can never be silently redirected. The same rule is enforced per write
+   target *inside* the project (see ``project._ensure_file`` /
+   ``project._ensure_dir`` and the ``state.json`` check in ``init``), not
    only at the top-level project path.
 5. Ancestor components are resolved transparently. This is a documented
    trade-off: on macOS ``/tmp`` is itself a symlink, so rejecting symlinked
@@ -49,7 +50,11 @@ def resolve_target(raw: str, *, for_writing: bool) -> Path:
             f"refusing to initialize a project at the filesystem root ({absolute})"
         )
 
-    if for_writing and absolute.exists() and os.path.islink(absolute):
+    if for_writing and os.path.islink(absolute):
+        # os.path.islink matches dangling symlinks too: a link whose
+        # destination does not exist must still be rejected, otherwise
+        # realpath() below would resolve through it and the project would
+        # be created at the link's destination.
         raise PathError(
             f"refusing to follow symlink at target path ({absolute} -> "
             f"{os.path.realpath(absolute)})"

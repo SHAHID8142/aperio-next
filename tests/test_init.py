@@ -150,7 +150,7 @@ def test_init_rejects_symlink_target(run_cli, tmp_path):
     link.symlink_to(real, target_is_directory=True)
     code, _, err = run_cli("init", str(link))
     assert code == 1
-    assert "symlink" in err
+    assert "refusing to follow symlink" in err
     assert not (real / ".aperio").exists()
 
 
@@ -163,6 +163,135 @@ def test_init_rejects_symlink_to_file(run_cli, tmp_path):
     assert code == 1
     # The real file must be untouched.
     assert target_file.read_text() == "x"
+
+
+def test_init_rejects_dangling_symlink_at_target(run_cli, tmp_path):
+    """A dangling symlink at the target must fail init and never create
+    anything at its destination."""
+    destination = tmp_path / "outside" / "newdir"
+    link = tmp_path / "dangling-link"
+    link.symlink_to(destination)
+    code, _, err = run_cli("init", str(link))
+    assert code == 1
+    assert "refusing to follow symlink" in err
+    # Nothing was created at the symlink destination.
+    assert not destination.parent.exists() or not destination.exists()
+    assert not (destination / ".aperio").exists()
+    # The link itself was left alone.
+    assert link.is_symlink()
+
+
+def test_init_rejects_symlinked_state_file(run_cli, project_dir, tmp_path):
+    """A state.json symlink (live) is rejected even when it points at a
+    *valid* state file; the pointed-to file is preserved and the link is
+    not replaced."""
+    run_cli("init", str(project_dir))
+    valid_outside_state = json.dumps(
+        {
+            "schema_version": SCHEMA_VERSION,
+            "name": "outside",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "phase": "initialized",
+            "aperio_version": "0.1.0",
+        }
+    )
+    outside_state = tmp_path / "outside-state.json"
+    outside_state.write_text(valid_outside_state)
+    (project_dir / ".aperio/state.json").unlink()
+    (project_dir / ".aperio/state.json").symlink_to(outside_state)
+    code, _, err = run_cli("init", str(project_dir))
+    assert code == 1  # pre-fix this is 0: the valid state is accepted through the link
+    assert "refusing to follow symlink" in err
+    assert (project_dir / ".aperio/state.json").is_symlink()
+    assert outside_state.read_text() == valid_outside_state
+
+
+def test_init_rejects_dangling_state_symlink(run_cli, project_dir, tmp_path):
+    """A dangling state.json symlink must not be silently replaced and
+    nothing may be created at its destination."""
+    run_cli("init", str(project_dir))
+    (project_dir / ".aperio/state.json").unlink()
+    destination = tmp_path / "elsewhere" / "state.json"
+    (project_dir / ".aperio/state.json").symlink_to(destination)
+    code, _, err = run_cli("init", str(project_dir))
+    assert code == 1
+    assert "refusing to follow symlink" in err
+    # The symlink was not renamed over and the destination was not created.
+    assert (project_dir / ".aperio/state.json").is_symlink()
+    assert not destination.exists()
+    # User context files were not touched by the aborted run.
+    assert (project_dir / ".aperio/brief.md").is_file()
+
+
+def test_init_rejects_directory_at_context_file(run_cli, project_dir):
+    """A directory where a context file belongs is an explicit error, not a
+    false 'present' report."""
+    run_cli("init", str(project_dir))
+    brief_dir = project_dir / ".aperio/brief.md"
+    brief_dir.unlink()
+    brief_dir.mkdir()
+    code, out, err = run_cli("init", str(project_dir))
+    assert code == 1
+    assert "directory" in err
+    assert brief_dir.is_dir()
+    # Nothing after the failure was touched.
+    assert (project_dir / ".aperio/decisions.md").is_file()
+    assert "present  .aperio/brief.md" not in out
+
+
+def test_init_rejects_directory_at_state_tmp(run_cli, project_dir):
+    """A directory occupying the reserved temp name must produce a clean,
+    actionable error - not a traceback - and must not be destroyed."""
+    run_cli("init", str(project_dir))
+    state = (project_dir / ".aperio/state.json").read_text()
+    tmp_dir = project_dir / ".aperio/state.json.tmp"
+    tmp_dir.mkdir()
+    code, _, err = run_cli("init", str(project_dir))
+    assert code == 1
+    assert "Traceback" not in err
+    assert "state.json.tmp" in err
+    assert tmp_dir.is_dir()
+    assert (project_dir / ".aperio/state.json").read_text() == state
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "mkfifo"),
+    reason="FIFOs are a POSIX special-file type",
+)
+def test_init_rejects_special_file_at_context_file(run_cli, project_dir):
+    """A non-regular, non-directory occupant (FIFO) at a context-file path
+    is an explicit error, never a false 'present' report."""
+    run_cli("init", str(project_dir))
+    fifo = project_dir / ".aperio/brief.md"
+    fifo.unlink()
+    os.mkfifo(fifo)
+    code, out, err = run_cli("init", str(project_dir))
+    assert code == 1
+    assert "special file" in err
+    assert fifo.exists() and not fifo.is_file()
+    assert "present  .aperio/brief.md" not in out
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "geteuid") or os.geteuid() == 0,
+    reason="chmod permissions do not restrict the root user",
+)
+def test_init_reports_unremovable_stale_tmp(run_cli, project_dir):
+    """If the stale temp file cannot be removed, init fails with an
+    actionable error instead of crashing."""
+    run_cli("init", str(project_dir))
+    stale = project_dir / ".aperio/state.json.tmp"
+    stale.write_text("garbage from a crashed write")
+    aperio_dir = project_dir / ".aperio"
+    aperio_dir.chmod(0o555)
+    try:
+        code, _, err = run_cli("init", str(project_dir))
+        assert code == 1
+        assert "cannot remove stale temporary file" in err
+        assert stale.is_file()
+    finally:
+        aperio_dir.chmod(0o755)
 
 
 @pytest.mark.skipif(
@@ -196,7 +325,7 @@ def test_init_rejects_dangling_symlink_at_context_file(run_cli, project_dir, tmp
     (project_dir / ".aperio/handoff.md").symlink_to(outside_target)
     code, _, err = run_cli("init", str(project_dir))
     assert code == 1
-    assert "symlink" in err
+    assert "refusing to follow symlink" in err
     # Nothing was written through the symlink, inside or outside the project.
     assert not outside_target.exists()
     assert not outside.exists()
@@ -214,7 +343,7 @@ def test_init_rejects_symlinked_local_dir(run_cli, project_dir, tmp_path):
     (project_dir / ".aperio/local").symlink_to(outside_dir, target_is_directory=True)
     code, _, err = run_cli("init", str(project_dir))
     assert code == 1
-    assert "symlink" in err
+    assert "refusing to follow symlink" in err
     # The outside directory must not have received any Aperio files.
     assert list(outside_dir.iterdir()) == []
 
@@ -226,7 +355,7 @@ def test_init_rejects_symlinked_aperio_dir(run_cli, project_dir, tmp_path):
     (project_dir / ".aperio").symlink_to(outside, target_is_directory=True)
     code, _, err = run_cli("init", str(project_dir))
     assert code == 1
-    assert "symlink" in err
+    assert "refusing to follow symlink" in err
     assert list(outside.iterdir()) == []
 
 
@@ -238,7 +367,7 @@ def test_init_rejects_symlinked_state_tmp(run_cli, project_dir, tmp_path):
     (project_dir / ".aperio/state.json.tmp").symlink_to(outside_tmp)
     code, _, err = run_cli("init", str(project_dir))
     assert code == 1
-    assert "symlink" in err
+    assert "refusing to follow symlink" in err
     assert not outside_tmp.exists()
 
 

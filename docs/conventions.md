@@ -26,9 +26,11 @@
   automatically.
 - `status` never writes: no file creation, no mtime changes.
 - Paths are validated before any write; symlinks at write targets are
-  rejected — including the individual files and directories inside
-  `.aperio/` and the intermediate `state.json.tmp` write, not only the
-  top-level project path.
+  rejected — live or dangling — including the individual files and
+  directories inside `.aperio/` (including `state.json` itself) and the
+  reserved `state.json.tmp` name, not only the top-level project path.
+  Conflicting paths are never destroyed silently: they abort with
+  actionable errors, and the user decides what to remove.
 - No secrets, tokens, or environment contents are ever persisted into
   `.aperio/` except `.aperio/local/`; templates must remain free of
   credential-shaped placeholders (see `tests/test_no_secrets.py`).
