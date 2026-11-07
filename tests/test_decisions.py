@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import errno
 import json
 import os
+import subprocess
+import sys
+import time
 
 import pytest
 
@@ -351,6 +355,107 @@ def test_environment_secrets_not_captured(run_cli, project_dir, monkeypatch):
     _append(project_dir / ".aperio")
     content = (project_dir / ".aperio/decisions.md").read_text()
     assert token not in content
+
+
+def _append_worker(project_dir: str, title: str) -> int:
+    """Runs in a separate process: one CLI append (real concurrency)."""
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "aperio", "decision-add", project_dir,
+            "--title", title, "--context", "concurrent",
+            "--decision", "d", "--consequences", "x",
+        ],
+        capture_output=True, text=True, check=False,
+    )
+    return result.returncode
+
+
+def test_genuinely_concurrent_processes_get_unique_ids(run_cli, project_dir):
+    """Genuinely concurrent processes (simultaneous CLI appends) must all
+    succeed with unique sequential IDs — the coordination lock in action."""
+    run_cli("init", str(project_dir))
+    workers = 12
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        # Threads only launch processes; the appends themselves run in 12
+        # separate interpreters racing on the same lock file.
+        futures = [
+            pool.submit(_append_worker, str(project_dir), f"worker {i}")
+            for i in range(workers)
+        ]
+        codes = [f.result(timeout=120) for f in futures]
+    assert codes == [0] * workers, "every concurrent writer must succeed"
+    read = read_decisions(project_dir / ".aperio")
+    assert len(read.entries) == workers
+    ids = [e.id for e in read.entries]
+    assert len(set(ids)) == workers, f"duplicate IDs under concurrency: {ids}"
+    assert set(ids) == {f"DEC-{i:04d}" for i in range(1, workers + 1)}
+    assert read.malformed_entries == []
+    assert read.duplicate_ids == []
+    # History is byte-prefix preserving: entry 1 is still first.
+    text = (project_dir / ".aperio/decisions.md").read_text()
+    assert text.index("DEC-0001 ") < text.index(f"DEC-{workers:04d} ")
+    # The lock file does not linger after success.
+    assert not (project_dir / ".aperio/decisions.lock").exists()
+
+
+def test_stale_lock_is_broken(run_cli, project_dir):
+    """A lock abandoned by a crashed writer (mtime far in the past) is
+    broken and the append proceeds."""
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    lock = aperio_dir / "decisions.lock"
+    lock.write_text("999999:deadbeef")
+    stale_time = time.time() - 60
+    os.utime(lock, (stale_time, stale_time))
+    entry = _append(aperio_dir)
+    assert entry.id == "DEC-0001"
+    assert not lock.exists()
+
+
+def test_live_lock_times_out_with_clear_conflict(run_cli, project_dir):
+    """A freshly-created (live) lock blocks the writer: bounded wait, then
+    a clear conflict error — never an indefinite hang, never data loss."""
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    lock = aperio_dir / "decisions.lock"
+    lock.write_text("12345:alive")  # current mtime = live lock
+    started = time.monotonic()
+    with pytest.raises(StateError, match="could not acquire"):
+        _append(aperio_dir, lock_timeout=0.3, lock_stale_after=100.0)
+    assert time.monotonic() - started < 5.0
+    assert lock.read_text() == "12345:alive"  # foreign lock untouched
+    assert read_decisions(aperio_dir).entries == []  # nothing was appended
+
+
+def test_symlinked_lock_refused(run_cli, project_dir, tmp_path):
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    outside = tmp_path / "outside.txt"
+    outside.write_text("PRECIOUS")
+    (aprio := aperio_dir / "decisions.lock").symlink_to(outside)
+    with pytest.raises(PathError, match="refusing to follow symlink"):
+        _append(aperio_dir)
+    assert outside.read_text() == "PRECIOUS"
+    assert aprio.is_symlink()
+
+
+def test_lock_released_after_failed_append(run_cli, project_dir, monkeypatch):
+    """A failed append (e.g. interrupted syscall) must release the lock so
+    the next writer is not blocked forever."""
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    lock = aperio_dir / "decisions.lock"
+
+    def boom(fd, data):
+        raise OSError(errno.EIO, "interrupted")
+
+    monkeypatch.setattr("aperio.decisions.os.write", boom)
+    with pytest.raises(StateError, match="cannot append"):
+        _append(aperio_dir)
+    monkeypatch.undo()
+    assert not lock.exists()
+    entry = _append(aperio_dir)  # next writer proceeds normally
+    assert entry.id == "DEC-0001"
 
 
 def test_cli_decision_add_flags_and_file(run_cli, project_dir, tmp_path):

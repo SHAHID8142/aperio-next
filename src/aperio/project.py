@@ -146,9 +146,12 @@ APERIO_GITIGNORE_TEMPLATE = """\
 # (and never enter any VCS or shared context).
 local/
 
-# Transient atomic-write artifacts (reserved by aperio; never committed).
+# Transient atomic-write artifacts and coordination locks
+# (reserved by aperio; never committed).
 state.json.tmp
 handoff.md.tmp
+decisions.lock
+handoff.lock
 """
 
 LOCAL_README_TEMPLATE = """\
@@ -170,6 +173,30 @@ Everything in this directory is machine-local and sensitive-data territory:
 def aperio_dir_for(target: Path) -> Path:
     """The ``.aperio/`` directory of a project."""
     return target / APERIO_DIR_NAME
+
+
+def require_supported_state(aperio_dir: Path) -> ProjectState:
+    """Project-boundary check for all memory operations.
+
+    Establishes that the operation is inside a genuine initialized Aperio
+    project before anything else happens:
+
+    - a symlinked ``.aperio/`` directory is refused (a leaf-file check
+      alone would pass while every access silently traverses the link to
+      somewhere outside the project);
+    - ``state.json`` must exist (NotInitializedError otherwise — a
+      directory that merely contains an ``.aperio/brief.md`` is *not* a
+      project) and be a supported schema (StateError for corrupt or
+      newer-than-supported states).
+    """
+    if os.path.islink(aperio_dir):
+        raise PathError(
+            f"refusing to follow symlink at {aperio_dir}; the project "
+            "context directory itself is a symlink, so its contents could "
+            "live outside the project boundary; remove it and re-run "
+            "'aperio init' to repair"
+        )
+    return read_state(aperio_dir)
 
 
 def _reject_symlink(path: Path) -> None:

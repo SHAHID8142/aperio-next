@@ -46,8 +46,8 @@ from aperio.handoff import (
     read_handoff,
 )
 from aperio.paths import resolve_target
-from aperio.project import APERIO_DIR_NAME, aperio_dir_for
-from aperio.schema import ProjectState, read_state
+from aperio.project import APERIO_DIR_NAME, aperio_dir_for, require_supported_state
+from aperio.schema import ProjectState
 
 BRIEF_FILE_NAME = "brief.md"
 
@@ -99,6 +99,7 @@ class ProjectContext:
                 {
                     "structured": self.handoff.structured,
                     "format_version": self.handoff.version,
+                    "revision": self.handoff.revision,
                     "fields": self.handoff.fields,
                     "raw": self.handoff.raw,
                 }
@@ -123,7 +124,7 @@ def load_context(project_path: str | Path) -> ProjectContext:
     aperio_dir = aperio_dir_for(target)
 
     context = ProjectContext(
-        state=read_state(aperio_dir),
+        state=require_supported_state(aperio_dir),
         target=target,
         brief=None,
         decisions=None,

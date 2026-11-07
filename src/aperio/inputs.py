@@ -58,8 +58,17 @@ def check_no_foreign_line_separators(artifact: str, field_name: str, value: str)
             )
 
 
-def read_json_fields(path: str | Path, required_fields: tuple[str, ...]) -> dict[str, str]:
+def read_json_fields(
+    path: str | Path,
+    required_fields: tuple[str, ...],
+    optional_int_fields: tuple[str, ...] = (),
+) -> dict:
     """Read and validate a strict JSON fields file.
+
+    ``optional_int_fields`` are known keys that may be present; when given
+    they must be non-negative integers (booleans rejected). Unknown keys —
+    anything outside ``required_fields`` and ``optional_int_fields`` — are
+    always rejected.
 
     :raises ValidationError: for any violation; the message names the file
         and the offending field.
@@ -87,19 +96,25 @@ def read_json_fields(path: str | Path, required_fields: tuple[str, ...]) -> dict
     if not isinstance(data, dict):
         raise ValidationError(f"input file {path} must contain a JSON object")
 
+    allowed = set(required_fields) | set(optional_int_fields)
     missing = [name for name in required_fields if name not in data]
     if missing:
         raise ValidationError(
             f"input file {path} is missing required field(s): {', '.join(missing)}"
         )
-    unknown = sorted(set(data) - set(required_fields))
+    unknown = sorted(set(data) - allowed)
     if unknown:
         raise ValidationError(
             f"input file {path} has unknown field(s): {', '.join(unknown)} "
-            f"(expected exactly: {', '.join(required_fields)})"
+            f"(expected: {', '.join(required_fields)}"
+            + (
+                f"; optional: {', '.join(optional_int_fields)})"
+                if optional_int_fields
+                else ")"
+            )
         )
 
-    fields: dict[str, str] = {}
+    fields: dict = {}
     for name in required_fields:
         value = data[name]
         if not isinstance(value, str) or not value.strip():
@@ -107,4 +122,13 @@ def read_json_fields(path: str | Path, required_fields: tuple[str, ...]) -> dict
                 f"input file {path}: field '{name}' must be a non-empty string"
             )
         fields[name] = value
+    for name in optional_int_fields:
+        if name in data:
+            value = data[name]
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValidationError(
+                    f"input file {path}: field '{name}' must be a "
+                    "non-negative integer"
+                )
+            fields[name] = value
     return fields

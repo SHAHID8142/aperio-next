@@ -49,9 +49,17 @@ from pathlib import Path
 
 from aperio.errors import NotInitializedError, PathError, StateError, ValidationError
 from aperio.inputs import check_no_foreign_line_separators
+from aperio.locks import (
+    LOCK_STALE_SECONDS as LOCK_STALE_DEFAULT,
+    LOCK_TIMEOUT_SECONDS as LOCK_TIMEOUT_DEFAULT,
+    acquire_lock,
+    release_lock,
+)
+from aperio.project import require_supported_state
 from aperio.schema import utc_now_iso
 
 DECISIONS_FILE_NAME = "decisions.md"
+DECISIONS_LOCK_NAME = "decisions.lock"
 
 # Heading recognized only at column 0: DEC-<digits> — <ISO-UTC Z> — <title>.
 _HEADING_RE = re.compile(
@@ -119,9 +127,15 @@ def decisions_path(aperio_dir: Path) -> Path:
 def read_decisions(aperio_dir: Path) -> DecisionsRead:
     """Parse ``decisions.md``. Never fatal for entry-level damage.
 
-    :raises NotInitializedError: when the file does not exist.
-    :raises StateError: when the file is unreadable or not valid UTF-8.
+    Boundary check first: the project must be initialized with a supported
+    schema and ``.aperio/`` must not be a symlink.
+
+    :raises NotInitializedError: when the project or the file does not exist.
+    :raises StateError: when state is unsupported or the file is
+        unreadable/not valid UTF-8.
+    :raises PathError: when ``.aperio/`` is a symlink.
     """
+    require_supported_state(aperio_dir)
     path = decisions_path(aperio_dir)
     text = _read_log_text(path)
     return parse_decisions_text(text)
@@ -231,8 +245,18 @@ def append_decision(
     decision: str,
     consequences: str,
     timestamp: str | None = None,
+    lock_timeout: float = LOCK_TIMEOUT_DEFAULT,
+    lock_stale_after: float = LOCK_STALE_DEFAULT,
 ) -> DecisionEntry:
     """Append one decision to ``decisions.md``. History is never rewritten.
+
+    Coordination: the read-compute-append sequence runs under an exclusive
+    advisory lock (``.aperio/decisions.lock``, bounded wait, stale locks
+    broken after ``lock_stale_after`` seconds — see :mod:`aperio.locks`),
+    so concurrent aperio writers always receive unique sequential IDs.
+    External tools that edit the log without this lock are not coordinated:
+    their appends are never overwritten by aperio, but their IDs may
+    collide with the next aperio-computed ID (reported as duplicates).
 
     The rendered entry is emitted as a single ``os.write`` on an
     ``O_APPEND | O_NOFOLLOW`` descriptor, so concurrent writers cannot
@@ -240,10 +264,13 @@ def append_decision(
 
     :raises ValidationError: for empty fields, a multi-line title, or a
         malformed explicit timestamp.
-    :raises NotInitializedError: when ``decisions.md`` does not exist
-        (run ``aperio init`` to repair).
-    :raises PathError: when the target or a raced-in symlink is unsafe.
-    :raises StateError: when the file is unreadable or not valid UTF-8.
+    :raises NotInitializedError: when the project or ``decisions.md`` does
+        not exist (run ``aperio init`` to repair).
+    :raises PathError: when a target, the lock, or a raced-in symlink is
+        unsafe.
+    :raises StateError: when the file is unreadable/not valid UTF-8, the
+        lock cannot be acquired within the bounded wait, or the append
+        fails partway.
     """
     title = _validate_single_line("title", title)
     context = _validate_field("context", context)
@@ -257,57 +284,71 @@ def append_decision(
         )
 
     path = decisions_path(aperio_dir)
-    _reject_unsafe_target(path)
-    text = _read_log_text(path)
-
-    # Next ID: max over ALL DEC headings (valid or malformed), ignoring
-    # file order, so a torn entry's number is never reused.
-    highest = 0
-    for line in text.split("\n"):
-        candidate = _DEC_CANDIDATE_RE.match(line)
-        if candidate:
-            number = int(re.search(r"DEC-(\d+)", line).group(1))
-            highest = max(highest, number)
-    entry = DecisionEntry(
-        id=f"DEC-{highest + 1:04d}",
-        timestamp=ts,
-        title=title,
-        context=context,
-        decision=decision,
-        consequences=consequences,
+    lock_path = aperio_dir / DECISIONS_LOCK_NAME
+    # Boundary first: never touch the log (or even its lock) unless we are
+    # inside a genuine initialized project with a supported schema.
+    require_supported_state(aperio_dir)
+    token = acquire_lock(
+        lock_path,
+        timeout=lock_timeout,
+        stale_after=lock_stale_after,
+        artifact="decision log",
     )
-
-    rendered = render_entry(entry)
-    if text and not text.endswith("\n"):
-        rendered = "\n" + rendered  # start the entry on a fresh line
-
-    flags = os.O_WRONLY | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
     try:
-        fd = os.open(path, flags)
-    except OSError as exc:
-        raise PathError(
-            f"cannot open {path} for appending: {exc.strerror or exc}; "
-            "if a symlink or permission problem persists, resolve it "
-            "manually and re-run the command"
-        ) from None
-    try:
-        payload = rendered.encode("utf-8")
-        written = os.write(fd, payload)  # single syscall: never interleaved
-        if written != len(payload):
+        _reject_unsafe_target(path)
+        text = _read_log_text(path)
+
+        # Next ID: max over ALL DEC headings (valid or malformed), ignoring
+        # file order, so a torn entry's number is never reused. Computed
+        # under the lock, so concurrent aperio writers get unique IDs.
+        highest = 0
+        for line in text.split("\n"):
+            candidate = _DEC_CANDIDATE_RE.match(line)
+            if candidate:
+                number = int(re.search(r"DEC-(\d+)", line).group(1))
+                highest = max(highest, number)
+        entry = DecisionEntry(
+            id=f"DEC-{highest + 1:04d}",
+            timestamp=ts,
+            title=title,
+            context=context,
+            decision=decision,
+            consequences=consequences,
+        )
+
+        rendered = render_entry(entry)
+        if text and not text.endswith("\n"):
+            rendered = "\n" + rendered  # start the entry on a fresh line
+
+        flags = os.O_WRONLY | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            fd = os.open(path, flags)
+        except OSError as exc:
+            raise PathError(
+                f"cannot open {path} for appending: {exc.strerror or exc}; "
+                "if a symlink or permission problem persists, resolve it "
+                "manually and re-run the command"
+            ) from None
+        try:
+            payload = rendered.encode("utf-8")
+            written = os.write(fd, payload)  # single syscall: never interleaved
+            if written != len(payload):
+                raise StateError(
+                    f"append to {path} was partial ({written}/{len(payload)} "
+                    "bytes); the final entry may be torn and will be reported "
+                    "as malformed by readers — no existing content was modified"
+                )
+        except OSError as exc:
             raise StateError(
-                f"append to {path} was partial ({written}/{len(payload)} "
-                "bytes); the final entry may be torn and will be reported "
-                "as malformed by readers — no existing content was modified"
-            )
-    except OSError as exc:
-        raise StateError(
-            f"cannot append to {path}: {exc.strerror or exc}; "
-            "no existing content was modified"
-        ) from None
-    finally:
-        os.close(fd)
+                f"cannot append to {path}: {exc.strerror or exc}; "
+                "no existing content was modified"
+            ) from None
+        finally:
+            os.close(fd)
 
-    return entry
+        return entry
+    finally:
+        release_lock(lock_path, token)
 
 
 def render_entry(entry: DecisionEntry) -> str:

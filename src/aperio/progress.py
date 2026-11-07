@@ -12,7 +12,10 @@ Semantics:
 - A real change bumps ``phase``, ``updated_at`` (UTC now) and stamps
   ``aperio_version`` with the writing version — the file was rewritten by
   that version; ``schema_version`` governs compatibility and stays 1.
-  ``name`` and ``created_at`` are preserved exactly.
+  ``name`` and ``created_at`` are preserved exactly, and so is every other
+  field in the state object: the update mutates only its own three keys in
+  the parsed document and re-serializes it, so unknown extra fields from
+  other writers survive byte-for-byte in meaning and JSON type.
 
 Concurrency (accurate guarantees): the update is validated from the exact
 bytes it will compare against (single read), written to an exclusive temp
@@ -36,8 +39,7 @@ from aperio.errors import NotInitializedError, PathError, StateError, Validation
 from aperio.paths import resolve_target
 from aperio.project import aperio_dir_for
 from aperio.schema import (
-    ProjectState,
-    parse_state_bytes,
+    parse_state_dict,
     replace_state_if_unchanged,
     state_path,
     utc_now_iso,
@@ -60,7 +62,8 @@ def update_phase(project_path: str | Path, new_phase: object) -> UpdatePhaseResu
     :raises NotInitializedError: when the project is not initialized.
     :raises StateError: when state is corrupt/unsupported or a concurrent
         modification is detected.
-    :raises PathError: when the project path or state file is unsafe.
+    :raises PathError: when the project path, the ``.aperio/`` directory,
+        or the state file is unsafe.
     """
     if not isinstance(new_phase, str) or not new_phase.strip():
         raise ValidationError("phase must be a non-empty string")
@@ -71,6 +74,11 @@ def update_phase(project_path: str | Path, new_phase: object) -> UpdatePhaseResu
     target = resolve_target(str(project_path), for_writing=True)
     aperio_dir = aperio_dir_for(target)
     path = state_path(aperio_dir)
+    if os.path.islink(aperio_dir):
+        raise PathError(
+            f"refusing to follow symlink at {aperio_dir}; "
+            "remove it and re-run 'aperio init' to repair"
+        )
     if os.path.islink(path):
         raise PathError(
             f"refusing to follow symlink at {path}; "
@@ -78,7 +86,8 @@ def update_phase(project_path: str | Path, new_phase: object) -> UpdatePhaseResu
         )
 
     # Single read: the state is validated from exactly the bytes the
-    # compare-and-swap will check against.
+    # compare-and-swap will check against. The full document (including
+    # unknown extra fields) is kept for the rewrite.
     try:
         raw = path.read_bytes()
     except FileNotFoundError:
@@ -87,20 +96,16 @@ def update_phase(project_path: str | Path, new_phase: object) -> UpdatePhaseResu
         ) from None
     except OSError as exc:
         raise StateError(f"cannot read {path}: {exc.strerror or exc}") from None
-    state = parse_state_bytes(raw, path)
+    state_data = parse_state_dict(raw, path)
 
-    if phase == state.phase:
+    previous_phase = state_data["phase"]
+    if phase == previous_phase:
         return UpdatePhaseResult(previous_phase=phase, new_phase=phase, updated=False)
 
-    updated_state = ProjectState(
-        name=state.name,
-        created_at=state.created_at,
-        updated_at=utc_now_iso(),
-        phase=phase,
-        aperio_version=__version__,
-        schema_version=state.schema_version,
-    )
-    replace_state_if_unchanged(aperio_dir, updated_state, expected_raw=raw)
+    state_data["phase"] = phase
+    state_data["updated_at"] = utc_now_iso()
+    state_data["aperio_version"] = __version__
+    replace_state_if_unchanged(aperio_dir, state_data, expected_raw=raw)
     return UpdatePhaseResult(
-        previous_phase=state.phase, new_phase=phase, updated=True
+        previous_phase=previous_phase, new_phase=phase, updated=True
     )

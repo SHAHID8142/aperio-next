@@ -39,15 +39,24 @@ cannot spoof them.
 
 Concurrency: the write replaces the whole file (tmp exclusive + rename).
 Without ``expected_raw`` this is unconditional last-writer-wins with NO
-conflict detection — concurrent writers can silently lose updates; pass
-``expected_raw`` (the bytes from :func:`read_handoff_raw`) to opt into
-compare-and-swap detection, which has the same narrow residual window as
-state updates (a write landing between the compare and the rename can
-still win). Renaming over a symlink swapped in after the islink check
-replaces the link as a directory entry — its target is never followed or
-touched. Crash-consistency is best-effort (no fsync).
-A leftover ``handoff.md.tmp`` is a conflict resolved by explicit user
-action; it is git-ignored in projects created by this version.
+Protection against lost updates: every structured handoff carries a
+revision counter in its marker (``<!-- aperio:handoff:v1 rev=N -->``).
+Writes run under the advisory ``handoff.lock`` and are revision-checked:
+when the current handoff is at revision >= 1, the caller must declare the
+revision it is replacing (``revises`` in the CLI input JSON,
+``expected_revision`` in the library); a stale declaration aborts with a
+clear conflict and nothing is modified. Overwriting a revision >= 1
+*without* declaring it, or a handoff in a **newer unsupported format**
+(v2+ marker), is refused unless ``force=True`` — the explicit, documented
+user decision that deliberately discards the current handoff's content
+(including, when forced over a newer format, content aperio cannot read).
+Legacy free-form files and the fresh init template (revision 0) remain
+replaceable without a declaration, preserving Feature 01 compatibility.
+Renaming over a symlink swapped in after the islink check replaces the
+link as a directory entry — its target is never followed or touched.
+Crash-consistency is best-effort (no fsync). A leftover
+``handoff.md.tmp`` is a conflict resolved by explicit user action; it is
+git-ignored in projects created by this version.
 """
 
 from __future__ import annotations
@@ -59,11 +68,21 @@ from pathlib import Path
 
 from aperio.errors import NotInitializedError, PathError, StateError, ValidationError
 from aperio.inputs import check_no_foreign_line_separators
+from aperio.locks import (
+    LOCK_STALE_SECONDS as LOCK_STALE_DEFAULT,
+    LOCK_TIMEOUT_SECONDS as LOCK_TIMEOUT_DEFAULT,
+    acquire_lock,
+    release_lock,
+)
+from aperio.project import require_supported_state
 
 HANDOFF_FILE_NAME = "handoff.md"
 HANDOFF_TMP_NAME = "handoff.md.tmp"
+HANDOFF_LOCK_NAME = "handoff.lock"
 HANDOFF_MARKER_V1 = "<!-- aperio:handoff:v1 -->"
-_MARKER_RE = re.compile(r"^<!-- aperio:handoff:v(\d+) -->\r?$")
+_MARKER_RE = re.compile(
+    r"^<!-- aperio:handoff:v(\d+)(?: rev=(\d+))? -->\r?$"
+)
 _SECTION_RE = re.compile(r"^## (.+)$")
 # A heading anywhere at column 0 inside a validated value would forge a
 # section boundary when the file is parsed.
@@ -105,13 +124,16 @@ class HandoffRead:
 
     ``structured`` is True for a parsed v1 handoff, False for a legacy
     free-form file, and None when the file was written by a newer handoff
-    format this reader does not understand (never fatal).
+    format this reader does not understand (never fatal). ``revision`` is
+    the structured handoff's revision counter (0 for legacy files, the
+    init template, and unknown newer formats).
     """
 
     structured: bool | None
     version: int | None
     fields: dict[str, str] | None
     raw: str
+    revision: int = 0
     extra_sections: list[str] = field(default_factory=list)
 
 
@@ -145,10 +167,15 @@ def validate_handoff_content(content: HandoffContent) -> None:
             )
 
 
-def render_handoff(content: HandoffContent) -> str:
-    """Render the structured v1 handoff document."""
+def render_handoff(content: HandoffContent, revision: int = 0) -> str:
+    """Render the structured v1 handoff document at the given revision."""
     validate_handoff_content(content)
-    out = ["# Handoff Notes", HANDOFF_MARKER_V1, ""]
+    marker = (
+        HANDOFF_MARKER_V1
+        if revision <= 0
+        else f"<!-- aperio:handoff:v1 rev={revision} -->"
+    )
+    out = ["# Handoff Notes", marker, ""]
     for name in HANDOFF_FIELDS:
         out.append(f"## {_FIELD_TITLES[name]}")
         out.append(getattr(content, name).strip())
@@ -160,10 +187,16 @@ def read_handoff(aperio_dir: Path) -> HandoffRead:
     """Read ``handoff.md`` in any known (or unknown) format, never fatal
     for newer formats.
 
-    :raises NotInitializedError: when the file does not exist.
-    :raises StateError: when the file is unreadable, not valid UTF-8, or a
-        v1 file with damaged sections (missing/duplicated).
+    Boundary check first: the project must be initialized with a supported
+    schema and ``.aperio/`` must not be a symlink.
+
+    :raises NotInitializedError: when the project or the file does not exist.
+    :raises StateError: when state is unsupported, the file is unreadable,
+        not valid UTF-8, or a v1 file with damaged sections
+        (missing/duplicated).
+    :raises PathError: when ``.aperio/`` is a symlink.
     """
+    require_supported_state(aperio_dir)
     path = handoff_path(aperio_dir)
     try:
         raw_bytes = path.read_bytes()
@@ -199,6 +232,14 @@ def parse_handoff_text(text: str) -> HandoffRead:
     if version != 1:
         # Newer writer, older reader: surface the raw text, lose nothing.
         return HandoffRead(structured=None, version=version, fields=None, raw=text)
+
+    revision = 0
+    for line in lines[:2]:
+        marker = _MARKER_RE.match(line)
+        if marker and int(marker.group(1)) == 1:
+            rev_text = marker.group(2)
+            revision = int(rev_text) if rev_text is not None else 0
+            break
 
     sections: dict[str, list[str]] = {}
     order: list[str] = []
@@ -239,81 +280,190 @@ def parse_handoff_text(text: str) -> HandoffRead:
     }
     extra = [title for title in order if title not in _TITLE_TO_FIELD]
     return HandoffRead(
-        structured=True, version=1, fields=fields, raw=text, extra_sections=extra
+        structured=True,
+        version=1,
+        fields=fields,
+        raw=text,
+        revision=revision,
+        extra_sections=extra,
     )
 
 
-def read_handoff_raw(aperio_dir: Path) -> bytes:
-    """Raw bytes of ``handoff.md`` (for compare-and-swap writes)."""
-    try:
-        return handoff_path(aperio_dir).read_bytes()
-    except FileNotFoundError:
-        raise NotInitializedError(
-            "no handoff.md (run 'aperio init' to repair missing context files)"
-        ) from None
-    except OSError as exc:
-        raise StateError(f"cannot read handoff.md: {exc.strerror or exc}") from None
-
-
 def write_handoff(
-    aperio_dir: Path, content: HandoffContent, expected_raw: bytes | None = None
-) -> None:
+    aperio_dir: Path,
+    content: HandoffContent,
+    expected_revision: int | None = None,
+    force: bool = False,
+    lock_timeout: float = LOCK_TIMEOUT_DEFAULT,
+    lock_stale_after: float = LOCK_STALE_DEFAULT,
+) -> int:
     """Replace ``handoff.md`` with a validated structured handoff.
 
-    Validation completes before any filesystem effect. The write goes to an
-    exclusive temp file, optionally compares the current file bytes against
-    ``expected_raw`` (compare-and-swap; mismatch aborts with nothing
-    modified), then renames atomically. On any failure only the temp file
-    created by this call is removed; anything found on disk — including a
-    leftover ``handoff.md.tmp`` from an earlier interrupted write, which
-    blocks new writes until resolved — is left for explicit user action.
+    Protection against lost updates (the safe default):
 
-    :raises ValidationError: for invalid field content.
-    :raises NotInitializedError: when ``handoff.md`` does not exist.
-    :raises PathError: when the target or temp path is unsafe.
-    :raises StateError: for compare-and-swap conflicts and I/O failures.
+    - The read of the current handoff, the revision check, and the write
+      all happen under the advisory ``handoff.lock`` (bounded wait, stale
+      locks broken — see :mod:`aperio.locks`), so concurrent aperio
+      writers serialize.
+    - When the current handoff is structured at revision >= 1, the caller
+      must declare the revision it is replacing via ``expected_revision``;
+      a stale declaration aborts with a clear conflict and nothing is
+      modified. A stale agent therefore cannot silently overwrite a newer
+      handoff.
+    - Overwriting revision >= 1 *without* declaring it, or a handoff in a
+      newer unsupported format (v2+ marker), is refused unless
+      ``force=True`` — the explicit, documented decision to discard the
+      current content. Legacy free-form files and the fresh init template
+      (revision 0) stay replaceable without a declaration (Feature 01
+      compatibility).
+    - A file modified by a non-cooperating tool between the in-lock read
+      and the rename is detected by a final byte comparison and aborts.
+
+    Validation completes before any filesystem effect. The write goes to
+    an exclusive temp file and renames atomically. On any failure only the
+    temp file created by this call is removed; anything found on disk —
+    including a leftover ``handoff.md.tmp`` from an earlier interrupted
+    write, which blocks new writes until resolved — is left for explicit
+    user action.
+
+    :returns: the revision assigned to the newly written handoff.
+    :raises ValidationError: for invalid field content or a malformed
+        ``expected_revision``.
+    :raises NotInitializedError: when the project or ``handoff.md`` does
+        not exist.
+    :raises PathError: when a target, the lock, or a temp path is unsafe.
+    :raises StateError: for revision conflicts, newer-format refusals,
+        concurrent-modification detection, lock timeouts, and I/O failures.
     """
+    if expected_revision is not None and (
+        isinstance(expected_revision, bool) or not isinstance(expected_revision, int)
+        or expected_revision < 0
+    ):
+        raise ValidationError(
+            "handoff.md: expected_revision must be a non-negative integer"
+        )
+
     validate_handoff_content(content)
+    require_supported_state(aperio_dir)
 
     path = handoff_path(aperio_dir)
     tmp = aperio_dir / HANDOFF_TMP_NAME
-    if os.path.islink(path):
-        raise PathError(
-            f"refusing to follow symlink at {path}; "
-            "remove it and re-run 'aperio init' to repair"
-        )
-    if os.path.islink(tmp):
-        raise PathError(
-            f"refusing to follow symlink at {tmp}; "
-            "remove it and re-run 'aperio handoff-write' to repair"
-        )
-    if not path.exists():
-        raise NotInitializedError(
-            f"not an Aperio project: no {path} (run 'aperio init <project-directory>' "
-            "to repair missing context files)"
-        )
-    if not path.is_file():
-        kind = "a directory" if path.is_dir() else "a special file"
-        raise PathError(
-            f"cannot write {path}: {kind} exists there; "
-            "remove it and re-run 'aperio init' to repair"
-        )
+    lock_path = aperio_dir / HANDOFF_LOCK_NAME
 
-    payload = render_handoff(content)
-    created_tmp = False
+    token = acquire_lock(
+        lock_path,
+        timeout=lock_timeout,
+        stale_after=lock_stale_after,
+        artifact="handoff",
+    )
     try:
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
-        created_tmp = True
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(payload)
-    except OSError as exc:
-        _discard_created_tmp(tmp, created_tmp)
-        raise StateError(
-            f"cannot prepare handoff write at {tmp}: {exc.strerror or exc}; "
-            "the temp name is occupied by a concurrent aperio write (retry "
-            "shortly) or a leftover from a crashed write (removing it is "
-            "your decision); no existing content was modified"
-        ) from None
+        if os.path.islink(path):
+            raise PathError(
+                f"refusing to follow symlink at {path}; "
+                "remove it and re-run 'aperio init' to repair"
+            )
+        if os.path.islink(tmp):
+            raise PathError(
+                f"refusing to follow symlink at {tmp}; "
+                "remove it and re-run 'aperio handoff-write' to repair"
+            )
+        if not path.exists():
+            raise NotInitializedError(
+                f"not an Aperio project: no {path} (run 'aperio init "
+                "<project-directory>' to repair missing context files)"
+            )
+        if not path.is_file():
+            kind = "a directory" if path.is_dir() else "a special file"
+            raise PathError(
+                f"cannot write {path}: {kind} exists there; "
+                "remove it and re-run 'aperio init' to repair"
+            )
+
+        # Read the current handoff under the lock to learn its revision
+        # and format. Missing-file damage (deleted between the boundary
+        # check and here) surfaces as NotInitializedError, which also
+        # aborts the write.
+        current = read_handoff(aperio_dir)
+        current_rev = current.revision
+
+        if current.structured is None and not force:
+            raise StateError(
+                f"handoff at {path} declares a newer format "
+                f"(v{current.version}) this aperio cannot read; replacing "
+                "it would silently destroy content aperio cannot inspect. "
+                "Re-run with force=True (--force) only if you accept that."
+            )
+        if not force:
+            if expected_revision is None:
+                if current_rev >= 1:
+                    raise StateError(
+                        f"handoff at {path} is at revision {current_rev}; to "
+                        "replace it, declare that revision ('revises': "
+                        f"{current_rev} in the input JSON, or "
+                        f"expected_revision={current_rev}), or use "
+                        "force=True to replace it deliberately. Nothing "
+                        "was modified."
+                    )
+            elif expected_revision != current_rev:
+                # Includes a declaration against a legacy/revision-0 file:
+                # a declared revision that does not match reality is
+                # treated as a stale writer, never silently ignored.
+                raise StateError(
+                    f"handoff at {path} moved on: current revision is "
+                    f"{current_rev}, but the caller declared "
+                    f"{expected_revision} (a stale handoff would silently "
+                    "overwrite newer work). Re-read the handoff, re-apply "
+                    "your changes, and retry. Nothing was modified."
+                )
+
+        new_revision = current_rev + 1
+        expected_raw = path.read_bytes()
+        payload = render_handoff(content, revision=new_revision)
+        created_tmp = False
+        try:
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+            created_tmp = True
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(payload)
+        except OSError as exc:
+            _discard_created_tmp(tmp, created_tmp)
+            raise StateError(
+                f"cannot prepare handoff write at {tmp}: {exc.strerror or exc}; "
+                "the temp name is occupied by a concurrent aperio write (retry "
+                "shortly) or a leftover from a crashed write (removing it is "
+                "your decision); no existing content was modified"
+            ) from None
+
+        # External-tool defense: a non-cooperating writer may have landed
+        # between our in-lock read and this rename (the lock does not bind
+        # them). Final byte check before publishing.
+        try:
+            current_bytes = path.read_bytes()
+        except OSError as exc:
+            _discard_created_tmp(tmp, created_tmp)
+            raise StateError(
+                f"cannot read {path} before publishing: {exc.strerror or exc}; "
+                "no existing content was modified"
+            ) from None
+        if current_bytes != expected_raw:
+            _discard_created_tmp(tmp, created_tmp)
+            raise StateError(
+                f"handoff at {path} changed during the write (a tool outside "
+                "aperio's coordination may have written it); nothing was "
+                "modified. Re-read the handoff and retry."
+            )
+
+        try:
+            os.replace(tmp, path)
+        except OSError as exc:
+            _discard_created_tmp(tmp, created_tmp)
+            raise StateError(
+                f"cannot publish handoff at {path}: {exc.strerror or exc}; "
+                "no existing content was modified"
+            ) from None
+        return new_revision
+    finally:
+        release_lock(lock_path, token)
 
     if expected_raw is not None:
         try:

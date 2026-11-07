@@ -58,6 +58,14 @@ aperio decision-add ./my-project --file decision.json
 #  verification_limitations)
 aperio handoff-write ./my-project --file handoff.json
 
+# Competing agents: when the current handoff is at revision N (shown in
+# its marker and in `memory --json`), declare it to replace it — a stale
+# declaration is refused instead of silently overwriting newer work:
+#   { ..., "revises": 3 }
+# Deliberate replacement without a declaration (discards the current
+# handoff, including unreadable newer formats) is opt-in:
+aperio handoff-write ./my-project --file handoff.json --force
+
 # Update the project phase (compare-and-swap: concurrent changes are
 # detected, nothing is silently overwritten)
 aperio phase-set ./my-project implementation

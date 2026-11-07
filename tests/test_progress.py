@@ -153,3 +153,72 @@ def test_cli_phase_set(run_cli, project_dir):
     code, out, err = run_cli("phase-set", str(project_dir), "verification")
     assert code == 0, err
     assert "phase unchanged: verification" in out
+
+
+def test_unknown_state_fields_survive_phase_updates(
+    run_cli, project_dir, monkeypatch
+):
+    """Regression: phase updates must preserve every unrelated field of the
+    state object — including nested structures — exactly in meaning and
+    JSON type, not just the six schema-v1 fields."""
+    run_cli("init", str(project_dir))
+    state_file = state_path(project_dir / ".aperio")
+    extras = {
+        "orchestrator_note": "written by another tool",
+        "attempt_counter": 7,
+        "ratio": 0.25,
+        "flags": {"nested": [1, 2, {"deep": True, "none": None}]},
+        "empty_list": [],
+        "unicode_value": "café ünïcode ✓",
+    }
+    state = json.loads(state_file.read_text())
+    state.update(extras)
+    state_file.write_text(json.dumps(state, ensure_ascii=False, indent=2))
+
+    monkeypatch.setattr(
+        "aperio.progress.utc_now_iso", lambda: "2030-01-01T00:00:00Z"
+    )
+    result = update_phase(project_dir, "implementation")
+    assert result.updated is True
+
+    after = json.loads(state_file.read_text())
+    for key, expected in extras.items():
+        assert key in after, f"extra field {key} was dropped"
+        assert after[key] == expected, f"extra field {key} changed value"
+        assert type(after[key]) is type(expected), (
+            f"extra field {key} changed JSON type"
+        )
+    assert after["phase"] == "implementation"
+    assert after["updated_at"] == "2030-01-01T00:00:00Z"
+    # Known fields still intact too.
+    assert after["name"] == project_dir.name
+    assert after["schema_version"] == 1
+    # The known fields keep their positions; extras keep theirs.
+    assert list(after.keys())[:6] == [
+        "name",
+        "created_at",
+        "updated_at",
+        "phase",
+        "aperio_version",
+        "schema_version",
+    ]
+
+
+def test_extra_fields_survive_repeated_updates_and_noop(
+    run_cli, project_dir
+):
+    run_cli("init", str(project_dir))
+    state_file = state_path(project_dir / ".aperio")
+    state = json.loads(state_file.read_text())
+    state["keep_me"] = {"a": [1, {"b": False}]}
+    state_file.write_text(json.dumps(state))
+
+    update_phase(project_dir, "one")
+    before = json.loads(state_file.read_text())
+    update_phase(project_dir, "one")  # no-op must not rewrite either
+    after = json.loads(state_file.read_text())
+    assert before["keep_me"] == {"a": [1, {"b": False}]}
+    assert after["keep_me"] == {"a": [1, {"b": False}]}
+    update_phase(project_dir, "two")
+    final = json.loads(state_file.read_text())
+    assert final["keep_me"] == {"a": [1, {"b": False}]}

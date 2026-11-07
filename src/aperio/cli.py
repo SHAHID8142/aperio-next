@@ -120,7 +120,16 @@ def build_parser() -> argparse.ArgumentParser:
     handoff_parser.add_argument(
         "--file",
         required=True,
-        help=f"JSON file with the fields: {', '.join(HANDOFF_FIELDS)}",
+        help=f"JSON file with the fields: {', '.join(HANDOFF_FIELDS)}; "
+        'optionally "revises": <current revision> to guard against '
+        "competing writers",
+    )
+    handoff_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="deliberately replace the current handoff without a revision "
+        "declaration (discards its content, including unreadable newer "
+        "formats)",
     )
 
     phase_parser = subparsers.add_parser(
@@ -253,10 +262,22 @@ def _cmd_decision_add(args) -> None:
 
 
 def _cmd_handoff_write(args) -> None:
-    fields = read_json_fields(args.file, HANDOFF_FIELDS)
+    fields = read_json_fields(
+        args.file, HANDOFF_FIELDS, optional_int_fields=("revises",)
+    )
+    revises = fields.pop("revises", None)
     target = resolve_target(args.project_directory, for_writing=True)
-    write_handoff(aperio_dir_for(target), HandoffContent(**fields))
-    print(f"handoff written to {APERIO_DIR_NAME}/handoff.md (7 sections validated)")
+    revision = write_handoff(
+        aperio_dir_for(target),
+        HandoffContent(**fields),
+        expected_revision=revises,
+        force=args.force,
+    )
+    print(
+        f"handoff written to {APERIO_DIR_NAME}/handoff.md "
+        f"(7 sections validated, revision {revision})"
+        + (" [forced]" if args.force else "")
+    )
 
 
 def _cmd_phase_set(args) -> None:

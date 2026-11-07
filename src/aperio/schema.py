@@ -168,18 +168,26 @@ def write_state(aperio_dir: Path, state: ProjectState) -> None:
 
 
 def replace_state_if_unchanged(
-    aperio_dir: Path, state: ProjectState, expected_raw: bytes
+    aperio_dir: Path, state_data: dict, expected_raw: bytes
 ) -> None:
     """Explicitly update an existing state file with lost-update detection.
 
     This is the deliberate state-update operation (Feature 02) — separate
     from :func:`write_state`, which only ever creates fresh state.
 
-    Sequence: refuse symlinked targets/temp names, write the new state to
-    an exclusive temp file, then compare the current target bytes against
-    ``expected_raw`` (the bytes captured when the caller read and validated
-    the state). If they differ — or the target has vanished — the update is
-    aborted, the temp file is removed, and nothing on disk is modified.
+    ``state_data`` is the *full* parsed state object (as returned by
+    :func:`parse_state_dict`), typically the caller's validated copy with
+    only the intended fields modified. Every other key — including unknown
+    extra fields from future or third-party writers — is preserved exactly
+    in meaning and JSON type: the dict is validated and serialized as-is,
+    never reconstructed into the known-field dataclass.
+
+    Sequence: validate the outgoing dict, refuse symlinked targets/temp
+    names, write the new state to an exclusive temp file, then compare the
+    current target bytes against ``expected_raw`` (the bytes captured when
+    the caller read and validated the state). If they differ — or the
+    target has vanished — the update is aborted, the temp file is removed,
+    and nothing on disk is modified.
 
     Concurrency guarantee (documented, not absolute): this prevents lost
     updates caused by writes that completed *before* the compare. A write
@@ -188,6 +196,9 @@ def replace_state_if_unchanged(
     """
     target = state_path(aperio_dir)
     tmp = state_tmp_path(aperio_dir)
+    # Refuse to publish anything that is not valid schema v1 (or an
+    # accepted variant), even if the caller mutated the dict carelessly.
+    _validate(state_data, target)
     if os.path.islink(target):
         raise StateError(
             f"refusing to follow symlink at {target}; "
@@ -198,7 +209,7 @@ def replace_state_if_unchanged(
             f"refusing to follow symlink at {tmp}; "
             "remove it and re-run 'aperio init' to repair"
         )
-    payload = json.dumps(asdict(state), indent=2) + "\n"
+    payload = json.dumps(state_data, indent=2) + "\n"
     created_tmp = False
     try:
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
@@ -277,13 +288,32 @@ def read_state(aperio_dir: Path) -> ProjectState:
     return parse_state_bytes(raw, path)
 
 
+def parse_state_dict(raw: bytes, path: Path) -> dict:
+    """Validate raw ``state.json`` bytes and return the full parsed object.
+
+    Unlike :func:`parse_state_bytes`, the returned dict keeps **all** keys
+    in document order — including unknown extra fields — so deliberate
+    update operations can modify only their own fields and preserve
+    everything else exactly (meaning and JSON types).
+    """
+    data = _decode_state(raw, path)
+    _validate(data, path)
+    return data
+
+
 def parse_state_bytes(raw: bytes, path: Path) -> ProjectState:
     """Validate raw ``state.json`` bytes into a :class:`ProjectState`.
 
     Split from :func:`read_state` so callers that need compare-and-swap
     semantics can validate exactly the bytes they captured, with no
-    second read in between.
+    second read in between. Unknown extra keys are tolerated here but not
+    represented — use :func:`parse_state_dict` when they must survive a
+    rewrite.
     """
+    return _validate(_decode_state(raw, path), path)
+
+
+def _decode_state(raw: bytes, path: Path) -> dict:
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
@@ -299,8 +329,7 @@ def parse_state_bytes(raw: bytes, path: Path) -> ProjectState:
             f"{path} is corrupt (invalid JSON at line {exc.lineno}: {exc.msg}); "
             "aperio will not overwrite it. Inspect or restore the file manually."
         ) from None
-
-    return _validate(data, path)
+    return data
 
 
 def _validate(data: object, path: Path) -> ProjectState:

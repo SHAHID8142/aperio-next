@@ -181,14 +181,39 @@ after the islink check is replaced as a directory entry — its target is
 never followed); `handoff.md.tmp` leftovers are user-resolved conflicts
 (occupied either by a concurrent write or by a crashed-write leftover).
 
+### Project boundary validation (all memory operations)
+
+Every memory operation — `memory`, `decision-add`, `handoff-write`,
+`phase-set`, and their library entry points — first establishes that it is
+operating inside a genuine initialized project:
+
+1. the `.aperio/` directory itself must not be a symlink (a leaf-file check
+   alone would pass while every access silently traverses the link outside
+   the project boundary);
+2. `state.json` must exist and be a supported schema — a directory that
+   merely contains pre-existing context files (e.g. an `.aperio/brief.md`)
+   is *not* a project, and corrupt or newer-than-supported states abort;
+3. write operations additionally use the write-safe path policy for the
+   project directory, every target file, and every temp/lock name.
+
+Refusals never modify anything: outside files, user content, and the
+refused state are preserved byte-for-byte.
+
 ### Concurrency guarantees (accurate, per artifact)
+
+Coordination uses advisory lock files (`decisions.lock`, `handoff.lock`;
+reserved aperio names, git-ignored) with a bounded wait and stale-lock
+breaking (locks older than 10 s are treated as abandoned; lock files
+record `pid:timestamp` and are removed only by their verified owner). The
+locks coordinate aperio writers with each other — tools that do not use
+aperio ignore them entirely.
 
 | Artifact | Mechanism | Guarantee | Limitation |
 |----------|-----------|-----------|------------|
 | `state.json` create | exclusive temp + hard-link publish | no overwrite, ever | — |
-| `state.json` update (`phase-set`) | compare-and-swap on exact validated bytes | concurrent changes landing before the compare abort with nothing modified | a write between compare and rename can still win; serialize concurrent updaters |
-| `decisions.md` | single-syscall `O_APPEND` | existing bytes never rewritten; concurrent appends never interleave | concurrent appends can pick the same next ID (duplicates reported); serialize writers for guaranteed uniqueness |
-| `handoff.md` | exclusive temp + rename; optional `expected_raw` CAS | replacement is atomic; with CAS, conflicts are detected | without CAS it is unconditional last-writer-wins (no conflict detection) |
+| `state.json` update (`phase-set`) | compare-and-swap on exact validated bytes | concurrent changes landing before the compare abort with nothing modified; **unknown extra state fields are preserved exactly (meaning and JSON type)** | a write between compare and rename can still win; serialize concurrent updaters |
+| `decisions.md` | advisory lock around read-compute-append, then single-syscall `O_APPEND` | unique sequential IDs among aperio writers; existing bytes never rewritten; concurrent appends never interleave | **tools that edit the log without aperio's lock bypass uniqueness** — their appends are never overwritten, but their entry IDs may collide with the next aperio-computed ID (reported as duplicates); a live lock held longer than the bounded wait produces a clear conflict, never a hang |
+| `handoff.md` | advisory lock + revision counter (`rev=N` in the marker) + final byte check | a stale writer (declaring an older revision) conflicts instead of clobbering; newer unsupported formats (v2+) are refused; concurrent aperio writers serialize | replacing revision ≥ 1 requires declaring that revision, or the opt-in `force` flag (deliberate content loss); tools outside the lock are caught by the byte check and abort with nothing modified |
 
 Crash-consistency is best-effort across all artifacts: no `fsync` is
 performed, so a power loss can tear an appended tail or lose a not-yet-
