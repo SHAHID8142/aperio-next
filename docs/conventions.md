@@ -26,16 +26,26 @@
   automatically.
 - `status` never writes: no file creation, no mtime changes.
 - Paths are validated before any write; symlinks at write targets are
-  rejected — live or dangling — including the individual files and
-  directories inside `.aperio/` (including `state.json` itself) and the
-  reserved `state.json.tmp` name, not only the top-level project path.
-  Conflicting paths are never destroyed silently: they abort with
-  actionable errors, and the user decides what to remove. Nothing
-  pre-existing is ever auto-deleted from `state.json.tmp` (aperio removes
-  only a temp file it created within the same write, on failure), file
-  creation is exclusive (`O_CREAT | O_EXCL`) so races cannot clobber
-  content, state is published via atomic create-if-not-exists, and
-  existing state is never overwritten by a plain write.
+  rejected — live or dangling — for every write target and temporary name
+  (`state.json`, `decisions.md`, `handoff.md`, `state.json.tmp`,
+  `handoff.md.tmp`), not only the top-level project path. Conflicting
+  paths are never destroyed silently: they abort with actionable errors,
+  and the user decides what to remove. Nothing pre-existing is ever
+  auto-deleted from a reserved temp name (aperio removes only a temp file
+  it created within the same write, on failure), file creation is
+  exclusive (`O_CREAT | O_EXCL`) so races cannot clobber content, state
+  creation is published via atomic create-if-not-exists, and existing
+  state is never overwritten except through the explicit compare-and-swap
+  update operation.
+- The decision log is append-only: existing bytes are never rewritten;
+  torn entries are reported as malformed metadata, never edited. Decision
+  and handoff formats are injection-hardened: headings are recognized only
+  at column 0, titles are single-line, and continuation lines are indented
+  so agent-supplied values cannot forge structure.
+- Concurrency guarantees are documented per artifact (state: CAS with a
+  narrow residual window; decisions: append with possible duplicate IDs;
+  handoff: last-writer-wins, optional CAS) — see docs/architecture.md.
+  Crash-consistency is best-effort: no fsync.
 - No secrets, tokens, or environment contents are ever persisted into
   `.aperio/` except `.aperio/local/`; templates must remain free of
   credential-shaped placeholders (see `tests/test_no_secrets.py`).

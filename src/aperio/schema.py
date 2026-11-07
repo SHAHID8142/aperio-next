@@ -167,6 +167,86 @@ def write_state(aperio_dir: Path, state: ProjectState) -> None:
         pass
 
 
+def replace_state_if_unchanged(
+    aperio_dir: Path, state: ProjectState, expected_raw: bytes
+) -> None:
+    """Explicitly update an existing state file with lost-update detection.
+
+    This is the deliberate state-update operation (Feature 02) — separate
+    from :func:`write_state`, which only ever creates fresh state.
+
+    Sequence: refuse symlinked targets/temp names, write the new state to
+    an exclusive temp file, then compare the current target bytes against
+    ``expected_raw`` (the bytes captured when the caller read and validated
+    the state). If they differ — or the target has vanished — the update is
+    aborted, the temp file is removed, and nothing on disk is modified.
+
+    Concurrency guarantee (documented, not absolute): this prevents lost
+    updates caused by writes that completed *before* the compare. A write
+    landing between the compare and the final rename can still win; callers
+    performing concurrent updates must serialize at a higher level.
+    """
+    target = state_path(aperio_dir)
+    tmp = state_tmp_path(aperio_dir)
+    if os.path.islink(target):
+        raise StateError(
+            f"refusing to follow symlink at {target}; "
+            "remove it and re-run 'aperio init' to repair"
+        )
+    if os.path.islink(tmp):
+        raise StateError(
+            f"refusing to follow symlink at {tmp}; "
+            "remove it and re-run 'aperio init' to repair"
+        )
+    payload = json.dumps(asdict(state), indent=2) + "\n"
+    created_tmp = False
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+        created_tmp = True
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(payload)
+    except OSError as exc:
+        _discard_created_tmp(tmp, created_tmp)
+        raise StateError(
+            f"cannot prepare state update at {tmp}: {exc.strerror or exc}; "
+            "the temp name is occupied by a concurrent aperio write (retry "
+            "shortly) or a leftover from a crashed write (removing it is "
+            "your decision); nothing was modified"
+        ) from None
+
+    try:
+        current = target.read_bytes()
+    except FileNotFoundError as exc:
+        _discard_created_tmp(tmp, created_tmp)
+        raise StateError(
+            f"cannot update state: {target} disappeared during the update; "
+            "nothing was modified. Re-run 'aperio init' to repair the project."
+        ) from None
+    except OSError as exc:
+        _discard_created_tmp(tmp, created_tmp)
+        raise StateError(
+            f"cannot read {target} for the update check: {exc.strerror or exc}; "
+            "nothing was modified"
+        ) from None
+
+    if current != expected_raw:
+        _discard_created_tmp(tmp, created_tmp)
+        raise StateError(
+            f"state at {target} changed while the update was being prepared "
+            "(concurrent modification); nothing was modified. Re-read the "
+            "state and retry the update."
+        )
+
+    try:
+        os.replace(tmp, target)
+    except OSError as exc:
+        _discard_created_tmp(tmp, created_tmp)
+        raise StateError(
+            f"cannot publish state update at {target}: {exc.strerror or exc}; "
+            "no existing content was modified"
+        ) from None
+
+
 def _discard_created_tmp(tmp: Path, created_tmp: bool) -> None:
     """Remove a temp file this same call created; never touch anything else."""
     if created_tmp:
@@ -184,7 +264,7 @@ def read_state(aperio_dir: Path) -> ProjectState:
     """
     path = state_path(aperio_dir)
     try:
-        raw = path.read_text(encoding="utf-8")
+        raw = path.read_bytes()
     except FileNotFoundError:
         raise NotInitializedError(
             f"not an Aperio project: no {path} (run 'aperio init <project-directory>')"
@@ -194,8 +274,26 @@ def read_state(aperio_dir: Path) -> ProjectState:
             f"cannot read {path}: {exc.strerror or exc}"
         ) from None
 
+    return parse_state_bytes(raw, path)
+
+
+def parse_state_bytes(raw: bytes, path: Path) -> ProjectState:
+    """Validate raw ``state.json`` bytes into a :class:`ProjectState`.
+
+    Split from :func:`read_state` so callers that need compare-and-swap
+    semantics can validate exactly the bytes they captured, with no
+    second read in between.
+    """
     try:
-        data = json.loads(raw)
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise StateError(
+            f"{path} is corrupt: not valid UTF-8; aperio will not overwrite "
+            "it. Inspect or restore the file manually."
+        ) from None
+
+    try:
+        data = json.loads(text)
     except json.JSONDecodeError as exc:
         raise StateError(
             f"{path} is corrupt (invalid JSON at line {exc.lineno}: {exc.msg}); "

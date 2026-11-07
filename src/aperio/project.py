@@ -97,23 +97,48 @@ DECISIONS_TEMPLATE = """\
 Append-only. Never rewrite or delete past entries; add a new entry that
 supersedes an old one instead.
 
-Entry format:
+Use 'aperio decision-add' to append entries. It writes one machine-parseable
+entry per decision (headings are recognized only at column 0, timestamp is
+ISO-8601 UTC):
 
-## YYYY-MM-DD - Short title
+    ## DEC-0001 - <UTC timestamp> - Title
 
-- **Context:** why this decision came up
-- **Decision:** what was decided
-- **Consequences:** what this commits the project to
+    - **Context:** ...
+    - **Decision:** ...
+    - **Consequences:** ...
+
+Hand-edit only with care: entries aperio cannot fully parse are reported as
+malformed and never silently dropped, but they are also not machine-readable.
 """
 
 HANDOFF_TEMPLATE = """\
 # Handoff Notes
+<!-- aperio:handoff:v1 -->
 
-Write whatever the next agent or session needs to continue: current phase,
-work in progress, known risks, open questions.
+## Current objective
+None noted.
 
-This file describes the *current* handoff: replace its content (do not
-append) when handing off. Permanent history belongs in decisions.md.
+## Completed work
+None noted.
+
+## Work in progress
+None noted.
+
+## Next recommended action
+None noted.
+
+## Blockers
+None noted.
+
+## Verification evidence
+None noted.
+
+## Verification limitations
+None noted.
+
+This file describes the *current* handoff: 'aperio handoff-write' replaces
+its content with a validated, structured handoff. Permanent history belongs
+in decisions.md.
 """
 
 APERIO_GITIGNORE_TEMPLATE = """\
@@ -123,6 +148,7 @@ local/
 
 # Transient atomic-write artifacts (reserved by aperio; never committed).
 state.json.tmp
+handoff.md.tmp
 """
 
 LOCAL_README_TEMPLATE = """\

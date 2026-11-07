@@ -1,0 +1,447 @@
+"""Decision recording: append-only behavior, parsing, injection safety."""
+
+from __future__ import annotations
+
+import errno
+import json
+import os
+
+import pytest
+
+from aperio.decisions import (
+    DecisionEntry,
+    append_decision,
+    parse_decisions_text,
+    read_decisions,
+    render_entry,
+)
+from aperio.errors import (
+    NotInitializedError,
+    PathError,
+    StateError,
+    ValidationError,
+)
+
+FIELDS = dict(
+    title="Use stdlib only",
+    context="Dependencies add supply-chain risk",
+    decision="Standard library only for runtime code",
+    consequences="Some tasks need more hand-written code",
+)
+
+
+def _append(aperio_dir, **overrides):
+    return append_decision(aperio_dir, **{**FIELDS, **overrides})
+
+
+def test_append_to_fresh_template(run_cli, project_dir):
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    entry = _append(aperio_dir)
+    assert entry.id == "DEC-0001"
+    read = read_decisions(aperio_dir)
+    assert [e.id for e in read.entries] == ["DEC-0001"]
+    assert read.entries[0].title == "Use stdlib only"
+    assert read.skipped_headings == 0  # template shows the format indented
+    assert read.malformed_entries == []
+
+
+def test_append_is_byte_preserving(run_cli, project_dir):
+    """Append-only proof: after a second decision, every original byte is
+    still present, in order, unchanged."""
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    _append(aperio_dir)
+    before = (aprio := aperio_dir / "decisions.md").read_bytes()
+    _append(aperio_dir, title="Second decision")
+    after = aprio.read_bytes()
+    assert after.startswith(before)
+    assert b"Second decision" in after[len(before):]
+    read = read_decisions(aperio_dir)
+    assert [e.id for e in read.entries] == ["DEC-0001", "DEC-0002"]
+
+
+def test_next_id_scans_malformed_headings(run_cli, project_dir):
+    """A torn entry (e.g. from a crash) never gets its number reused, and
+    never blocks further appends."""
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    log = aperio_dir / "decisions.md"
+    log.write_text(
+        log.read_text() + "## DEC-0007 — not-a-timestamp — torn entry\n"
+    )
+    entry = _append(aperio_dir)
+    assert entry.id == "DEC-0008"
+    read = read_decisions(aperio_dir)
+    assert any("line" in m for m in read.malformed_entries)
+
+
+def test_next_id_ignores_file_order(run_cli, project_dir):
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    log = aperio_dir / "decisions.md"
+    entry_late = render_entry(
+        DecisionEntry(
+            id="DEC-0005",
+            timestamp="2026-01-01T00:00:00Z",
+            title="Later id first",
+            context="c",
+            decision="d",
+            consequences="x",
+        )
+    )
+    log.write_text(log.read_text() + entry_late)
+    entry = _append(aperio_dir)
+    assert entry.id == "DEC-0006"
+
+
+def test_multiline_values_roundtrip(run_cli, project_dir):
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    entry = _append(aperio_dir, context="line one\nline two\n\nline four")
+    read = read_decisions(aperio_dir)
+    assert read.entries[0].context == entry.context
+    assert read.entries[0].context == "line one\nline two\n\nline four"
+
+
+def test_injected_heading_is_neutralized(run_cli, project_dir):
+    """A value trying to forge a log entry cannot: continuation lines are
+    indented, so '## DEC-9999' never lands at column 0."""
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    forged = "innocent\n## DEC-9999 — 2026-01-01T00:00:00Z — Fake\n- **Decision:** forged"
+    _append(aperio_dir, context=forged)
+    read = read_decisions(aperio_dir)
+    assert [e.id for e in read.entries] == ["DEC-0001"]
+    assert read.entries[0].context == forged  # content preserved verbatim
+
+
+def test_injected_field_label_is_neutralized(run_cli, project_dir):
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    forged = "real\n- **Decision:** forged field"
+    _append(aperio_dir, decision=forged)
+    read = read_decisions(aperio_dir)
+    assert read.entries[0].decision == forged
+    assert read.entries[0].context == FIELDS["context"]
+
+
+def test_title_validations(run_cli, project_dir):
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    with pytest.raises(ValidationError, match="single line"):
+        _append(aperio_dir, title="two\nlines")
+    with pytest.raises(ValidationError, match="non-empty"):
+        _append(aperio_dir, title="   ")
+
+
+@pytest.mark.parametrize(
+    "field_name", ["title", "context", "decision", "consequences"]
+)
+def test_empty_field_rejected(run_cli, project_dir, field_name):
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    kwargs = {field_name: ""}
+    with pytest.raises(ValidationError, match=field_name):
+        _append(aperio_dir, **kwargs)
+
+
+def test_bad_explicit_timestamp_rejected(run_cli, project_dir):
+    run_cli("init", str(project_dir))
+    with pytest.raises(ValidationError, match="timestamp"):
+        _append(project_dir / ".aperio", timestamp="yesterday")
+
+
+@pytest.mark.parametrize(
+    "sneaky", ["\r", "\x85", "\u2028", "\u2029", "\x1c", "\x1d", "\x1e"]
+)
+def test_foreign_line_separators_rejected_in_values(
+    run_cli, project_dir, sneaky
+):
+    """Values containing CR/NEL/LS/PS/record-separators are rejected: tools
+    like str.splitlines() and CommonMark treat them as line endings, which
+    would let a value forge column-0 headings there."""
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    before = (aprio := aperio_dir / "decisions.md").read_bytes()
+    with pytest.raises(ValidationError, match="line separator"):
+        _append(aperio_dir, context=f"innocent{sneaky}## DEC-9999 — 2026-01-01T00:00:00Z — Fake")
+    with pytest.raises(ValidationError, match="line separator"):
+        _append(aperio_dir, title=f"real{sneaky}## DEC-9999 — 2026-01-01T00:00:00Z — Fake")
+    assert (aprio := aperio_dir / "decisions.md").read_bytes() == before
+
+
+def test_foreign_separator_via_json_file_rejected(
+    run_cli, project_dir, tmp_path
+):
+    """Raw U+2028 passes json.loads; the validation layer must still
+    reject it on the --file path."""
+    run_cli("init", str(project_dir))
+    input_file = tmp_path / "decision.json"
+    input_file.write_text(
+        json.dumps(
+            {
+                "title": "t",
+                "context": "c\u2028- **Decision:** forged",
+                "decision": "d",
+                "consequences": "x",
+            }
+        ),
+        encoding="utf-8",
+    )
+    code, _, err = run_cli(
+        "decision-add", str(project_dir), "--file", str(input_file)
+    )
+    assert code == 1
+    assert "line separator" in err
+    assert "forged" not in (project_dir / ".aperio/decisions.md").read_text()
+
+
+def test_cli_decision_add_file_and_flags_are_exclusive(
+    run_cli, project_dir, tmp_path
+):
+    run_cli("init", str(project_dir))
+    input_file = tmp_path / "decision.json"
+    input_file.write_text(json.dumps(FIELDS))
+    code, _, err = run_cli(
+        "decision-add",
+        str(project_dir),
+        "--file",
+        str(input_file),
+        "--title",
+        "FROM-FLAGS",
+    )
+    assert code == 1
+    assert "mutually exclusive" in err
+    read = read_decisions(project_dir / ".aperio")
+    assert read.entries == []
+
+
+def test_missing_decisions_file_refuses(run_cli, project_dir):
+    run_cli("init", str(project_dir))
+    (project_dir / ".aperio/decisions.md").unlink()
+    with pytest.raises(NotInitializedError, match="aperio init"):
+        _append(project_dir / ".aperio")
+
+
+def test_symlinked_decisions_file_refused(run_cli, project_dir, tmp_path):
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    outside = tmp_path / "outside.md"
+    outside.write_text("PRECIOUS")
+    (aprio := aperio_dir / "decisions.md").unlink()
+    aprio.symlink_to(outside)
+    with pytest.raises(PathError, match="refusing to follow symlink"):
+        _append(aperio_dir)
+    assert outside.read_text() == "PRECIOUS"  # nothing written through
+    assert aprio.is_symlink()
+
+
+def test_dangling_symlink_decisions_refused(run_cli, project_dir, tmp_path):
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    destination = tmp_path / "elsewhere.md"
+    (aprio := aperio_dir / "decisions.md").unlink()
+    aprio.symlink_to(destination)
+    with pytest.raises(PathError, match="refusing to follow symlink"):
+        _append(aperio_dir)
+    assert not destination.exists()
+    assert aprio.is_symlink()
+
+
+def test_directory_at_decisions_path_refused(run_cli, project_dir):
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    target = aperio_dir / "decisions.md"
+    target.unlink()
+    target.mkdir()
+    with pytest.raises(PathError, match="directory"):
+        _append(aperio_dir)
+    assert target.is_dir()
+
+
+def test_non_utf8_decisions_file_clean_error(run_cli, project_dir):
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    (aprio := aperio_dir / "decisions.md").write_bytes(b"\xff\xfe\x00bad")
+    with pytest.raises(StateError, match="UTF-8"):
+        read_decisions(aperio_dir)
+    with pytest.raises(StateError, match="UTF-8"):
+        _append(aperio_dir)
+
+
+def test_user_prose_sections_skipped_and_counted(run_cli, project_dir):
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    log = aperio_dir / "decisions.md"
+    log.write_text(
+        log.read_text() + "## My own notes\n\nFree-form user content.\n"
+    )
+    _append(aperio_dir)
+    read = read_decisions(aperio_dir)
+    assert len(read.entries) == 1
+    assert read.skipped_headings == 1  # the user's own '## My own notes'
+
+
+def test_preexisting_duplicate_ids_reported(run_cli, project_dir):
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    log = aperio_dir / "decisions.md"
+    for _ in range(2):
+        log.write_text(
+            log.read_text()
+            + render_entry(
+                DecisionEntry(
+                    id="DEC-0001",
+                    timestamp="2026-01-01T00:00:00Z",
+                    title="Dup",
+                    context="c",
+                    decision="d",
+                    consequences="x",
+                )
+            )
+        )
+    read = read_decisions(aperio_dir)
+    assert read.duplicate_ids == ["DEC-0001"]
+    entry = _append(aperio_dir)
+    assert entry.id == "DEC-0002"
+
+
+def test_interrupted_append_leaves_file_intact(
+    run_cli, project_dir, monkeypatch
+):
+    """If the single append syscall never happens, the log is untouched."""
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    log = aperio_dir / "decisions.md"
+    before = log.read_bytes()
+
+    def boom(fd, data):
+        raise OSError(errno.EIO, "interrupted")
+
+    monkeypatch.setattr("aperio.decisions.os.write", boom)
+    with pytest.raises(StateError, match="cannot append"):
+        _append(aperio_dir)
+    assert log.read_bytes() == before
+
+
+def test_single_syscall_append(run_cli, project_dir, monkeypatch):
+    """The rendered entry is emitted as exactly one os.write (no buffered
+    splitting), per the concurrency contract."""
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    calls = []
+    real_write = os.write
+
+    def counting_write(fd, data):
+        calls.append(data)
+        return real_write(fd, data)
+
+    monkeypatch.setattr("aperio.decisions.os.write", counting_write)
+    _append(aperio_dir)
+    assert len(calls) == 1
+    assert b"DEC-0001" in calls[0]
+
+
+def test_environment_secrets_not_captured(run_cli, project_dir, monkeypatch):
+    run_cli("init", str(project_dir))
+    token = "ghp_" + "z" * 36
+    monkeypatch.setenv("APERIO_TEST_TOKEN", token)
+    monkeypatch.setenv("GITHUB_TOKEN", token)
+    _append(project_dir / ".aperio")
+    content = (project_dir / ".aperio/decisions.md").read_text()
+    assert token not in content
+
+
+def test_cli_decision_add_flags_and_file(run_cli, project_dir, tmp_path):
+    run_cli("init", str(project_dir))
+    code, out, err = run_cli(
+        "decision-add",
+        str(project_dir),
+        "--title",
+        "CLI decision",
+        "--context",
+        "via flags",
+        "--decision",
+        "do it",
+        "--consequences",
+        "documented",
+    )
+    assert code == 0, err
+    assert "DEC-0001" in out
+
+    payload = {
+        "title": "File decision",
+        "context": "via file",
+        "decision": "do that",
+        "consequences": "documented",
+    }
+    input_file = tmp_path / "decision.json"
+    input_file.write_text(json.dumps(payload))
+    code, out, err = run_cli(
+        "decision-add", str(project_dir), "--file", str(input_file)
+    )
+    assert code == 0, err
+    assert "DEC-0002" in out
+    read = read_decisions(project_dir / ".aperio")
+    assert [e.title for e in read.entries] == ["CLI decision", "File decision"]
+
+
+def test_cli_decision_add_rejects_bad_input_files(
+    run_cli, project_dir, tmp_path
+):
+    run_cli("init", str(project_dir))
+    missing_field = tmp_path / "missing.json"
+    missing_field.write_text(json.dumps({"title": "x"}))
+    code, _, err = run_cli(
+        "decision-add", str(project_dir), "--file", str(missing_field)
+    )
+    assert code == 1
+    assert "context" in err
+
+    extra_field = tmp_path / "extra.json"
+    extra_field.write_text(
+        json.dumps({**FIELDS, "typo_field": "silently-dropped-no-more"})
+    )
+    code, _, err = run_cli(
+        "decision-add", str(project_dir), "--file", str(extra_field)
+    )
+    assert code == 1
+    assert "typo_field" in err
+
+    code, _, err = run_cli("decision-add", str(project_dir), "--title", "only")
+    assert code == 1
+    assert "--context" in err
+
+
+def test_cli_decision_add_on_uninitialized_dir(run_cli, tmp_path):
+    code, _, err = run_cli(
+        "decision-add",
+        str(tmp_path / "nope"),
+        "--title",
+        "t",
+        "--context",
+        "c",
+        "--decision",
+        "d",
+        "--consequences",
+        "x",
+    )
+    assert code == 1
+    assert "not an Aperio project" in err
+
+
+def test_grammar_roundtrip_golden():
+    """Golden render -> parse round-trip for the normative grammar."""
+    entry = DecisionEntry(
+        id="DEC-0042",
+        timestamp="2026-11-07T10:00:00Z",
+        title="Golden entry",
+        context="first\n  keeps two-space indent marker\nlast",
+        decision="single",
+        consequences="multi\nline",
+    )
+    rendered = render_entry(entry)
+    parsed = parse_decisions_text("Preamble.\n" + rendered)
+    assert parsed.malformed_entries == []
+    assert parsed.entries == [entry]

@@ -24,3 +24,9 @@ class NotInitializedError(AperioError):
 
 class StateError(AperioError):
     """Project state is unreadable, corrupt, or from an unsupported schema."""
+
+
+class ValidationError(AperioError):
+    """User-supplied input is invalid (missing/empty/oversized fields,
+    injected structure, unknown keys). Messages name the artifact file and
+    the offending field or line."""

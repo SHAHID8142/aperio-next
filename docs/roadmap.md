@@ -1,14 +1,22 @@
-# Roadmap — planned, NOT implemented
+# Roadmap
+
+## Implemented
+
+- **Feature 01 — Project foundation:** `aperio --version|init|status`,
+  versioned `.aperio/` state, safe-path policy, atomic non-destructive
+  persistence.
+- **Feature 02 — Portable agent memory & reliable handoff:**
+  `aperio memory [--json]` context read API, `aperio decision-add`
+  (append-only, injection-hardened), `aperio handoff-write` (validated
+  structured handoff, optional compare-and-swap), `aperio phase-set`
+  (compare-and-swap phase updates). The append-only decision log is the
+  project's audit trail; phase transitions are not auto-logged into it.
+
+## Planned — NOT implemented
 
 Everything below is future work. Nothing in this list works today; do not
 claim otherwise in code, docs, or demos. Each item lands as its own
 assignment ("one feature per assignment").
-
-## Feature 02 — Agent-facing project memory
-
-Structured read/write APIs over `.aperio/` so agent runtimes can consume and
-update project state programmatically: state updates with audit trail,
-structured decision-log entries, handoff validation.
 
 ## Feature 03 — Task planning & tracking
 
