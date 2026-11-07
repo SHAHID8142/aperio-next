@@ -262,7 +262,7 @@ def test_stored_blocked_task_requires_reason():
 
 def test_stored_document_dependency_target_must_exist():
     doc = stored_plan(tasks=[stored_task("TASK-001", depends_on=["TASK-099"])])
-    with pytest.raises(StateError, match="unknown task"):
+    with pytest.raises(StateError, match="invalid dependency"):
         validate_plan_document(doc, "plan.json")
 
 
@@ -472,3 +472,110 @@ def test_tasks_array_order_is_not_semantic():
     parsed = validate_plan_document(doc, "plan.json")
     assert [t["id"] for t in parsed["tasks"]] == ["TASK-002", "TASK-001"]
     assert ready_task_ids(parsed) == ["TASK-001"]
+
+
+# --- Fix 2: full stored-plan validation (fail-first regressions; some tests
+# --- double as regression guards for behavior that pre-existing checks covered) --
+
+
+def _with_task_lifecycle(doc, task_id, **lifecycle):
+    for task in doc["tasks"]:
+        if task["id"] == task_id:
+            task.update(lifecycle)
+    return doc
+
+
+def test_stored_self_dependency_rejected():
+    doc = stored_plan(tasks=[stored_task("TASK-001", depends_on=["TASK-001"])])
+    with pytest.raises(StateError, match="depends on itself"):
+        validate_plan_document(doc, "plan.json")
+
+
+def test_stored_cycle_rejected():
+    doc = stored_plan(
+        tasks=[
+            stored_task("TASK-001", depends_on=["TASK-002"]),
+            stored_task("TASK-002", depends_on=["TASK-001"]),
+        ]
+    )
+    with pytest.raises(StateError, match="cycle detected"):
+        validate_plan_document(doc, "plan.json")
+
+
+def test_stored_non_string_dependency_rejected():
+    for bad_dep in (7, {}, ["x"], None):
+        doc = stored_plan(tasks=[stored_task("TASK-001", depends_on=[bad_dep])])
+        with pytest.raises(StateError):
+            validate_plan_document(doc, "plan.json")
+
+
+def test_stored_missing_plan_content_field_rejected():
+    doc = stored_plan()
+    del doc["objective"]
+    with pytest.raises(StateError, match="objective"):
+        validate_plan_document(doc, "plan.json")
+
+
+def test_stored_mistyped_plan_content_field_rejected():
+    doc = stored_plan()
+    doc["scope"] = "should-be-a-list"
+    with pytest.raises(StateError, match="scope"):
+        validate_plan_document(doc, "plan.json")
+
+
+def test_stored_empty_task_deliverables_rejected():
+    doc = stored_plan()
+    doc["tasks"][0]["deliverables"] = []
+    with pytest.raises(StateError, match="deliverables"):
+        validate_plan_document(doc, "plan.json")
+
+
+def test_stored_non_string_deliverable_rejected():
+    doc = stored_plan()
+    doc["tasks"][0]["deliverables"] = [3]
+    with pytest.raises(StateError):
+        validate_plan_document(doc, "plan.json")
+
+
+def test_stored_multiline_task_title_rejected():
+    doc = stored_plan()
+    doc["tasks"][0]["title"] = "two\nlines"
+    with pytest.raises(StateError, match="title"):
+        validate_plan_document(doc, "plan.json")
+
+
+def test_stored_lifecycle_dependency_contradiction_rejected():
+    """An in-progress or completed task must not depend on an uncompleted
+    task: that state cannot arise from legitimate aperio operations."""
+    doc = stored_plan(
+        tasks=[
+            stored_task("TASK-001", status="pending"),
+            stored_task(
+                "TASK-002", status="in-progress", owner="a",
+                depends_on=["TASK-001"],
+            ),
+        ]
+    )
+    with pytest.raises(StateError, match="contradict|in-progress task"):
+        validate_plan_document(doc, "plan.json")
+    doc = stored_plan(
+        tasks=[
+            stored_task("TASK-001", status="pending"),
+            stored_task(
+                "TASK-002", status="completed", depends_on=["TASK-001"],
+                verification={"evidence": "e", "limitations": "l",
+                              "result": "passed", "verified_at": "2026-01-01T00:00:00Z"},
+            ),
+        ]
+    )
+    with pytest.raises(StateError):
+        validate_plan_document(doc, "plan.json")
+
+
+def test_stored_impossible_approval_metadata_rejected():
+    doc = stored_plan()
+    doc["approval"] = {"status": "approved", "approved_revision": 5,
+                       "approved_at": "2026-01-01T00:00:00Z", "approved_by": None}
+    # plan_version is 1: approval of revision 5 is impossible.
+    with pytest.raises(StateError, match="approved_revision"):
+        validate_plan_document(doc, "plan.json")

@@ -136,7 +136,17 @@ def plan_exists(aperio_dir: Path) -> bool:
 def _publish(aperio_dir: Path, data: dict, snapshot: bytes, path: Path, tmp: Path) -> None:
     """Validate, write to an exclusive temp file, byte-CAS, atomic rename."""
     validate_plan_document(data, path)
-    payload = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+    try:
+        # ensure_ascii=False keeps author-supplied text readable; strict
+        # JSON only — NaN/Infinity in preserved extension fields would
+        # round-trip into a file strict parsers reject, so refuse instead.
+        payload = json.dumps(data, indent=2, ensure_ascii=False, allow_nan=False) + "\n"
+    except ValueError as exc:
+        raise StateError(
+            f"cannot serialize the plan at {path}: {exc}; the document "
+            "contains non-standard JSON values (NaN/Infinity, likely in "
+            "extension fields). Resolve them manually; nothing was modified."
+        ) from None
     created_tmp = False
     try:
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
@@ -263,12 +273,23 @@ def _carry_lifecycle(old_tasks: list[dict], new_tasks: list[dict]) -> tuple[list
     """Carry system-managed lifecycle state from the old document.
 
     Surviving task ids keep status/owner/blocked_reason/verification
-    verbatim; new ids start fresh (pending); removing a non-pending task
-    is refused so verification evidence is never silently destroyed.
-    Returns (merged tasks, removed-task ids that were pending).
+    verbatim **only while their contract is unchanged**. The contract is
+    the task's material content: objective, deliverables, acceptance
+    criteria, and dependencies (a title edit is non-semantic and may
+    accompany carried state). A material change to a non-pending task is
+    REFUSED — the previous verification evidence would otherwise appear
+    valid for a different task contract. Resolution is deliberate:
+    reopen the task (``task-status --status in-progress --reopen``,
+    clearing the evidence) or assign a new task id.
+
+    New ids start fresh (pending); removing a non-pending task is refused
+    so verification evidence is never silently destroyed; and the merged
+    document may not leave an in-progress or completed task with
+    unsatisfied dependencies.
     """
     old_by_id = {task["id"]: task for task in old_tasks}
     new_ids = {task["id"] for task in new_tasks}
+    material_keys = ("objective", "deliverables", "acceptance_criteria", "depends_on")
     merged: list[dict] = []
     for task in new_tasks:
         old = old_by_id.get(task["id"])
@@ -289,10 +310,28 @@ def _carry_lifecycle(old_tasks: list[dict], new_tasks: list[dict]) -> tuple[list
             )
             merged.append(fresh)
         else:
+            if old["status"] != "pending":
+                material = [
+                    key
+                    for key in material_keys
+                    if task[key] != old[key]
+                ]
+                if material:
+                    raise StateError(
+                        f"plan revision makes material changes to "
+                        f"{old['status']} task {task['id']} "
+                        f"(changed: {', '.join(material)}); its recorded "
+                        "lifecycle state and verification evidence would "
+                        "no longer match the new contract. Reopen it "
+                        "deliberately first ('aperio task-status ... "
+                        "--status in-progress --reopen') or assign a new "
+                        "task id. Nothing was modified."
+                    )
             carried = dict(task)
             for key in TASK_SYSTEM_KEYS:
                 carried[key] = old[key]
             merged.append(carried)
+
     removed_non_pending = [
         task["id"]
         for task in old_tasks
@@ -306,6 +345,23 @@ def _carry_lifecycle(old_tasks: list[dict], new_tasks: list[dict]) -> tuple[list
             "Keep them in the revision, or resolve them first (a pending "
             "task may simply be dropped)."
         )
+
+    # A revision must not leave an in-progress or completed task with
+    # unsatisfied dependencies: execution was authorized on the old graph.
+    for task in merged:
+        if task["status"] in ("in-progress", "completed"):
+            for dep in task["depends_on"]:
+                dep_status = next(
+                    t["status"] for t in merged if t["id"] == dep
+                )
+                if dep_status != "completed":
+                    raise StateError(
+                        f"plan revision would leave {task['status']} task "
+                        f"{task['id']} with unsatisfied dependency {dep} "
+                        f"(now {dep_status!r}). Resolve the dependency "
+                        "chain in the revision or revert it; nothing was "
+                        "modified."
+                    )
     return merged, sorted(
         task["id"] for task in old_tasks if task["id"] not in new_ids
     )
@@ -678,6 +734,8 @@ def plan_summary(aperio_dir: Path) -> dict | None:
     for task in plan["tasks"]:
         counts[task["status"]] += 1
     approval = plan["approval"]
+    dependency_ready = ready_task_ids(plan)
+    approved = approval["status"] == "approved"
     return {
         "present": True,
         "unsupported_schema": False,
@@ -685,10 +743,14 @@ def plan_summary(aperio_dir: Path) -> dict | None:
         "plan_version": plan["plan_version"],
         "approval_status": approval["status"],
         "approved_revision": approval["approved_revision"],
-        "approval_required": approval["status"] != "approved",
+        "approval_required": not approved,
         "objective": plan["objective"],
         "task_counts": counts,
-        "ready_task_ids": ready_task_ids(plan),
+        # dependency-ready: pending with all dependencies completed
+        "ready_task_ids": dependency_ready,
+        # executable: dependency-ready AND the plan is approved — starting
+        # work on a draft-plan task is refused by the approval gate
+        "executable_task_ids": dependency_ready if approved else [],
         "blocked_task_ids": sorted(
             task["id"] for task in plan["tasks"] if task["status"] == "blocked"
         ),

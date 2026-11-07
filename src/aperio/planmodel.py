@@ -364,11 +364,71 @@ def validate_plan_document(data: object, path) -> dict:
         ids.add(task["id"])
     for task in tasks:
         for dep in task["depends_on"]:
-            if dep not in ids:
+            # isinstance guard first: an unhashable dep (dict/list) would
+            # make `dep not in ids` raise TypeError instead of a clean
+            # StateError; the content-validation block below reports it.
+            if not isinstance(dep, str) or dep not in ids:
                 raise StateError(
-                    f"{path} is corrupt: task {task['id']} depends on "
-                    f"unknown task {dep}"
+                    f"{path} is corrupt: task {task['id']} has an invalid "
+                    f"dependency {dep!r} (must be a known TASK-<digits> id)"
                 )
+
+    # Full content and graph validation, identical in strictness to the
+    # input boundary: malformed on-disk data is damage, reported as
+    # StateError (never KeyError/TypeError tracebacks).
+    missing_content = [key for key in PLAN_CONTENT_KEYS if key not in data]
+    if missing_content:
+        raise StateError(
+            f"{path} is corrupt: missing plan field(s): "
+            f"{', '.join(missing_content)}"
+        )
+    try:
+        for field in _PLAN_STR_FIELDS:
+            _check_text("plan", field, data[field])
+        for field in _PLAN_LIST_FIELDS:
+            _check_str_list("plan", field, data[field])
+        _check_str_list(
+            "plan", "acceptance_criteria", data["acceptance_criteria"], min_len=1
+        )
+        content_tasks = [
+            {key: task[key] for key in TASK_CONTENT_KEYS} for task in tasks
+        ]
+        for index, content_task in enumerate(content_tasks):
+            validate_task_input(content_task, where=f"tasks[{index}]")
+        _validate_task_graph(content_tasks)
+    except ValidationError as exc:
+        raise StateError(f"{path} is corrupt: {exc}") from None
+
+    # Lifecycle/dependency consistency: an in-progress or completed task
+    # always had its dependencies completed when it started, and legitimate
+    # aperio operations never break that invariant. On-disk violations are
+    # tampering or damage.
+    for task in tasks:
+        if task["status"] in ("in-progress", "completed"):
+            for dep in task["depends_on"]:
+                dep_status = next(
+                    t["status"] for t in tasks if t["id"] == dep
+                )
+                if dep_status != "completed":
+                    raise StateError(
+                        f"{path} is corrupt: {task['status']} task "
+                        f"{task['id']} depends on {dep}, which is "
+                        f"{dep_status!r} — contradictory state that cannot "
+                        "arise from legitimate operations"
+                    )
+
+    # Approval impossibility: an approval cannot precede the revision it
+    # approved.
+    if (
+        approval["status"] == "approved"
+        and approval["approved_revision"] is not None
+        and approval["approved_revision"] > plan_version
+    ):
+        raise StateError(
+            f"{path} is corrupt: approval.approved_revision "
+            f"({approval['approved_revision']}) exceeds plan_version "
+            f"({plan_version})"
+        )
     return data
 
 

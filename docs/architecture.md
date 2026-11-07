@@ -284,13 +284,24 @@ topologically. Full schema: see `aperio/planmodel.py` and the README.
   create time is impossible. Revision 1, approval `draft`.
 - `plan-revise --revises N`: full content replacement; `N` must equal the
   current `plan_version` (stale → conflict, nothing modified). Lifecycle
-  state (status/owner/blocked_reason/verification) is carried **verbatim**
-  for surviving task ids; new tasks start pending; **removing a non-pending
-  task is refused** (verification evidence must never be silently
-  destroyed). Every revision resets approval to draft — renewed approval
-  is required before execution tracking resumes (conservative by design:
-  no "material change" judgment calls). Agents must re-read the plan after
-  any revise; in-progress work is stranded until re-approval.
+  state (status/owner/blocked_reason/verification) is carried verbatim
+  **only for tasks whose contract is unchanged** — a material change
+  (objective, deliverables, acceptance criteria, or dependencies) to a
+  non-pending task is **refused** with actionable guidance: the previous
+  verification evidence must not appear valid for a different contract.
+  Resolution is deliberate — reopen the task (`task-status --reopen`,
+  clearing the evidence) or assign a new task id; existing evidence is
+  preserved, never discarded automatically. The comparison is exact
+  equality, so visually-identical-but-differently-normalized edits
+  (unicode normalization forms, list ordering) are also treated as
+  material — refuse-and-preserve is the safe direction. New tasks start pending;
+  **removing a non-pending task is refused**; and a revision may not
+  leave an in-progress or completed task with unsatisfied dependencies.
+  Every revision resets approval to draft — renewed approval is required
+  before execution tracking resumes (conservative by design: no
+  "material change" judgment calls about approval). Agents must re-read
+  the plan after any revise; in-progress work is stranded until
+  re-approval.
 - `plan-approve [--revision N] [--by LABEL]`: records the approval stamp
   (`approved_revision` = the approved plan_version). This is an
   **operational marker, not cryptographic proof** of human authorization —
@@ -306,10 +317,22 @@ topologically. Full schema: see `aperio/planmodel.py` and the README.
 
 Task ids are `TASK-<digits>`, unique, and every `depends_on` must reference
 an existing task; self-dependencies and cycles (named in the error) are
-rejected at create/revise. **Readiness is derived, never stored**: a task
-is ready when it is `pending` and all dependencies are `completed` —
-blocked or reopened dependencies immediately de-ready dependents with no
-stored staleness.
+rejected at create/revise **and re-validated on every read of the stored
+document** (stored-plan validation matches input strictness: content
+fields, graph, lifecycle/dependency consistency, and approval
+impossibility — malformed on-disk data is damage, reported as StateError,
+never a traceback). **Readiness is derived, never stored**: a task is
+*dependency-ready* when it is `pending` and all dependencies are
+`completed` — blocked or reopened dependencies immediately de-ready
+dependents with no stored staleness. Dependency readiness is distinct
+from **executable readiness**: a task is executable only when it is
+dependency-ready *and* the plan is approved (`executable_task_ids` in the
+memory summary and `is_executable` in `task-list --json`; draft-plan
+tasks are never presented as authorized to start, and `task-list`
+renders `[dep-ready]` until approval). Stored documents with
+contradictory lifecycle/dependency states (e.g. a completed task whose
+dependency is not completed) cannot arise from legitimate operations and
+are rejected as damage.
 
 Stored statuses: `pending`, `in-progress`, `blocked`, `completed`.
 Transition table (everything else forbidden; nothing silent):
@@ -335,10 +358,11 @@ genuineness is the operator's responsibility.
 exists (normal state; not added to `missing`), otherwise a concise summary
 — `{present, unsupported_schema, schema_version, plan_version,
 approval_status, approved_revision, approval_required, objective,
-task_counts, ready_task_ids, blocked_task_ids}`. File-level corruption is
-fatal (consistent with other shareable files); a newer plan-schema version
-degrades gracefully (an `unsupported_schema` marker, never fatal);
-live-symlinked plan files are refused; dangling links read as absent.
+task_counts, ready_task_ids, executable_task_ids, blocked_task_ids}`.
+File-level corruption is fatal (consistent with other shareable files); a
+newer plan-schema version degrades gracefully (an `unsupported_schema`
+marker, never fatal); live-symlinked plan files are refused; dangling
+links read as absent.
 
 ## Cross-agent portability principles (implemented)
 

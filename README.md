@@ -154,15 +154,18 @@ completed), never stored. Transitions (`pending → in-progress →
 completed`, with `blocked` as an explicit side state) are validated:
 starting requires claiming ownership and satisfied dependencies;
 completion requires recorded verification evidence, limitations, and a
-`passed` result; reopening is explicit and refused while dependents rely
-on the completion. Execution tracking requires an **approved** plan —
-`plan-approve` records an operational marker (never cryptographic proof;
-genuine human review is the operator's responsibility) — and any
-`plan-revise` resets approval to draft. Revisions declare the
-`plan_version` they replace; stale declarations are refused. Plan revisions,
-approvals, and task transitions run under a coordination lock with
-single-snapshot byte-CAS persistence (plan creation is create-only via
-an exclusive hard-link publish). See [docs/architecture.md](docs/architecture.md).
+`passed` result; reopening is explicit (`--reopen`) and refused while
+dependents rely on the completion. Execution tracking requires an
+**approved** plan — `plan-approve` records an operational marker (never
+cryptographic proof; genuine human review is the operator's
+responsibility) — and any `plan-revise` resets approval to draft.
+Revisions declare the `plan_version` they replace; stale declarations are
+refused, and material changes to non-pending tasks are refused so recorded
+verification evidence can never silently apply to a changed contract.
+Plan revisions, approvals, and task transitions run under a coordination
+lock with single-snapshot byte-CAS persistence (plan creation is
+create-only via an exclusive hard-link publish). See
+[docs/architecture.md](docs/architecture.md).
 
 ## How agents discover current project state
 

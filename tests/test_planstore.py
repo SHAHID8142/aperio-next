@@ -567,13 +567,16 @@ def test_cli_plan_lifecycle_with_json_output(run_cli, project_dir, tmp_path):
     plan_file = _write_json(tmp_path, "plan.json", PLAN_INPUT)
     code, out, err = run_cli("plan-create", str(project_dir), "--file", plan_file)
     assert code == 0, err
+    # Draft plan: dependency-ready tasks are NOT executable yet.
     code, out, err = run_cli("task-list", str(project_dir))
     assert code == 0
-    assert "[ready]" in out and "TASK-001" in out
+    assert "[dep-ready]" in out and "TASK-001" in out
+    assert "NOT executable" in out
     code, out, err = run_cli("task-list", str(project_dir), "--json")
     assert code == 0
     listing = json.loads(out)
     assert listing[0]["is_ready"] is True
+    assert listing[0]["is_executable"] is False
     assert listing[1]["is_ready"] is False
     code, out, err = run_cli("plan-show", str(project_dir), "--json")
     assert code == 0
@@ -582,6 +585,10 @@ def test_cli_plan_lifecycle_with_json_output(run_cli, project_dir, tmp_path):
     assert document["approval"]["status"] == "draft"
     code, out, err = run_cli("plan-approve", str(project_dir), "--by", "human")
     assert code == 0, err
+    # Approved: the dependency-ready task is now executable.
+    code, out, err = run_cli("task-list", str(project_dir))
+    assert code == 0
+    assert "[ready]" in out and "dep-ready" not in out
     code, out, err = run_cli("task-status", str(project_dir), "TASK-001",
                              "--status", "in-progress", "--owner", "agent-a")
     assert code == 0, err
@@ -697,3 +704,228 @@ def test_plan_summary_absent_and_corrupt(run_cli, project_dir):
     with pytest.raises(StateError, match="corrupt"):
         plan_summary(project_dir / ".aperio")
     assert plan_exists(project_dir / ".aperio") is True
+
+
+# --- Fix 1: stale completion evidence after plan revision -----------------------
+
+
+def _revised_content(base, task_id, **content_changes):
+    revised = json.loads(json.dumps(base))
+    for task in revised["tasks"]:
+        if task["id"] == task_id:
+            task.update(content_changes)
+    return revised
+
+
+def test_revise_refuses_material_change_to_completed_task(run_cli, project_dir):
+    """Changing a completed task's acceptance criteria (or any material
+    content) must not silently preserve its 'passed' verification: the
+    revision is refused with actionable guidance and nothing changes."""
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    _create(aperio_dir)
+    approve_plan(aperio_dir)
+    _start_and_complete(aperio_dir, "TASK-001")
+    plan_file = aperio_dir / "plan.json"
+    before = plan_file.read_bytes()
+
+    revised = _revised_content(
+        PLAN_INPUT, "TASK-001", acceptance_criteria=["NEW stricter criteria"]
+    )
+    with pytest.raises(StateError, match="material|reopen|new task"):
+        revise_plan(aperio_dir, revised, revises=3)
+    assert plan_file.read_bytes() == before
+    task = next(
+        t for t in read_plan(aperio_dir)["tasks"] if t["id"] == "TASK-001"
+    )
+    assert task["verification"]["evidence"] == "e"  # evidence preserved
+    assert task["acceptance_criteria"] == ["reviewed"]
+
+
+def test_revise_refuses_material_change_to_in_progress_task(run_cli, project_dir):
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    _create(aperio_dir)
+    approve_plan(aperio_dir)
+    update_task(aperio_dir, "TASK-001", new_status="in-progress", owner="a")
+    revised = _revised_content(
+        PLAN_INPUT, "TASK-001", objective="Changed objective"
+    )
+    with pytest.raises(StateError, match="material|reopen|new task"):
+        revise_plan(aperio_dir, revised, revises=2)
+    task = next(
+        t for t in read_plan(aperio_dir)["tasks"] if t["id"] == "TASK-001"
+    )
+    assert task["objective"] == "Choose"  # original content preserved
+
+
+def test_revise_refuses_material_dependency_change_to_completed_task(
+    run_cli, project_dir
+):
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    _create(aperio_dir)
+    approve_plan(aperio_dir)
+    _start_and_complete(aperio_dir, "TASK-001")
+    _start_and_complete(aperio_dir, "TASK-002")
+    revised = _revised_content(
+        PLAN_INPUT, "TASK-002", depends_on=[]  # dependency removed
+    )
+    # TASK-002 is completed; removing its dependency is a material change.
+    with pytest.raises(StateError, match="material|reopen|new task"):
+        revise_plan(aperio_dir, revised, revises=5)
+
+
+def test_revise_allows_title_only_edit_on_completed_task(run_cli, project_dir):
+    """Non-semantic changes (title-only) may preserve lifecycle state."""
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    _create(aperio_dir)
+    approve_plan(aperio_dir)
+    _start_and_complete(aperio_dir, "TASK-001")
+    revised = _revised_content(
+        PLAN_INPUT, "TASK-001", title="Design grammar (renamed)"
+    )
+    document = revise_plan(aperio_dir, revised, revises=3)
+    task = next(t for t in document["tasks"] if t["id"] == "TASK-001")
+    assert task["title"] == "Design grammar (renamed)"
+    assert task["status"] == "completed"
+    assert task["verification"]["result"] == "passed"  # evidence preserved
+
+
+def test_revise_allows_material_change_to_pending_task(run_cli, project_dir):
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    _create(aperio_dir)
+    revised = _revised_content(
+        PLAN_INPUT, "TASK-002", acceptance_criteria=["new criteria"]
+    )
+    document = revise_plan(aperio_dir, revised, revises=1)
+    task = next(t for t in document["tasks"] if t["id"] == "TASK-002")
+    assert task["acceptance_criteria"] == ["new criteria"]
+    assert task["status"] == "pending"
+
+
+def test_revise_refuses_leaving_completed_task_with_unmet_dependency(
+    run_cli, project_dir
+):
+    """Replacing a completed task's dependency with a brand-new pending
+    task would leave the completed task contradictory — refused."""
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    _create(aperio_dir)
+    approve_plan(aperio_dir)
+    _start_and_complete(aperio_dir, "TASK-001")
+    _start_and_complete(aperio_dir, "TASK-002")
+    # Remove TASK-001 (pending-ed first is impossible: it is completed) —
+    # so instead re-point TASK-002 at a brand-new task: TASK-001 stays
+    # completed but the plan now requires TASK-003 before it.
+    revised = json.loads(json.dumps(PLAN_INPUT))
+    revised["tasks"].append(
+        {
+            "id": "TASK-003", "title": "New gate", "objective": "o",
+            "deliverables": ["d"], "acceptance_criteria": ["a"],
+            "depends_on": [],
+        }
+    )
+    for task in revised["tasks"]:
+        if task["id"] == "TASK-001":
+            task["depends_on"] = ["TASK-003"]  # material change → refused
+    with pytest.raises(StateError, match="material|reopen|new task"):
+        revise_plan(aperio_dir, revised, revises=5)
+
+
+def test_revise_refuses_unmet_dependency_for_in_progress_task(
+    run_cli, project_dir
+):
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    _create(aperio_dir)
+    approve_plan(aperio_dir)
+    update_task(aperio_dir, "TASK-001", new_status="in-progress", owner="a")
+    update_task(
+        aperio_dir, "TASK-001", new_status="completed",
+        evidence="e", limitations="l", result="passed",
+    )
+    update_task(aperio_dir, "TASK-002", new_status="in-progress", owner="b")
+    revised = _revised_content(
+        PLAN_INPUT, "TASK-002", depends_on=[]  # drop the dependency
+    )
+    # TASK-002 legally in-progress (TASK-001 completed); dropping its
+    # dependency is a material change to an in-progress task.
+    with pytest.raises(StateError, match="material|reopen|new task"):
+        revise_plan(aperio_dir, revised, revises=4)
+
+
+# --- Fix 3: dependency readiness vs execution authorization ---------------------
+
+
+def test_draft_plan_tasks_are_dep_ready_but_not_executable(
+    run_cli, project_dir
+):
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    _create(aperio_dir)  # draft
+    summary = plan_summary(aperio_dir)
+    assert summary["ready_task_ids"] == ["TASK-001"]  # dependency-ready
+    assert summary["executable_task_ids"] == []  # draft: not authorized
+    assert summary["approval_required"] is True
+    code, out, err = run_cli("task-list", str(project_dir), "--json")
+    assert code == 0
+    listing = json.loads(out)
+    assert listing[0]["is_ready"] is True
+    assert listing[0]["is_executable"] is False
+    code, out, err = run_cli("task-list", str(project_dir))
+    assert code == 0
+    assert "[dep-ready]" in out
+    assert "NOT executable" in out
+
+
+def test_approved_plan_tasks_are_executable(run_cli, project_dir):
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    _create(aperio_dir)
+    approve_plan(aperio_dir)
+    summary = plan_summary(aperio_dir)
+    assert summary["approval_required"] is False
+    assert summary["executable_task_ids"] == ["TASK-001"]
+    code, out, err = run_cli("task-list", str(project_dir))
+    assert code == 0
+    assert "[ready]" in out
+    assert "dep-ready" not in out
+
+
+def test_revised_draft_tasks_lose_executability(run_cli, project_dir):
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    _create(aperio_dir)
+    approve_plan(aperio_dir)
+    revise_plan(aperio_dir, PLAN_INPUT, revises=1)  # approval reset to draft
+    summary = plan_summary(aperio_dir)
+    assert summary["ready_task_ids"] == ["TASK-001"]  # still dependency-ready
+    assert summary["executable_task_ids"] == []  # draft again: not authorized
+    code, out, err = run_cli("task-list", str(project_dir))
+    assert code == 0
+    assert "[dep-ready]" in out
+
+
+def test_blocked_and_completed_dependency_cases(run_cli, project_dir):
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    _create(aperio_dir)
+    approve_plan(aperio_dir)
+    update_task(aperio_dir, "TASK-001", new_status="in-progress", owner="a")
+    update_task(aperio_dir, "TASK-001", new_status="blocked", reason="waiting")
+    summary = plan_summary(aperio_dir)
+    assert summary["ready_task_ids"] == []  # blocked dep de-readies
+    assert summary["executable_task_ids"] == []
+    update_task(aperio_dir, "TASK-001", new_status="pending")  # unblock
+    summary = plan_summary(aperio_dir)
+    assert summary["executable_task_ids"] == ["TASK-001"]  # dep-ready again
+    update_task(aperio_dir, "TASK-001", new_status="in-progress", owner="a")
+    update_task(
+        aperio_dir, "TASK-001", new_status="completed",
+        evidence="e", limitations="l", result="passed",
+    )
+    summary = plan_summary(aperio_dir)
+    assert summary["executable_task_ids"] == ["TASK-002"]  # completed dep

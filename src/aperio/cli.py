@@ -489,13 +489,32 @@ def _cmd_task_list(args) -> None:
         print("No plan in this project; create one with 'aperio plan-create'.")
         return
     plan = read_plan(aperio_dir)
-    ready = set(ready_task_ids(plan))
+    approved = plan["approval"]["status"] == "approved"
+    ready = set(ready_task_ids(plan))  # dependency-ready
+    executable = ready if approved else set()
     if args.as_json:
-        listing = [dict(task, is_ready=task["id"] in ready) for task in plan["tasks"]]
+        listing = [
+            dict(
+                task,
+                is_ready=task["id"] in ready,
+                is_executable=task["id"] in executable,
+            )
+            for task in plan["tasks"]
+        ]
         print(json.dumps(listing, indent=2, ensure_ascii=False))
         return
+    if not approved:
+        print(
+            "Plan approval: DRAFT - dependency-ready tasks are NOT "
+            "executable until the plan is approved (aperio plan-approve)."
+        )
     for task in sorted(plan["tasks"], key=lambda t: t["id"]):
-        marker = "ready" if task["id"] in ready else f"{task['status']:>11}"
+        if task["id"] in executable:
+            marker = "ready"
+        elif task["id"] in ready:
+            marker = "dep-ready"
+        else:
+            marker = f"{task['status']:>11}"
         owner = f" (owner: {task['owner']})" if task["owner"] else ""
         print(f"  [{marker}] {task['id']}: {task['title']}{owner}")
 
