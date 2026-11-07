@@ -106,6 +106,83 @@ def test_state_roundtrip(tmp_path):
     assert loaded == state
 
 
+def _demo_state() -> ProjectState:
+    return ProjectState(
+        name="demo",
+        created_at="2026-01-01T00:00:00Z",
+        updated_at="2026-01-01T00:00:00Z",
+        phase="initialized",
+        aperio_version="0.1.0",
+    )
+
+
+def test_write_state_never_overwrites_preexisting_tmp(tmp_path):
+    """Exclusive temp creation: anything already at state.json.tmp wins."""
+    from aperio.schema import state_tmp_path
+
+    aperio_dir = tmp_path / ".aperio"
+    aperio_dir.mkdir()
+    tmp = state_tmp_path(aperio_dir)
+    tmp.write_text("PRECIOUS")
+    with pytest.raises(StateError, match="state.json.tmp"):
+        write_state(aperio_dir, _demo_state())
+    assert tmp.read_text() == "PRECIOUS"
+    assert not (aperio_dir / "state.json").exists()
+
+
+def test_write_state_refuses_symlinked_target(tmp_path):
+    aperio_dir = tmp_path / ".aperio"
+    aperio_dir.mkdir()
+    outside = tmp_path / "outside.json"
+    outside.write_text('{"external": true}')
+    link = aperio_dir / "state.json"
+    link.symlink_to(outside)
+    with pytest.raises(StateError, match="refusing to follow symlink"):
+        write_state(aperio_dir, _demo_state())
+    assert link.is_symlink()
+    assert outside.read_text() == '{"external": true}'
+
+
+def test_write_state_refuses_existing_state(tmp_path):
+    aperio_dir = tmp_path / ".aperio"
+    aperio_dir.mkdir()
+    write_state(aperio_dir, _demo_state())
+    state_file = aperio_dir / "state.json"
+    before = state_file.read_bytes()
+    replacement = ProjectState(
+        name="hijacked",
+        created_at="2026-02-02T00:00:00Z",
+        updated_at="2026-02-02T00:00:00Z",
+        phase="initialized",
+        aperio_version="9.9.9",
+    )
+    with pytest.raises(StateError, match="refusing to overwrite existing"):
+        write_state(aperio_dir, replacement)
+    assert state_file.read_bytes() == before
+
+
+def test_write_state_never_destroys_state_planted_midwrite(
+    monkeypatch, tmp_path
+):
+    """TOCTOU at publish time: a state file appearing between the
+    pre-check and the publish must survive. The hard-link publish is
+    create-if-not-exists, so the link fails and nothing is replaced."""
+    import pathlib
+
+    from aperio.schema import state_tmp_path
+
+    aperio_dir = tmp_path / ".aperio"
+    aperio_dir.mkdir()
+    state_file = aperio_dir / "state.json"
+    state_file.write_text('{"planted": true}')
+    monkeypatch.setattr(pathlib.Path, "exists", lambda self: False)
+    with pytest.raises(StateError, match="refusing to overwrite existing"):
+        write_state(aperio_dir, _demo_state())
+    assert state_file.read_text() == '{"planted": true}'
+    # Our own temp artifact was cleaned up; nothing litters the project.
+    assert not state_tmp_path(aperio_dir).exists()
+
+
 def test_read_state_missing(tmp_path):
     with pytest.raises(NotInitializedError):
         read_state(tmp_path)

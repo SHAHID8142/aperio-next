@@ -75,6 +75,8 @@ def test_local_dir_is_gitignored(run_cli, project_dir):
     run_cli("init", str(project_dir))
     gitignore = (project_dir / ".aperio/.gitignore").read_text()
     assert re.search(r"(?m)^local/?$", gitignore)
+    # Transient atomic-write artifacts never enter version control either.
+    assert re.search(r"(?m)^state\.json\.tmp$", gitignore)
 
 
 def test_sensitive_data_belongs_only_in_local_dir(run_cli, project_dir):

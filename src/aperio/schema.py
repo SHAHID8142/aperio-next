@@ -77,41 +77,103 @@ def state_path(aperio_dir: Path) -> Path:
 def state_tmp_path(aperio_dir: Path) -> Path:
     """Path of the reserved atomic-write temporary file.
 
-    ``state.json.tmp`` is reserved by Aperio: init verifies it is free (or
-    removes Aperio's own stale regular-file leftover) before any operation.
+    ``state.json.tmp`` is reserved by Aperio: init requires it to be
+    unobstructed before any operation. Nothing is ever deleted from this
+    name automatically — ownership of a plain file cannot be verified, so
+    any occupant (including a leftover from a crashed write) is a conflict
+    the user resolves explicitly. The name is git-ignored in new projects.
     """
     return aperio_dir / (STATE_FILE_NAME + ".tmp")
 
 
 def write_state(aperio_dir: Path, state: ProjectState) -> None:
-    """Write state atomically (write to a temp file, then replace).
+    """Write state atomically (exclusive temp file, then hard-link publish).
 
-    ``state.json.tmp`` is a reserved Aperio temporary name. ``Path.replace``
-    renames *over* a symlink at the target instead of following it, so the
-    final state file cannot be redirected; the temp path itself is checked
-    to keep even that intermediate write inside the project.
+    Safety properties:
 
-    Any I/O failure (permissions, a conflicting path at the temp or target
-    name) raises StateError with an actionable message; conflicting content
-    is never silently destroyed.
+    - ``state.json.tmp`` is a reserved Aperio temporary name. The temp file
+      is created exclusively (``O_CREAT | O_EXCL``), so a pre-existing file,
+      directory, or symlink at that name is never overwritten.
+    - The state target itself is protected: an existing regular file is
+      never overwritten through this function (state updates must load and
+      validate first), and a symlinked target is refused outright.
+    - The final publish is ``os.link(tmp, target)``: an atomic
+      create-if-not-exists. Even a state file planted between the
+      pre-check and the publish is never destroyed — the link fails with
+      ``EEXIST`` and the write aborts. Requires a filesystem that supports
+      hard links (POSIX filesystems, NTFS); where that is unavailable the
+      write fails with a clean, actionable StateError rather than
+      degrading into an overwrite.
+    - On any failure, only the temp file created by this very call is
+      removed; anything found on disk is left untouched for the user.
+    - All expected I/O failures surface as StateError with an actionable
+      message.
     """
     target = state_path(aperio_dir)
     tmp = state_tmp_path(aperio_dir)
+    if os.path.islink(target):
+        raise StateError(
+            f"refusing to follow symlink at {target}; "
+            "remove it and re-run 'aperio init' to repair"
+        )
     if os.path.islink(tmp):
         raise StateError(
             f"refusing to follow symlink at {tmp}; "
             "remove it and re-run 'aperio init' to repair"
         )
+    if target.exists():
+        raise StateError(
+            f"refusing to overwrite existing state file {target}; "
+            "load and update state through the schema API instead"
+        )
     payload = json.dumps(asdict(state), indent=2) + "\n"
+    created_tmp = False
     try:
-        tmp.write_text(payload, encoding="utf-8")
-        tmp.replace(target)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+        created_tmp = True
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(payload)
     except OSError as exc:
+        _discard_created_tmp(tmp, created_tmp)
         raise StateError(
             f"cannot write project state at {target}: {exc.strerror or exc}; "
             f"check for a conflicting path at {target} or {tmp}, remove it "
             "manually if it is not Aperio content, and re-run 'aperio init'"
         ) from None
+
+    try:
+        os.link(tmp, target)
+    except FileExistsError as exc:
+        _discard_created_tmp(tmp, created_tmp)
+        raise StateError(
+            f"refusing to overwrite existing state file {target}: a state "
+            "file appeared while the write was in progress; inspect it and "
+            "re-run 'aperio init' if appropriate"
+        ) from None
+    except OSError as exc:
+        _discard_created_tmp(tmp, created_tmp)
+        raise StateError(
+            f"cannot publish project state at {target}: {exc.strerror or exc}; "
+            "the filesystem may not support hard links; no existing content "
+            "was modified"
+        ) from None
+
+    # target now shares the temp file's inode; drop our temp name.
+    # Best effort: if this fails, the leftover is reported as a conflict by
+    # the next init rather than being destroyed here.
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+
+
+def _discard_created_tmp(tmp: Path, created_tmp: bool) -> None:
+    """Remove a temp file this same call created; never touch anything else."""
+    if created_tmp:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass  # a leftover is reported as a conflict by the next init
 
 
 def read_state(aperio_dir: Path) -> ProjectState:

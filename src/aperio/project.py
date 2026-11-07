@@ -61,7 +61,6 @@ class InitResult:
     already_initialized: bool
     created: list[str] = field(default_factory=list)
     present: list[str] = field(default_factory=list)
-    removed: list[str] = field(default_factory=list)
     state: ProjectState | None = None
 
 
@@ -121,6 +120,9 @@ APERIO_GITIGNORE_TEMPLATE = """\
 # Machine-local and sensitive data must never leave this project's disk
 # (and never enter any VCS or shared context).
 local/
+
+# Transient atomic-write artifacts (reserved by aperio; never committed).
+state.json.tmp
 """
 
 LOCAL_README_TEMPLATE = """\
@@ -168,6 +170,20 @@ def _ensure_dir(path: Path) -> bool:
         return False
     try:
         path.mkdir(parents=True)
+    except FileExistsError:
+        # Raced with another creator. Never destroy or follow whatever
+        # appeared.
+        if os.path.islink(path):
+            raise PathError(
+                f"refusing to follow symlink at {path} -> "
+                f"{os.path.realpath(path)}; "
+                "remove it and re-run 'aperio init' to repair"
+            ) from None
+        if path.is_dir():
+            return False
+        raise PathError(
+            f"cannot create directory {path}: a non-directory appeared there"
+        ) from None
     except OSError as exc:
         raise PathError(
             f"cannot create directory {path}: {exc.strerror or exc}"
@@ -178,9 +194,11 @@ def _ensure_dir(path: Path) -> bool:
 def _ensure_file(path: Path, content: str) -> bool:
     """Create ``path`` with ``content`` only if missing; return True if created.
 
-    Only a regular file counts as legitimately present. Any other occupant
-    (directory, FIFO, socket, ...) is an explicit error, never a silent
-    "present" report.
+    Creation is exclusive (``O_CREAT | O_EXCL``): an unexpected file that
+    appears between the existence check and the write can never be
+    truncated or overwritten. Only a regular file counts as legitimately
+    present; any other occupant (directory, FIFO, socket, ...) is an
+    explicit error, never a silent "present" report.
     """
     _reject_symlink(path)
     if path.exists():
@@ -192,40 +210,43 @@ def _ensure_file(path: Path, content: str) -> bool:
             "remove it and re-run 'aperio init' to repair"
         )
     try:
-        path.write_text(content, encoding="utf-8")
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+    except FileExistsError:
+        # Raced with another creator; never destroy or follow whatever
+        # appeared.
+        if os.path.islink(path):
+            raise PathError(
+                f"refusing to follow symlink at {path} -> "
+                f"{os.path.realpath(path)}; "
+                "remove it and re-run 'aperio init' to repair"
+            ) from None
+        # Treat an appearing regular file as present (its content is not
+        # ours to replace), anything else as an explicit conflict.
+        if path.is_file():
+            return False
+        kind = "a directory" if path.is_dir() else "a special file"
+        raise PathError(
+            f"cannot write {path}: {kind} appeared there; "
+            "remove it and re-run 'aperio init' to repair"
+        ) from None
+    except OSError as exc:
+        raise PathError(f"cannot write {path}: {exc.strerror or exc}") from None
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(content)
     except OSError as exc:
         raise PathError(f"cannot write {path}: {exc.strerror or exc}") from None
     return True
 
 
-def _remove_stale_state_tmp(aperio_dir: Path) -> bool:
-    """Delete a leftover ``state.json.tmp`` from a crashed write, if any.
-
-    ``state.json.tmp`` is a reserved Aperio temporary name (see schema.py).
-    Only a stale *regular file* left by a crashed Aperio write is removed
-    (and the removal is reported, never silent). Any other conflicting path
-    is left untouched and rejected by :func:`_check_state_tmp_free`.
-    """
-    stale = state_tmp_path(aperio_dir)
-    if stale.exists() and not os.path.islink(stale) and stale.is_file():
-        try:
-            stale.unlink()
-        except OSError as exc:
-            raise PathError(
-                f"cannot remove stale temporary file {stale}: "
-                f"{exc.strerror or exc}; remove it manually and re-run "
-                "'aperio init'"
-            ) from None
-        return True
-    return False
-
-
 def _check_state_tmp_free(aperio_dir: Path) -> None:
     """Require the reserved temporary name to be unobstructed.
 
-    A directory or symlink (live or dangling) at ``state.json.tmp`` would
-    break or redirect the next state write, so init fails with an
-    actionable error instead of proceeding or destroying the path.
+    ``state.json.tmp`` is a reserved Aperio name (see schema.py). Nothing
+    is ever deleted from it automatically: ownership of a plain file cannot
+    be verified, so ANY occupant — a leftover from a crashed write, a
+    directory, or a symlink live or dangling — is a conflict that aborts
+    init with an actionable error and is resolved by explicit user action.
     """
     tmp = state_tmp_path(aperio_dir)
     if os.path.islink(tmp):
@@ -235,9 +256,9 @@ def _check_state_tmp_free(aperio_dir: Path) -> None:
         )
     if tmp.exists():
         raise PathError(
-            f"conflicting path at reserved temporary file {tmp}: "
-            "something other than Aperio state occupies it; remove it and "
-            "re-run 'aperio init' to repair"
+            f"conflicting path at reserved temporary file {tmp}: it may be a "
+            "leftover from a crashed write or unrelated content; removing it "
+            "is your decision. Re-run 'aperio init' after resolving it."
         )
 
 
@@ -257,6 +278,14 @@ def init_project(raw_path: str) -> InitResult:
         raise PathError(
             f"cannot create project directory {target}: {exc.strerror or exc}"
         ) from None
+    if os.path.islink(target):
+        # Race guard: a symlink planted between resolve_target and mkdir
+        # must not become a write root (exist_ok=True would accept a
+        # symlink pointing at a directory).
+        raise PathError(
+            f"refusing to follow symlink at target path ({target} -> "
+            f"{os.path.realpath(target)})"
+        )
 
     aperio_dir = aperio_dir_for(target)
     result = InitResult(target=target, already_initialized=False)
@@ -278,8 +307,6 @@ def init_project(raw_path: str) -> InitResult:
     else:
         result.present.append(f"{APERIO_DIR_NAME}/")
 
-    if _remove_stale_state_tmp(aperio_dir):
-        result.removed.append(f"{APERIO_DIR_NAME}/{_STATE}.tmp")
     _check_state_tmp_free(aperio_dir)
 
     if _ensure_dir(aperio_dir / LOCAL_DIR_NAME):

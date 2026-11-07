@@ -30,7 +30,12 @@
   directories inside `.aperio/` (including `state.json` itself) and the
   reserved `state.json.tmp` name, not only the top-level project path.
   Conflicting paths are never destroyed silently: they abort with
-  actionable errors, and the user decides what to remove.
+  actionable errors, and the user decides what to remove. Nothing
+  pre-existing is ever auto-deleted from `state.json.tmp` (aperio removes
+  only a temp file it created within the same write, on failure), file
+  creation is exclusive (`O_CREAT | O_EXCL`) so races cannot clobber
+  content, state is published via atomic create-if-not-exists, and
+  existing state is never overwritten by a plain write.
 - No secrets, tokens, or environment contents are ever persisted into
   `.aperio/` except `.aperio/local/`; templates must remain free of
   credential-shaped placeholders (see `tests/test_no_secrets.py`).

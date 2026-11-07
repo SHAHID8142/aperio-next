@@ -273,25 +273,12 @@ def test_init_rejects_special_file_at_context_file(run_cli, project_dir):
     assert "present  .aperio/brief.md" not in out
 
 
-@pytest.mark.skipif(
-    not hasattr(os, "geteuid") or os.geteuid() == 0,
-    reason="chmod permissions do not restrict the root user",
-)
-def test_init_reports_unremovable_stale_tmp(run_cli, project_dir):
-    """If the stale temp file cannot be removed, init fails with an
-    actionable error instead of crashing."""
-    run_cli("init", str(project_dir))
-    stale = project_dir / ".aperio/state.json.tmp"
-    stale.write_text("garbage from a crashed write")
-    aperio_dir = project_dir / ".aperio"
-    aperio_dir.chmod(0o555)
-    try:
-        code, _, err = run_cli("init", str(project_dir))
-        assert code == 1
-        assert "cannot remove stale temporary file" in err
-        assert stale.is_file()
-    finally:
-        aperio_dir.chmod(0o755)
+# NOTE: the earlier "unremovable stale tmp" test was removed together with
+# the auto-deletion behavior it exercised: state.json.tmp is never deleted
+# by aperio anymore, so there is no unlink path to fail. Its adversarial
+# intent (conflict at the reserved name -> actionable error, nothing
+# destroyed) is covered by test_init_treats_stale_state_tmp_as_conflict and
+# the write_state tests in test_status.py.
 
 
 @pytest.mark.skipif(
@@ -371,15 +358,131 @@ def test_init_rejects_symlinked_state_tmp(run_cli, project_dir, tmp_path):
     assert not outside_tmp.exists()
 
 
-def test_init_removes_stale_state_tmp(run_cli, project_dir):
+def test_init_treats_stale_state_tmp_as_conflict(run_cli, project_dir):
+    """A regular file at the reserved temp name is never auto-deleted:
+    ownership of a plain file cannot be verified, so it is a conflict the
+    user resolves explicitly."""
     run_cli("init", str(project_dir))
     stale = project_dir / ".aperio/state.json.tmp"
-    stale.write_text("garbage from a crashed write")
+    stale.write_text("leftover from a crashed write")
     code, out, err = run_cli("init", str(project_dir))
-    assert code == 0, err
-    assert "removed  .aperio/state.json.tmp" in out
-    assert not stale.exists()
+    assert code == 1
+    assert "state.json.tmp" in err
+    assert "conflict" in err
+    assert stale.read_text() == "leftover from a crashed write"
     assert (project_dir / ".aperio/state.json").is_file()
+    assert "removed" not in out
+
+
+def test_init_does_not_overwrite_preexisting_state_tmp(run_cli, project_dir):
+    """Even when state itself is missing, a pre-existing temp file blocks
+    the write instead of being clobbered."""
+    run_cli("init", str(project_dir))
+    (project_dir / ".aperio/state.json").unlink()
+    tmp = project_dir / ".aperio/state.json.tmp"
+    tmp.write_text("PRECIOUS USER DATA")
+    code, _, err = run_cli("init", str(project_dir))
+    assert code == 1
+    assert tmp.read_text() == "PRECIOUS USER DATA"
+    assert not (project_dir / ".aperio/state.json").exists()
+
+
+def test_ensure_file_race_is_non_destructive(monkeypatch, tmp_path):
+    """A file appearing between the existence check and the write must not
+    be truncated: exclusive creation (O_CREAT | O_EXCL) refuses it."""
+    import pathlib
+
+    from aperio.project import _ensure_file
+
+    target = tmp_path / "brief.md"
+    target.write_text("APPEARED FIRST")
+    monkeypatch.setattr(pathlib.Path, "exists", lambda self: False)
+    result = _ensure_file(target, "OVERWRITE ATTEMPT")
+    assert result is False
+    assert target.read_text() == "APPEARED FIRST"
+
+
+def test_ensure_file_race_with_directory_is_conflict(monkeypatch, tmp_path):
+    """A directory appearing in the race window is an explicit error, not a
+    silent skip or a crash. (Lock-in test for the exclusive-creation
+    branch: pre-fix code produced a different 'Is a directory' error.)"""
+    import pathlib
+
+    import pytest as _pytest
+
+    from aperio.errors import PathError
+    from aperio.project import _ensure_file
+
+    target = tmp_path / "brief.md"
+    target.mkdir()
+    monkeypatch.setattr(pathlib.Path, "exists", lambda self: False)
+    with _pytest.raises(PathError, match="appeared there"):
+        _ensure_file(target, "CONTENT")
+    assert target.is_dir()
+
+
+def test_ensure_file_race_symlink_is_refused(monkeypatch, tmp_path):
+    """A symlink appearing in the race window is refused by name, never
+    followed."""
+    import pathlib
+
+    import pytest as _pytest
+
+    from aperio.errors import PathError
+    from aperio.project import _ensure_file
+
+    destination = tmp_path / "nowhere.txt"
+    target = tmp_path / "brief.md"
+    target.symlink_to(destination)  # dangling
+    monkeypatch.setattr(pathlib.Path, "exists", lambda self: False)
+    with _pytest.raises(PathError, match="refusing to follow symlink"):
+        _ensure_file(target, "CONTENT")
+    assert target.is_symlink()
+    assert not destination.exists()
+
+
+def test_ensure_dir_race_symlink_is_refused(monkeypatch, tmp_path):
+    """A symlinked directory appearing in the race window must never become
+    a write root."""
+    import pathlib
+
+    import pytest as _pytest
+
+    from aperio.errors import PathError
+    from aperio.project import _ensure_dir
+
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    target = tmp_path / "local"
+    target.symlink_to(outside, target_is_directory=True)
+    monkeypatch.setattr(pathlib.Path, "exists", lambda self: False)
+    with _pytest.raises(PathError, match="refusing to follow symlink"):
+        _ensure_dir(target)
+    assert list(outside.iterdir()) == []
+
+
+def test_init_rejects_target_symlink_planted_after_resolution(
+    monkeypatch, run_cli, tmp_path
+):
+    """TOCTOU guard: a symlink swapped in after path resolution must never
+    become a write root (exist_ok=True would accept a symlink to a
+    directory)."""
+    from aperio import project as project_module
+
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real, target_is_directory=True)
+
+    def fake_resolve(raw, *, for_writing):
+        # Simulate the symlink appearing after the real safety check ran.
+        return link
+
+    monkeypatch.setattr(project_module, "resolve_target", fake_resolve)
+    code, _, err = run_cli("init", str(link))
+    assert code == 1
+    assert "refusing to follow symlink" in err
+    assert not (real / ".aperio").exists()
 
 
 def test_init_reports_resolved_real_path(run_cli, tmp_path):

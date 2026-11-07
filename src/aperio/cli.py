@@ -76,8 +76,6 @@ def _print_init(result: InitResult) -> None:
         print(f"  created  {rel}")
     for rel in result.present:
         print(f"  present  {rel}")
-    for rel in result.removed:
-        print(f"  removed  {rel} (stale temporary file)")
     if result.already_initialized and not result.created:
         print("  nothing to do: all context files present, nothing overwritten")
 
