@@ -69,7 +69,6 @@ from pathlib import Path
 from aperio.errors import NotInitializedError, PathError, StateError, ValidationError
 from aperio.inputs import check_no_foreign_line_separators
 from aperio.locks import (
-    LOCK_STALE_SECONDS as LOCK_STALE_DEFAULT,
     LOCK_TIMEOUT_SECONDS as LOCK_TIMEOUT_DEFAULT,
     acquire_lock,
     release_lock,
@@ -188,16 +187,23 @@ def read_handoff(aperio_dir: Path) -> HandoffRead:
     for newer formats.
 
     Boundary check first: the project must be initialized with a supported
-    schema and ``.aperio/`` must not be a symlink.
+    schema; ``.aperio/`` and ``handoff.md`` must not be symlinks (portable
+    memory reads never follow links at shareable paths).
 
     :raises NotInitializedError: when the project or the file does not exist.
     :raises StateError: when state is unsupported, the file is unreadable,
         not valid UTF-8, or a v1 file with damaged sections
         (missing/duplicated).
-    :raises PathError: when ``.aperio/`` is a symlink.
+    :raises PathError: when ``.aperio/`` or ``handoff.md`` is a symlink.
     """
     require_supported_state(aperio_dir)
     path = handoff_path(aperio_dir)
+    if os.path.islink(path):
+        raise PathError(
+            f"refusing to follow symlink at {path} while reading portable "
+            "memory (it could point at local or private data); remove it "
+            "and re-run 'aperio init' to repair"
+        )
     try:
         raw_bytes = path.read_bytes()
     except FileNotFoundError:
@@ -295,16 +301,17 @@ def write_handoff(
     expected_revision: int | None = None,
     force: bool = False,
     lock_timeout: float = LOCK_TIMEOUT_DEFAULT,
-    lock_stale_after: float = LOCK_STALE_DEFAULT,
 ) -> int:
     """Replace ``handoff.md`` with a validated structured handoff.
 
     Protection against lost updates (the safe default):
 
     - The read of the current handoff, the revision check, and the write
-      all happen under the advisory ``handoff.lock`` (bounded wait, stale
-      locks broken — see :mod:`aperio.locks`), so concurrent aperio
-      writers serialize.
+      all happen under the advisory ``handoff.lock`` (bounded wait; a
+      lock is never stolen — an occupied lock past the timeout produces a
+      clear conflict, and an abandoned lock is resolved by explicit user
+      action; see :mod:`aperio.locks`), so concurrent aperio writers
+      serialize.
     - When the current handoff is structured at revision >= 1, the caller
       must declare the revision it is replacing via ``expected_revision``;
       a stale declaration aborts with a clear conflict and nothing is
@@ -353,7 +360,6 @@ def write_handoff(
     token = acquire_lock(
         lock_path,
         timeout=lock_timeout,
-        stale_after=lock_stale_after,
         artifact="handoff",
     )
     try:
@@ -379,11 +385,27 @@ def write_handoff(
                 "remove it and re-run 'aperio init' to repair"
             )
 
-        # Read the current handoff under the lock to learn its revision
-        # and format. Missing-file damage (deleted between the boundary
-        # check and here) surfaces as NotInitializedError, which also
-        # aborts the write.
-        current = read_handoff(aperio_dir)
+        # Single-snapshot read under the lock: the revision used for the
+        # conflict checks AND the original bytes used for conflict
+        # detection come from this one read — never from two reads that
+        # could straddle an external modification.
+        try:
+            expected_raw = path.read_bytes()
+        except FileNotFoundError:
+            raise NotInitializedError(
+                f"not an Aperio project: no {path} (run 'aperio init "
+                "<project-directory>' to repair missing context files)"
+            ) from None
+        except OSError as exc:
+            raise StateError(f"cannot read {path}: {exc.strerror or exc}") from None
+        try:
+            snapshot_text = expected_raw.decode("utf-8")
+        except UnicodeDecodeError:
+            raise StateError(
+                f"{path} is corrupt: not valid UTF-8; aperio will not modify "
+                "it. Inspect or restore the file manually."
+            ) from None
+        current = parse_handoff_text(snapshot_text)
         current_rev = current.revision
 
         if current.structured is None and not force:
@@ -417,7 +439,6 @@ def write_handoff(
                 )
 
         new_revision = current_rev + 1
-        expected_raw = path.read_bytes()
         payload = render_handoff(content, revision=new_revision)
         created_tmp = False
         try:
@@ -464,32 +485,6 @@ def write_handoff(
         return new_revision
     finally:
         release_lock(lock_path, token)
-
-    if expected_raw is not None:
-        try:
-            current = path.read_bytes()
-        except OSError as exc:
-            _discard_created_tmp(tmp, created_tmp)
-            raise StateError(
-                f"cannot read {path} for the compare-and-swap check: "
-                f"{exc.strerror or exc}; no existing content was modified"
-            ) from None
-        if current != expected_raw:
-            _discard_created_tmp(tmp, created_tmp)
-            raise StateError(
-                f"handoff at {path} changed while the new handoff was being "
-                "prepared (concurrent modification); nothing was modified. "
-                "Re-read the handoff and retry."
-            )
-
-    try:
-        os.replace(tmp, path)
-    except OSError as exc:
-        _discard_created_tmp(tmp, created_tmp)
-        raise StateError(
-            f"cannot publish handoff at {path}: {exc.strerror or exc}; "
-            "no existing content was modified"
-        ) from None
 
 
 def _discard_created_tmp(tmp: Path, created_tmp: bool) -> None:

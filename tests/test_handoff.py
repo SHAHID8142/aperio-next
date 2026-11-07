@@ -459,8 +459,10 @@ def test_legacy_handoff_replaceable_without_declaration(run_cli, project_dir):
 
 
 def test_external_modification_detected(run_cli, project_dir, monkeypatch):
-    """A non-cooperating tool writing between the in-lock read and the
-    rename is detected by the final byte check; nothing is replaced."""
+    """A non-cooperating tool writing after the single snapshot read (and
+    before the pre-publish byte check) is detected; nothing is replaced.
+    The revision and the expected bytes come from the SAME snapshot, so
+    there is no double-read gap to exploit."""
     import pathlib
 
     run_cli("init", str(project_dir))
@@ -470,20 +472,20 @@ def test_external_modification_detected(run_cli, project_dir, monkeypatch):
     real_read_bytes = pathlib.Path.read_bytes
     handoff_reads = [0]
 
-    def tamper_on_third_handoff_read(self):
+    def tamper_on_second_handoff_read(self):
         data = real_read_bytes(self)
         if self.name == "handoff.md":
             handoff_reads[0] += 1
-            if handoff_reads[0] == 3:
-                # 1st read: in-lock revision read; 2nd: expected-bytes
-                # capture; 3rd: the pre-publish check — the external tool
-                # lands exactly there.
+            if handoff_reads[0] == 2:
+                # 1st read: the single snapshot (revision + expected bytes
+                # together); 2nd: the pre-publish byte check — the external
+                # tool lands exactly there.
                 with open(self, "w", encoding="utf-8") as fh:
                     fh.write("an external tool landed here")
                 data = real_read_bytes(self)
         return data
 
-    monkeypatch.setattr(pathlib.Path, "read_bytes", tamper_on_third_handoff_read)
+    monkeypatch.setattr(pathlib.Path, "read_bytes", tamper_on_second_handoff_read)
     with pytest.raises(StateError, match="changed during the write"):
         _write(
             aperio_dir,

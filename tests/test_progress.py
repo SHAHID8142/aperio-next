@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
+import subprocess
+import sys
 
 import pytest
 
@@ -68,43 +71,45 @@ def test_repeated_updates(run_cli, project_dir):
 def test_conflicting_concurrent_modification_detected(
     run_cli, project_dir, monkeypatch
 ):
-    """A state file modified after the caller read it aborts the update:
-    no lost updates, nothing modified on conflict."""
+    """A state file modified after the update's under-lock read aborts the
+    update at the compare-and-swap: no lost updates, nothing modified."""
+    import pathlib
+
     run_cli("init", str(project_dir))
     state_file = state_path(project_dir / ".aperio")
 
-    real_read_bytes = state_file.read_bytes
-    interfered = [False]
+    real_read_bytes = pathlib.Path.read_bytes
+    state_reads = [0]
 
-    def read_then_interfere(self):
-        data = real_read_bytes()
-        # Interfere exactly once: when the caller captures its bytes, a
-        # concurrent writer lands a different state on disk. Later reads
-        # (the compare-and-swap check) see the concurrent state.
-        if not interfered[0]:
-            interfered[0] = True
-            state_file.write_text(
-                json.dumps(
-                    {
-                        "schema_version": 1,
-                        "name": "proj",
-                        "created_at": "2026-01-01T00:00:00Z",
-                        "updated_at": "2026-02-02T00:00:00Z",
-                        "phase": "hijacked-by-other-writer",
-                        "aperio_version": "0.1.0",
-                    }
+    def interfere_on_compare_read(self):
+        data = real_read_bytes(self)
+        if self.name == "state.json":
+            state_reads[0] += 1
+            if state_reads[0] == 3:
+                # 1st: boundary read; 2nd: under-lock capture; 3rd: the
+                # CAS compare — a concurrent writer lands exactly there.
+                state_file.write_text(
+                    json.dumps(
+                        {
+                            "schema_version": 1,
+                            "name": "proj",
+                            "created_at": "2026-01-01T00:00:00Z",
+                            "updated_at": "2026-02-02T00:00:00Z",
+                            "phase": "hijacked-by-other-writer",
+                            "aperio_version": "0.1.0",
+                        }
+                    )
                 )
-            )
+                data = real_read_bytes(self)
         return data
 
-    monkeypatch.setattr(
-        type(state_file), "read_bytes", read_then_interfere, raising=False
-    )
+    monkeypatch.setattr(pathlib.Path, "read_bytes", interfere_on_compare_read)
     with pytest.raises(StateError, match="changed while"):
         update_phase(project_dir, "implementation")
     on_disk = json.loads(state_file.read_text())
     assert on_disk["phase"] == "hijacked-by-other-writer"  # untouched by us
     assert not (aprio := project_dir / ".aperio/state.json.tmp").exists()
+    assert not (aprio := project_dir / ".aperio/state.lock").exists()
 
 
 def test_symlinked_state_refused_for_update(run_cli, project_dir, tmp_path):
@@ -153,6 +158,63 @@ def test_cli_phase_set(run_cli, project_dir):
     code, out, err = run_cli("phase-set", str(project_dir), "verification")
     assert code == 0, err
     assert "phase unchanged: verification" in out
+
+
+def _phase_worker(project_dir: str, phase: str) -> int:
+    """Runs in a separate process: one CLI phase-set (real concurrency)."""
+    result = subprocess.run(
+        [sys.executable, "-m", "aperio", "phase-set", project_dir, phase],
+        capture_output=True, text=True, check=False,
+    )
+    return result.returncode
+
+
+def test_concurrent_processes_cannot_silently_overwrite(run_cli, project_dir):
+    """Genuinely concurrent phase updates serialize under state.lock. The
+    no-steal policy fails closed, so on a heavily loaded machine a writer
+    may legitimately exit 1 with the bounded-wait conflict — accepted
+    outcomes are success or that conflict, never a corrupt or silently
+    lost state. (Deep lost-update detection is covered by the CAS tests;
+    this test proves end-to-end serialization never corrupts state.)"""
+    run_cli("init", str(project_dir))
+    state_file = state_path(project_dir / ".aperio")
+    state = json.loads(state_file.read_text())
+    state["keep_me"] = {"nested": [1, {"deep": True}]}
+    state_file.write_text(json.dumps(state))
+
+    workers = 8
+    phases = [f"phase-{i}" for i in range(workers)]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [
+            pool.submit(_phase_worker, str(project_dir), phase)
+            for phase in phases
+        ]
+        codes = [f.result(timeout=120) for f in futures]
+    assert all(code in (0, 1) for code in codes)
+    assert 0 in codes, "at least one writer must succeed"
+    after = json.loads(state_file.read_text())  # state stays valid JSON
+    assert after["phase"] in phases + ["initialized"]
+    assert after["keep_me"] == {"nested": [1, {"deep": True}]}
+    assert after["schema_version"] == 1
+    assert not (aprio := project_dir / ".aperio/state.lock").exists()
+    assert not (aprio := project_dir / ".aperio/state.json.tmp").exists()
+
+
+def test_held_state_lock_blocks_update_with_bounded_conflict(
+    run_cli, project_dir
+):
+    """An occupied state lock (external holder or abandoned) is never
+    stolen: the update fails with a bounded, actionable conflict and
+    nothing is modified."""
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    lock = aperio_dir / "state.lock"
+    lock.write_text("999999:holder")
+    before = state_file_bytes = (aprio := aperio_dir / "state.json").read_bytes()
+    with pytest.raises(StateError, match="could not acquire"):
+        update_phase(project_dir, "implementation", lock_timeout=0.3)
+    assert (aprio := aperio_dir / "state.json").read_bytes() == before
+    assert lock.read_text() == "999999:holder"
 
 
 def test_unknown_state_fields_survive_phase_updates(

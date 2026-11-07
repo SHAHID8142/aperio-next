@@ -66,8 +66,11 @@ aperio handoff-write ./my-project --file handoff.json
 # handoff, including unreadable newer formats) is opt-in:
 aperio handoff-write ./my-project --file handoff.json --force
 
-# Update the project phase (compare-and-swap: concurrent changes are
-# detected, nothing is silently overwritten)
+# Update the project phase (serialized under a coordination lock, with a
+# compare-and-swap: competing aperio updates cannot silently overwrite
+# each other; non-cooperating tools are detected before publishing, though
+# the filesystem cannot rule out a write in the final rename instant —
+# see docs/architecture.md for the exact guarantees)
 aperio phase-set ./my-project implementation
 ```
 

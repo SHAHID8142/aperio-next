@@ -127,7 +127,9 @@ within Feature 02; new keys may be added): `reader_version`, `state`,
 `.aperio/local/` content, environment values, or the local filesystem
 path. A shareable file that is a live symlink is refused rather than read
 (a link could point at local or private data); dangling links are reported
-as missing.
+as missing for the brief/decisions/handoff files via `memory`, while a
+symlinked `state.json` — dangling or not — is refused outright, as are
+symlinked `decisions.md`/`handoff.md` for the direct library readers.
 
 ### Decision log grammar (normative)
 
@@ -201,24 +203,32 @@ refused state are preserved byte-for-byte.
 
 ### Concurrency guarantees (accurate, per artifact)
 
-Coordination uses advisory lock files (`decisions.lock`, `handoff.lock`;
-reserved aperio names, git-ignored) with a bounded wait and stale-lock
-breaking (locks older than 10 s are treated as abandoned; lock files
-record `pid:timestamp` and are removed only by their verified owner). The
-locks coordinate aperio writers with each other — tools that do not use
-aperio ignore them entirely.
+Coordination uses advisory lock files (`state.lock`, `decisions.lock`,
+`handoff.lock`; reserved aperio names, git-ignored) with a bounded wait.
+**A lock is never stolen**: there is no age-based automatic recovery, so a
+lock held by an active (or stalled) writer cannot be removed behind its
+back. An occupied lock past the timeout yields a clear conflict naming the
+lock file — which records its owner as `pid:timestamp` — and an abandoned
+lock is resolved by explicit user action (inspect the owner, remove the
+file if that process is gone). Locks are removed only by their verified
+owner (content-checked token). The locks coordinate aperio writers with
+each other — tools that do not use aperio ignore them entirely.
 
 | Artifact | Mechanism | Guarantee | Limitation |
 |----------|-----------|-----------|------------|
 | `state.json` create | exclusive temp + hard-link publish | no overwrite, ever | — |
-| `state.json` update (`phase-set`) | compare-and-swap on exact validated bytes | concurrent changes landing before the compare abort with nothing modified; **unknown extra state fields are preserved exactly (meaning and JSON type)** | a write between compare and rename can still win; serialize concurrent updaters |
-| `decisions.md` | advisory lock around read-compute-append, then single-syscall `O_APPEND` | unique sequential IDs among aperio writers; existing bytes never rewritten; concurrent appends never interleave | **tools that edit the log without aperio's lock bypass uniqueness** — their appends are never overwritten, but their entry IDs may collide with the next aperio-computed ID (reported as duplicates); a live lock held longer than the bounded wait produces a clear conflict, never a hang |
-| `handoff.md` | advisory lock + revision counter (`rev=N` in the marker) + final byte check | a stale writer (declaring an older revision) conflicts instead of clobbering; newer unsupported formats (v2+) are refused; concurrent aperio writers serialize | replacing revision ≥ 1 requires declaring that revision, or the opt-in `force` flag (deliberate content loss); tools outside the lock are caught by the byte check and abort with nothing modified |
+| `state.json` update (`phase-set`) | full read→validate→modify→publish under `state.lock`, plus a byte compare-and-swap against the exact under-lock read | concurrent *aperio* updates serialize and cannot silently overwrite each other; **unknown extra state fields are preserved exactly (meaning and JSON type)**; a non-cooperating tool's write before the compare aborts with nothing modified | the filesystem cannot protect against a non-cooperating write landing between the final compare and the rename; that residual window is documented, not claimed away |
+| `decisions.md` | advisory lock around read-compute-append, then single-syscall `O_APPEND` | unique sequential IDs among aperio writers; existing bytes never rewritten; concurrent appends never interleave | **tools that edit the log without aperio's lock bypass uniqueness** — their appends are never overwritten, but their entry IDs may collide with the next aperio-computed ID (reported as duplicates); an occupied lock past the bounded wait produces a clear conflict, never a hang or a steal |
+| `handoff.md` | advisory lock + single-snapshot read (revision AND expected bytes from the same read) + revision checks + final byte check | a stale writer (declaring an older revision) conflicts instead of clobbering; newer unsupported formats (v2+) are refused; concurrent aperio writers serialize; the revision decision can never be made on bytes different from the conflict-detection baseline | replacing revision ≥ 1 requires declaring that revision, or the opt-in `force` flag (deliberate content loss); the same non-cooperating-writer residual window applies |
 
 Crash-consistency is best-effort across all artifacts: no `fsync` is
 performed, so a power loss can tear an appended tail or lose a not-yet-
 flushed rename. Nothing is ever silently destroyed; leftovers surface as
-conflicts for explicit user action.
+conflicts for explicit user action. Note for projects initialized before
+the lock files existed: `init` never rewrites an existing
+`.aperio/.gitignore`, so add `state.lock`, `decisions.lock`, and
+`handoff.lock` to it manually if those transient files should stay out of
+version control.
 
 Schema v1 is preserved by phase updates: only `phase`, `updated_at`, and
 `aperio_version` (the rewriting version) change; `name`, `created_at`,

@@ -19,6 +19,7 @@ from aperio.errors import NotInitializedError, PathError, StateError
 from aperio.handoff import HandoffContent, read_handoff, write_handoff
 from aperio.memory import load_context
 from aperio.progress import update_phase
+from aperio.schema import state_path
 
 CONTENT = dict(
     current_objective="o",
@@ -210,3 +211,89 @@ def test_outside_files_preserved_when_aperio_symlinked(
     assert (outside / "unrelated.txt").read_text() == "UNRELATED-OUTSIDE-CONTENT"
     # The real context was never touched through the link either.
     assert (real_aperio / "state.json").is_file()
+
+
+def test_symlinked_state_json_refused_for_memory_reads(run_cli, project_dir, tmp_path):
+    """Read-side boundary: a symlinked state.json is refused even when its
+    target is a perfectly valid state file — portable memory reads never
+    follow links at shareable paths (status still does, by design)."""
+    run_cli("init", str(project_dir))
+    valid_target = tmp_path / "valid-state.json"
+    valid_target.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "name": "elsewhere",
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+                "phase": "initialized",
+                "aperio_version": "0.2.0",
+            }
+        )
+    )
+    (sp := state_path(project_dir / ".aperio")).unlink()
+    sp.symlink_to(valid_target)
+    for reader in (
+        lambda: load_context(project_dir),
+        lambda: update_phase(project_dir, "impl"),
+        lambda: read_decisions(project_dir / ".aperio"),
+        lambda: read_handoff(project_dir / ".aperio"),
+    ):
+        with pytest.raises(PathError, match="refusing to follow symlink"):
+            reader()
+    # The target file was never read into context nor modified.
+    assert json.loads(valid_target.read_text())["name"] == "elsewhere"
+
+
+def test_symlinked_context_files_into_local_refused_for_reads(
+    run_cli, project_dir
+):
+    """Links from shareable paths into .aperio/local/ must never be read
+    into portable context."""
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    secret = aperio_dir / "local/credentials.txt"
+    secret.write_text("SECRET-LOCAL-CONTENT-789")
+
+    (aprio := aperio_dir / "brief.md").unlink()
+    aprio.symlink_to(secret)
+    (aprio := aperio_dir / "decisions.md").unlink()
+    aprio.symlink_to(secret)
+    (aprio := aperio_dir / "handoff.md").unlink()
+    aprio.symlink_to(secret)
+
+    with pytest.raises(PathError, match="refusing to follow symlink"):
+        load_context(project_dir)
+    with pytest.raises(PathError, match="refusing to follow symlink"):
+        read_decisions(aperio_dir)
+    with pytest.raises(PathError, match="refusing to follow symlink"):
+        read_handoff(aperio_dir)
+    code, out, err = run_cli("memory", str(project_dir), "--json")
+    assert code == 1
+    assert "SECRET-LOCAL-CONTENT-789" not in out + err
+    # The link targets were never modified.
+    assert secret.read_text() == "SECRET-LOCAL-CONTENT-789"
+
+
+def test_symlinked_context_files_outside_refused_for_reads(
+    run_cli, project_dir, tmp_path
+):
+    """Links from shareable paths to outside private files must never be
+    read into portable context, and the outside files stay untouched."""
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    private = tmp_path / "private-notes.md"
+    private.write_text("PRIVATE-OUTSIDE-NOTES-456")
+
+    (aprio := aperio_dir / "decisions.md").unlink()
+    aprio.symlink_to(private)
+    (aprio := aperio_dir / "handoff.md").unlink()
+    aprio.symlink_to(private)
+
+    with pytest.raises(PathError, match="refusing to follow symlink"):
+        read_decisions(aperio_dir)
+    with pytest.raises(PathError, match="refusing to follow symlink"):
+        read_handoff(aperio_dir)
+    with pytest.raises(PathError, match="refusing to follow symlink"):
+        load_context(project_dir)
+    assert private.read_text() == "PRIVATE-OUTSIDE-NOTES-456"

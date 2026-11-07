@@ -398,18 +398,36 @@ def test_genuinely_concurrent_processes_get_unique_ids(run_cli, project_dir):
     assert not (project_dir / ".aperio/decisions.lock").exists()
 
 
-def test_stale_lock_is_broken(run_cli, project_dir):
-    """A lock abandoned by a crashed writer (mtime far in the past) is
-    broken and the append proceeds."""
+def test_aged_lock_is_never_stolen(run_cli, project_dir):
+    """Regression for the age-based stealing defect: a lock that looks old
+    (mtime far in the past) is NEVER broken automatically, because it may
+    belong to an active writer whose machine stalled. The append fails
+    with a bounded, actionable conflict; the lock file is untouched."""
     run_cli("init", str(project_dir))
     aperio_dir = project_dir / ".aperio"
     lock = aperio_dir / "decisions.lock"
-    lock.write_text("999999:deadbeef")
-    stale_time = time.time() - 60
-    os.utime(lock, (stale_time, stale_time))
+    lock.write_text("999999:slow-but-alive")
+    aged_time = time.time() - 600
+    os.utime(lock, (aged_time, aged_time))
+    with pytest.raises(StateError, match="could not acquire"):
+        _append(aperio_dir, lock_timeout=0.3)
+    assert lock.read_text() == "999999:slow-but-alive"
+    assert read_decisions(aperio_dir).entries == []
+
+
+def test_abandoned_lock_resolution_is_explicit(run_cli, project_dir):
+    """The conservative policy: an abandoned lock is resolved by explicit
+    user action (the error says exactly that), after which writing works."""
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    lock = aperio_dir / "decisions.lock"
+    lock.write_text("999999:abandoned")
+    with pytest.raises(StateError, match="could not acquire"):
+        _append(aperio_dir, lock_timeout=0.3)
+    # The user inspects the lock (owner pid:timestamp) and removes it.
+    lock.unlink()
     entry = _append(aperio_dir)
     assert entry.id == "DEC-0001"
-    assert not lock.exists()
 
 
 def test_live_lock_times_out_with_clear_conflict(run_cli, project_dir):
@@ -421,10 +439,36 @@ def test_live_lock_times_out_with_clear_conflict(run_cli, project_dir):
     lock.write_text("12345:alive")  # current mtime = live lock
     started = time.monotonic()
     with pytest.raises(StateError, match="could not acquire"):
-        _append(aperio_dir, lock_timeout=0.3, lock_stale_after=100.0)
+        _append(aperio_dir, lock_timeout=0.3)
     assert time.monotonic() - started < 5.0
     assert lock.read_text() == "12345:alive"  # foreign lock untouched
     assert read_decisions(aperio_dir).entries == []  # nothing was appended
+
+
+def test_active_lock_cannot_be_stolen_by_concurrent_process(
+    run_cli, project_dir
+):
+    """Adversarial multiprocess proof: while one process holds the lock,
+    concurrent appender processes fail with conflicts — none of them
+    steals the lock or appends, and the holder's lock survives intact."""
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    lock = aperio_dir / "decisions.lock"
+    lock.write_text(f"{os.getpid()}:holder-is-active")
+
+    workers = 6
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [
+            pool.submit(_append_worker, str(project_dir), f"sneaky {i}")
+            for i in range(workers)
+        ]
+        codes = [f.result(timeout=120) for f in futures]
+    assert codes == [1] * workers, "no concurrent writer may steal the lock"
+    assert lock.read_text() == f"{os.getpid()}:holder-is-active"
+    assert read_decisions(aperio_dir).entries == []
+    # After the holder releases explicitly, writing works again.
+    lock.unlink()
+    assert _append(aperio_dir).id == "DEC-0001"
 
 
 def test_symlinked_lock_refused(run_cli, project_dir, tmp_path):

@@ -150,6 +150,7 @@ local/
 # (reserved by aperio; never committed).
 state.json.tmp
 handoff.md.tmp
+state.lock
 decisions.lock
 handoff.lock
 """
@@ -184,6 +185,10 @@ def require_supported_state(aperio_dir: Path) -> ProjectState:
     - a symlinked ``.aperio/`` directory is refused (a leaf-file check
       alone would pass while every access silently traverses the link to
       somewhere outside the project);
+    - a symlinked ``state.json`` is refused even when its target is a
+      valid state file — portable memory reads must never follow links at
+      shareable paths (this is stricter than Feature-01 ``status``, whose
+      read-only reporting may follow symlinks);
     - ``state.json`` must exist (NotInitializedError otherwise — a
       directory that merely contains an ``.aperio/brief.md`` is *not* a
       project) and be a supported schema (StateError for corrupt or
@@ -195,6 +200,13 @@ def require_supported_state(aperio_dir: Path) -> ProjectState:
             "context directory itself is a symlink, so its contents could "
             "live outside the project boundary; remove it and re-run "
             "'aperio init' to repair"
+        )
+    state_file = state_path(aperio_dir)
+    if os.path.islink(state_file):
+        raise PathError(
+            f"refusing to follow symlink at {state_file} while reading "
+            "portable memory (it could point at local or private data); "
+            "remove it and re-run 'aperio init' to repair"
         )
     return read_state(aperio_dir)
 

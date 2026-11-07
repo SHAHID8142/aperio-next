@@ -50,7 +50,6 @@ from pathlib import Path
 from aperio.errors import NotInitializedError, PathError, StateError, ValidationError
 from aperio.inputs import check_no_foreign_line_separators
 from aperio.locks import (
-    LOCK_STALE_SECONDS as LOCK_STALE_DEFAULT,
     LOCK_TIMEOUT_SECONDS as LOCK_TIMEOUT_DEFAULT,
     acquire_lock,
     release_lock,
@@ -128,15 +127,22 @@ def read_decisions(aperio_dir: Path) -> DecisionsRead:
     """Parse ``decisions.md``. Never fatal for entry-level damage.
 
     Boundary check first: the project must be initialized with a supported
-    schema and ``.aperio/`` must not be a symlink.
+    schema; ``.aperio/`` and ``decisions.md`` must not be symlinks
+    (portable memory reads never follow links at shareable paths).
 
     :raises NotInitializedError: when the project or the file does not exist.
     :raises StateError: when state is unsupported or the file is
         unreadable/not valid UTF-8.
-    :raises PathError: when ``.aperio/`` is a symlink.
+    :raises PathError: when ``.aperio/`` or ``decisions.md`` is a symlink.
     """
     require_supported_state(aperio_dir)
     path = decisions_path(aperio_dir)
+    if os.path.islink(path):
+        raise PathError(
+            f"refusing to follow symlink at {path} while reading portable "
+            "memory (it could point at local or private data); remove it "
+            "and re-run 'aperio init' to repair"
+        )
     text = _read_log_text(path)
     return parse_decisions_text(text)
 
@@ -246,17 +252,18 @@ def append_decision(
     consequences: str,
     timestamp: str | None = None,
     lock_timeout: float = LOCK_TIMEOUT_DEFAULT,
-    lock_stale_after: float = LOCK_STALE_DEFAULT,
 ) -> DecisionEntry:
     """Append one decision to ``decisions.md``. History is never rewritten.
 
     Coordination: the read-compute-append sequence runs under an exclusive
-    advisory lock (``.aperio/decisions.lock``, bounded wait, stale locks
-    broken after ``lock_stale_after`` seconds — see :mod:`aperio.locks`),
-    so concurrent aperio writers always receive unique sequential IDs.
-    External tools that edit the log without this lock are not coordinated:
-    their appends are never overwritten by aperio, but their IDs may
-    collide with the next aperio-computed ID (reported as duplicates).
+    advisory lock (``.aperio/decisions.lock``, bounded wait — see
+    :mod:`aperio.locks`), so concurrent aperio writers always receive
+    unique sequential IDs. A lock is never stolen: if it stays occupied
+    past the bounded wait, the append fails with an actionable conflict.
+    External tools that edit the log without this lock are not
+    coordinated: their appends are never overwritten by aperio, but their
+    IDs may collide with the next aperio-computed ID (reported as
+    duplicates).
 
     The rendered entry is emitted as a single ``os.write`` on an
     ``O_APPEND | O_NOFOLLOW`` descriptor, so concurrent writers cannot
@@ -291,7 +298,6 @@ def append_decision(
     token = acquire_lock(
         lock_path,
         timeout=lock_timeout,
-        stale_after=lock_stale_after,
         artifact="decision log",
     )
     try:
