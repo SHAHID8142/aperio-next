@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import json
 import os
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 from aperio import __version__
@@ -47,9 +48,11 @@ from aperio.errors import NotInitializedError, PathError, StateError, Validation
 from aperio.inputs import check_no_foreign_line_separators
 from aperio.locks import LOCK_TIMEOUT_SECONDS, acquire_lock, release_lock
 from aperio.policy import (
+    _check_actor_id,
+    _check_text,
     append_event as _policy_event,
-    latest_plan_author,
     load_policy,
+    plan_author_events,
     require_action,
 )
 from aperio.planmodel import (
@@ -266,6 +269,111 @@ def _new_document(plan_content: dict, *, plan_version: int, approval: dict,
     return doc
 
 
+def _author_record(snapshot: dict, revision: int) -> dict | None:
+    authors = snapshot.get("authors")
+    if not isinstance(authors, dict):
+        return None
+    record = authors.get(str(revision))
+    return record if isinstance(record, dict) else None
+
+
+def _author_entry(actor: str, role: str, method: str, **extra) -> dict:
+    entry = {
+        "actor": actor,
+        "role": role,
+        "recorded_at": utc_now_iso(),
+        "method": method,
+    }
+    entry.update(extra)
+    return entry
+
+
+def _record_attribution_event(
+    aperio_dir: Path,
+    *,
+    actor: str,
+    role: str,
+    action: str,
+    revision: int,
+    outcome: str,
+    note: str | None = None,
+) -> None:
+    """Write an attribution event, failing with a recovery instruction.
+
+    The plan document (written atomically first) is the durable source of
+    authorship; the audit log is the append-only history that approval
+    cross-checks. If this write fails the revision stays published and
+    approval stays blocked until 'aperio plan-sync-authors' succeeds.
+    """
+    try:
+        _policy_event(
+            aperio_dir,
+            actor=actor,
+            role=role,
+            action=action,
+            target="plan",
+            revision=revision,
+            outcome=outcome,
+            note=note,
+        )
+    except StateError as exc:
+        raise StateError(
+            f"plan revision {revision} was published with durable author "
+            f"attribution, but its audit record could not be written ({exc}). "
+            "Approval is blocked until the attribution history is repaired; "
+            "run 'aperio plan-sync-authors <project>' after fixing the audit "
+            "log. The plan itself was not rolled back."
+        ) from None
+
+
+def _require_approval_attribution(
+    aperio_dir: Path, snapshot: dict, revision: int
+) -> dict:
+    """Fail-closed authorship check for a governed plan approval.
+
+    Requires (1) a durable author record inside the atomically published
+    plan and (2) exactly one matching attribution event in the audit log.
+    Missing, unreadable, or conflicting evidence blocks approval; recovery
+    is explicit (adoption for pre-governance plans, sync for a lost audit
+    event). Never guesses an author.
+    """
+    record = _author_record(snapshot, revision)
+    if record is None:
+        raise StateError(
+            f"plan revision {revision} has no durable author attribution, so "
+            "it cannot be approved. If this plan predates governance, an "
+            "authorized operator must adopt it explicitly with 'aperio "
+            "plan-adopt <project> --author <id> --reason <why>'; authorship "
+            "is never inferred. Nothing was modified."
+        )
+    events = plan_author_events(aperio_dir, revision)
+    if not events:
+        raise StateError(
+            f"plan revision {revision} has durable author attribution "
+            f"({record.get('actor')!r}) but no matching audit record; approval "
+            "is blocked rather than trusting partial history. Run 'aperio "
+            "plan-sync-authors <project>' to record the missing attribution, "
+            "then retry. Nothing was modified."
+        )
+    authors = {event_actor for _action, event_actor in events}
+    if len(authors) != 1:
+        raise StateError(
+            f"plan revision {revision} has conflicting author attribution in "
+            f"the audit log ({', '.join(sorted(authors))}); approval is "
+            "blocked. Inspect the audit history and restore a single "
+            "attribution before retrying. Nothing was modified."
+        )
+    event_actor = events[0][1]
+    if event_actor != record.get("actor"):
+        raise StateError(
+            f"plan revision {revision} attributes authorship to "
+            f"{record.get('actor')!r} in the plan but {event_actor!r} in the "
+            "audit log; approval is blocked on this conflict. Nothing was "
+            "modified."
+        )
+    return record
+
+
 def _empty_approval() -> dict:
     return {
         "status": "draft",
@@ -434,6 +542,10 @@ def create_plan(
     document = _new_document(
         plan_content, plan_version=1, approval=_empty_approval(), created_at=now
     )
+    if role is not None:
+        document["authors"] = {
+            "1": _author_entry(actor, role, "created")
+        }
     validate_plan_document(document, path)
 
     payload = json.dumps(document, indent=2, ensure_ascii=False) + "\n"
@@ -468,16 +580,29 @@ def create_plan(
     except OSError:
         pass  # leftover is a user-resolved conflict
     if role is not None:
-        _policy_event(
+        _record_attribution_event(
             aperio_dir,
             actor=actor,
             role=role,
             action="plan.create",
-            target="plan",
             revision=document["plan_version"],
             outcome="created",
         )
     return document
+
+
+@contextmanager
+def _reviews_guard(aperio_dir: Path):
+    """Hold reviews.lock after plan.lock (never the reverse)."""
+    from aperio.reviews import REVIEW_LOCK_NAME
+
+    token = acquire_lock(
+        aperio_dir / REVIEW_LOCK_NAME, timeout=5.0, artifact="review records"
+    )
+    try:
+        yield
+    finally:
+        release_lock(aperio_dir / REVIEW_LOCK_NAME, token)
 
 
 def _mutate_under_lock(
@@ -485,6 +610,8 @@ def _mutate_under_lock(
     artifact: str,
     mutate,
     lock_timeout: float,
+    *,
+    guard=None,
 ):
     """Run ``mutate(snapshot)`` -> (document, changed) under plan.lock.
 
@@ -507,14 +634,15 @@ def _mutate_under_lock(
         )
     token = acquire_lock(lock_path, timeout=lock_timeout, artifact=artifact)
     try:
-        snapshot = _read_snapshot(path)
-        document = _parse_snapshot(snapshot, path)
-        new_document, changed = mutate(document)
-        if changed:
-            new_document["updated_at"] = utc_now_iso()
-            new_document["aperio_version"] = __version__
-            _publish(aperio_dir, new_document, snapshot, path, tmp)
-        return new_document, changed
+        with (guard() if guard is not None else nullcontext()):
+            snapshot = _read_snapshot(path)
+            document = _parse_snapshot(snapshot, path)
+            new_document, changed = mutate(document)
+            if changed:
+                new_document["updated_at"] = utc_now_iso()
+                new_document["aperio_version"] = __version__
+                _publish(aperio_dir, new_document, snapshot, path, tmp)
+            return new_document, changed
     finally:
         release_lock(lock_path, token)
 
@@ -565,18 +693,23 @@ def revise_plan(
         new_document["tasks"] = merged_tasks
         new_document["plan_version"] = current_version + 1
         new_document["approval"] = _empty_approval()
+        if role is not None:
+            authors = dict(snapshot.get("authors") or {})
+            authors[str(current_version + 1)] = _author_entry(
+                actor, role, "revised"
+            )
+            new_document["authors"] = authors
         return new_document, True
 
     document, _ = _mutate_under_lock(
         aperio_dir, "plan revision", mutate, LOCK_TIMEOUT_SECONDS
     )
     if role is not None:
-        _policy_event(
+        _record_attribution_event(
             aperio_dir,
             actor=actor,
             role=role,
             action="plan.revise",
-            target="plan",
             revision=document["plan_version"],
             outcome="revised",
         )
@@ -620,12 +753,6 @@ def approve_plan(
     role = require_action(
         aperio_dir, actor, "plan.approve", target="plan", revision=revision
     )
-    governed_author = (
-        latest_plan_author(aperio_dir, revision)
-        if role is not None and revision is not None
-        else None
-    )
-
     def mutate(snapshot: dict):
         current_version = snapshot["plan_version"]
         if revision is not None and revision != current_version:
@@ -635,8 +762,11 @@ def approve_plan(
                 "Nothing was modified."
             )
         if role is not None:
-            author = latest_plan_author(aperio_dir, current_version)
-            if author is not None and author == actor:
+            author_record = _require_approval_attribution(
+                aperio_dir, snapshot, current_version
+            )
+            author = author_record["actor"]
+            if author == actor:
                 raise StateError(
                     f"separation of duties: actor {actor!r} authored plan "
                     f"revision {current_version} and cannot approve it. Have "
@@ -664,12 +794,223 @@ def approve_plan(
             target="plan",
             revision=document["plan_version"],
             outcome="approved",
-            note=(
-                "author differs" if governed_author != actor
-                else "author unknown"
-            ),
+            note="author differs",
         )
     return document
+
+
+def adopt_plan_author(
+    aperio_dir: Path,
+    revision: int,
+    author: str,
+    *,
+    reason: str,
+    actor: str | None = None,
+) -> dict:
+    """Explicitly adopt authorship of a plan revision created pre-governance.
+
+    This is the only way to give an attribution-less revision an author.
+    It refuses to overwrite an existing attribution (including one whose
+    audit event was lost: repair that with 'plan-sync-authors'). The
+    adoption is recorded durably in the plan and in the audit log with the
+    adopting operator and reason.
+    """
+    if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
+        raise ValidationError("plan-adopt: --revision must be a positive integer")
+    author = _check_actor_id(author, where="--author")
+    reason_text = _check_text(reason, where="--reason", required=True) or ""
+    require_supported_state(aperio_dir)
+    role = require_action(
+        aperio_dir, actor, "plan.adopt", target="plan", revision=revision
+    )
+    if role is None:
+        raise StateError(
+            "plan adoption requires project governance; enable it with "
+            "'aperio policy-init' first"
+        )
+
+    def mutate(snapshot: dict):
+        current_version = snapshot["plan_version"]
+        if revision != current_version:
+            raise StateError(
+                f"plan moved on: current plan_version is {current_version}, "
+                f"so revision {revision} can no longer be adopted. Nothing "
+                "was modified."
+            )
+        if _author_record(snapshot, revision) is not None:
+            raise StateError(
+                f"plan revision {revision} already has durable author "
+                "attribution; adoption never overwrites history. If its "
+                "audit record is missing, run 'aperio plan-sync-authors'."
+            )
+        authors = dict(snapshot.get("authors") or {})
+        authors[str(revision)] = _author_entry(
+            author, role, "adopted",
+            adopted_by=actor, reason=reason_text,
+        )
+        new_document = dict(snapshot)
+        new_document["authors"] = authors
+        return new_document, True
+
+    document, _ = _mutate_under_lock(
+        aperio_dir, "plan attribution adoption", mutate, LOCK_TIMEOUT_SECONDS
+    )
+    _record_attribution_event(
+        aperio_dir,
+        actor=author,
+        role=role,
+        action="plan.adopt",
+        revision=revision,
+        outcome="adopted",
+        note=f"adopted by {actor}: {reason_text}",
+    )
+    return document
+
+
+def sync_plan_authors(aperio_dir: Path, *, actor: str | None = None) -> list[int]:
+    """Repair missing attribution audit events from durable plan records.
+
+    Only appends events that are missing; refuses to resolve conflicting
+    actors and never edits existing history. Returns repaired revisions.
+    """
+    require_supported_state(aperio_dir)
+    role = require_action(aperio_dir, actor, "plan.sync", target="plan")
+    if role is None:
+        raise StateError(
+            "attribution recovery requires project governance; enable it "
+            "with 'aperio policy-init' first"
+        )
+    plan = read_plan(aperio_dir)
+    authors = plan.get("authors") or {}
+    action_for = {
+        "created": "plan.create",
+        "revised": "plan.revise",
+        "adopted": "plan.adopt",
+    }
+    repaired: list[int] = []
+    for key in sorted(authors, key=int):
+        revision = int(key)
+        record = authors[key]
+        events = plan_author_events(aperio_dir, revision)
+        actors = {event_actor for _action, event_actor in events}
+        if actors and actors != {record["actor"]}:
+            raise StateError(
+                f"cannot repair attribution for revision {revision}: the audit "
+                f"log names {', '.join(sorted(actors))} but the plan names "
+                f"{record['actor']!r}. Conflicting history is never "
+                "overwritten; restore the correct records manually."
+            )
+        if actors:
+            continue
+        _record_attribution_event(
+            aperio_dir,
+            actor=record["actor"],
+            role=record.get("role", role),
+            action=action_for.get(record.get("method"), "plan.create"),
+            revision=revision,
+            outcome="recovered",
+            note="recovered from durable plan attribution",
+        )
+        repaired.append(revision)
+    return repaired
+
+
+def release_failed_claim(
+    aperio_dir: Path,
+    task_id: str,
+    *,
+    run_id: str,
+    claim_owner: str,
+    lock_timeout: float = LOCK_TIMEOUT_SECONDS,
+) -> dict:
+    """Runtime-only recovery: return this run's failed startup claim to pending.
+
+    Allowed only for a run that never started (``prepared``) and a task
+    that is still ``in-progress`` under the exact owner string derived
+    from that run. It cannot target a completed task, cannot change
+    ownership, and never records verification. Every other condition is
+    refused so delayed recovery cannot reverse a competing writer.
+    """
+    require_supported_state(aperio_dir)
+    from aperio.runtime import read_executions  # local: avoid import cycle
+
+    document = read_executions(aperio_dir)
+    run = None
+    if document is not None:
+        run = next(
+            (item for item in document["runs"] if item["run_id"] == run_id),
+            None,
+        )
+    if run is None:
+        raise StateError(
+            f"cannot release a claim for run {run_id}: no such execution "
+            "record. Nothing was modified."
+        )
+    if run.get("status") != "prepared":
+        raise StateError(
+            f"cannot release a claim for run {run_id}: its status is "
+            f"{run.get('status')!r}, not 'prepared'. Only a run that failed "
+            "before starting may release a claim. Nothing was modified."
+        )
+    if run.get("task_id") != task_id or run.get("owner") != claim_owner:
+        raise StateError(
+            f"cannot release a claim for run {run_id}: the execution record "
+            "does not own this task claim. Nothing was modified."
+        )
+    policy = load_policy(aperio_dir)
+
+    def mutate(snapshot: dict):
+        task = next(
+            (item for item in snapshot["tasks"] if item["id"] == task_id),
+            None,
+        )
+        if task is None:
+            raise StateError(
+                f"cannot release a claim for task {task_id}: it is no longer "
+                "part of the plan. Nothing was modified."
+            )
+        if task.get("status") != "in-progress" or task.get("owner") != claim_owner:
+            raise StateError(
+                f"cannot release a claim for task {task_id}: it is now "
+                f"{task.get('status')!r} under owner {task.get('owner')!r}, "
+                "not this run's in-progress claim. A competing change is "
+                "never reversed. Nothing was modified."
+            )
+        updated = dict(task)
+        updated["status"] = "pending"
+        updated["owner"] = None
+        updated["blocked_reason"] = None
+        if policy is not None:
+            updated["revision"] = int(task.get("revision", 0)) + 1
+            updated["attempt"] = int(task.get("attempt", 0))
+        new_document = dict(snapshot)
+        new_document["tasks"] = [
+            updated if item["id"] == task_id else item
+            for item in snapshot["tasks"]
+        ]
+        new_document["plan_version"] = snapshot["plan_version"] + 1
+        return new_document, True
+
+    document, _ = _mutate_under_lock(
+        aperio_dir, "startup claim recovery", mutate, lock_timeout
+    )
+    updated_task = next(
+        task for task in document["tasks"] if task["id"] == task_id
+    )
+    if policy is not None:
+        from aperio.policy import append_event
+
+        append_event(
+            aperio_dir,
+            actor="system",
+            role="implementer",
+            action="task.recover",
+            target=f"task:{task_id}",
+            revision=document["plan_version"],
+            outcome="pending",
+            note=f"released failed startup claim for {run_id}",
+        )
+    return updated_task
 
 
 def update_task(
@@ -684,7 +1025,6 @@ def update_task(
     result: str | None = None,
     reopen: bool = False,
     actor: str | None = None,
-    system: bool = False,
     lock_timeout: float = LOCK_TIMEOUT_SECONDS,
 ) -> dict:
     """Perform one validated task-status transition (execution tracking).
@@ -702,14 +1042,11 @@ def update_task(
     require_supported_state(aperio_dir)
     policy = load_policy(aperio_dir)
     role = None
-    if policy is not None and not system:
+    if policy is not None:
         action = "task.claim" if new_status == "in-progress" else "task.status"
         role = require_action(
             aperio_dir, actor, action, target=f"task:{task_id}"
         )
-    elif policy is not None and system:
-        role = "implementer"
-        actor = "system"
     owner = _check_single_line_payload("owner", owner)
     reason = _check_payload_text("reason", reason)
     evidence = _check_payload_text("evidence", evidence)
@@ -741,17 +1078,31 @@ def update_task(
         if new_status == "in-progress" and task["status"] == "completed":
             # Explicit reopen: refuse while dependents rely on completion.
             check_reopen_allowed(snapshot, task_id)
-        if policy is not None and not system:
+        if policy is not None:
             if (
-                task.get("owner")
-                and new_status in ("in-progress", "completed")
-                and task["owner"] != actor
+                new_status == "in-progress"
+                and task["status"] != "pending"
+                and owner is not None
+                and owner.strip()
+                and owner.strip() != actor
             ):
                 raise StateError(
-                    f"task {task_id} is owned by {task['owner']!r}; declared "
-                    f"actor {actor!r} cannot act on it. Claim or assignment "
-                    "must be explicit (separation of duties). Nothing was "
+                    "ownership transfers are not implicit: a governed task "
+                    "can only be claimed by its recorded implementer and no "
+                    "audited reassignment workflow exists yet. Nothing was "
                     "modified."
+                )
+            responsible = task.get("implementer") or task.get("owner")
+            if (
+                responsible
+                and new_status in ("in-progress", "completed")
+                and responsible != actor
+            ):
+                raise StateError(
+                    f"task {task_id} is implemented by {responsible!r}; "
+                    f"declared actor {actor!r} cannot act on it. Claim or "
+                    "assignment must be explicit (separation of duties). "
+                    "Nothing was modified."
                 )
             if new_status == "completed":
                 from aperio.reviews import review_requirement
@@ -760,15 +1111,34 @@ def update_task(
                     aperio_dir,
                     task_id,
                     snapshot["approval"].get("approved_revision"),
+                    attempt=int(task.get("attempt", 0)),
+                    task_revision=int(task.get("revision", 0)),
+                    implemented_by=task.get("implementer") or task.get("owner"),
                 )
         updated = dict(task)
+        if policy is not None:
+            base_attempt = int(task.get("attempt", 0))
+            base_revision = int(task.get("revision", 0))
+            updated["revision"] = base_revision + 1
+            updated["attempt"] = base_attempt
+            if new_status == "in-progress" and task["status"] in (
+                "pending", "completed"
+            ):
+                updated["attempt"] = base_attempt + 1
         if new_status == "in-progress":
             updated["status"] = "in-progress"
+            if policy is not None:
+                updated["implementer"] = actor
             if task["status"] == "pending":
-                # Fresh claim: the claiming agent takes ownership.
+                # Fresh claim: the claiming agent takes ownership. A run
+                # claim records the run's operational owner (which startup
+                # recovery verifies) while ``implementer`` keeps the
+                # declared actor attribution.
                 updated["owner"] = (
-                    actor if policy is not None else None
-                ) or (owner or "").strip() or None
+                    (owner or "").strip()
+                    or (actor if policy is not None else None)
+                    or None
+                )
             elif task["status"] == "completed":
                 # Reopen: clear the verification block (durable history
                 # belongs in the decision log); the new owner takes over.
@@ -816,8 +1186,10 @@ def update_task(
         new_document["plan_version"] = snapshot["plan_version"] + 1
         return new_document, True
 
+    completion = policy is not None and new_status == "completed"
     document, _ = _mutate_under_lock(
-        aperio_dir, "task update", mutate, lock_timeout
+        aperio_dir, "task update", mutate, lock_timeout,
+        guard=(lambda: _reviews_guard(aperio_dir)) if completion else None,
     )
     updated_task = next(t for t in document["tasks"] if t["id"] == task_id)
     if role is not None:

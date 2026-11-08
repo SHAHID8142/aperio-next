@@ -87,8 +87,13 @@ TASK_CONTENT_KEYS = (
 )
 # Lifecycle keys managed exclusively by task-status operations.
 TASK_SYSTEM_KEYS = ("status", "owner", "blocked_reason", "verification")
+# Optional attribution/lifecycle counters (present on governed new writes;
+# absent in plans created before Feature 06's attempt binding, which are
+# read as unattributed/attempt-less rather than guessed).
+TASK_OPTIONAL_KEYS = ("attempt", "revision", "implementer")
 
 PLAN_SYSTEM_KEYS = (
+    "authors",
     "schema_version",
     "plan_version",
     "approval",
@@ -365,6 +370,50 @@ def validate_plan_document(data: object, path) -> dict:
                 f"{path} is corrupt: approved plans must record 'approved_at'"
             )
 
+    authors = data.get("authors")
+    if authors is not None:
+        if not isinstance(authors, dict):
+            raise StateError(f"{path} is corrupt: 'authors' must be an object")
+        for key, record in authors.items():
+            if not isinstance(key, str) or not key.isdigit():
+                raise StateError(
+                    f"{path} is corrupt: authors keys must be revision numbers"
+                )
+            revision = int(key)
+            if revision < 1 or revision > plan_version:
+                raise StateError(
+                    f"{path} is corrupt: authors[{key}] is not a revision of "
+                    "this plan"
+                )
+            if not isinstance(record, dict):
+                raise StateError(
+                    f"{path} is corrupt: authors[{key}] must be an object"
+                )
+            for field in ("actor", "role", "recorded_at", "method"):
+                value = record.get(field)
+                if not isinstance(value, str) or not value.strip():
+                    raise StateError(
+                        f"{path} is corrupt: authors[{key}].{field} must be a "
+                        "non-empty string"
+                    )
+            if record["method"] not in ("created", "revised", "adopted"):
+                raise StateError(
+                    f"{path} is corrupt: authors[{key}].method is invalid"
+                )
+            if record["role"] not in ("planner", "implementer", "reviewer"):
+                raise StateError(
+                    f"{path} is corrupt: authors[{key}].role is not a built-in "
+                    "role"
+                )
+            if record["method"] == "adopted":
+                for field in ("adopted_by", "reason"):
+                    value = record.get(field)
+                    if not isinstance(value, str) or not value.strip():
+                        raise StateError(
+                            f"{path} is corrupt: adopted authors[{key}].{field} "
+                            "is required"
+                        )
+
     for field in ("created_at", "updated_at", "aperio_version"):
         value = data.get(field)
         if not isinstance(value, str) or not value:
@@ -470,6 +519,23 @@ def _validate_stored_task(task: object, where: str, path) -> None:
             )
     if not isinstance(task["depends_on"], list):
         raise StateError(f"{path} is corrupt: {where}.depends_on must be a list")
+    for key in ("attempt", "revision"):
+        if key not in task:
+            continue
+        value = task[key]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise StateError(
+                f"{path} is corrupt: {where}.{key} must be a non-negative "
+                "integer"
+            )
+    if "implementer" in task and (
+        not isinstance(task["implementer"], str)
+        or not task["implementer"].strip()
+    ):
+        raise StateError(
+            f"{path} is corrupt: {where}.implementer must be a non-empty "
+            "string when present"
+        )
     status = task["status"]
     if status not in TASK_STATUSES:
         raise StateError(f"{path} is corrupt: {where}.status is invalid")

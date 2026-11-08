@@ -60,6 +60,8 @@ ROLE_ACTIONS: dict[str, tuple[str, ...]] = {
         "plan.revise",
         "plan.request_approval",
         "plan.approve",
+        "plan.adopt",
+        "plan.sync",
     ),
     "implementer": (
         "task.claim",
@@ -648,13 +650,44 @@ def require_action(
         )
     actor = _check_actor_id(actor, where="--actor")
     role = _role_for(policy, actor)
-    if action not in policy["roles"][role]["actions"]:
+    # Attribution adoption/repair are intrinsic planner recovery actions.
+    # Policies written before these actions existed must remain recoverable
+    # without rewriting their stored role lists.
+    intrinsic_recovery = (
+        action in ("plan.adopt", "plan.sync") and role == "planner"
+    )
+    if (
+        not intrinsic_recovery
+        and action not in policy["roles"][role]["actions"]
+    ):
         raise StateError(
             f"actor {actor!r} has role {role!r}, which is not permitted to "
             f"perform {action}. A role label supplied by a caller is never "
             "trusted; update the policy mapping if this is intended."
         )
     return role
+
+
+PLAN_ATTRIBUTION_ACTIONS = ("plan.create", "plan.revise", "plan.adopt")
+
+
+def plan_author_events(
+    aperio_dir: Path, revision: int
+) -> list[tuple[str, str]]:
+    """Attribution audit events ``(action, actor)`` for one revision.
+
+    Fails closed on an unreadable/corrupt audit log: callers that make
+    approval decisions must not guess authorship from damaged history.
+    """
+    if not policy_enabled(aperio_dir):
+        return []
+    audit = _read_audit(aperio_dir)
+    return [
+        (str(event.get("action")), str(event.get("actor")))
+        for event in audit["events"]
+        if event.get("action") in PLAN_ATTRIBUTION_ACTIONS
+        and event.get("revision") == revision
+    ]
 
 
 def latest_plan_author(aperio_dir: Path, revision: int) -> str | None:
@@ -665,7 +698,7 @@ def latest_plan_author(aperio_dir: Path, revision: int) -> str | None:
     author = None
     for event in audit["events"]:
         if (
-            event.get("action") in ("plan.create", "plan.revise")
+            event.get("action") in PLAN_ATTRIBUTION_ACTIONS
             and event.get("revision") == revision
         ):
             author = event.get("actor")

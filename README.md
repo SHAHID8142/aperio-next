@@ -175,6 +175,15 @@ Three built-in roles describe responsibilities, not AI providers:
 | `implementer` | claim tasks, dispatch execution, submit reviews, complete reviewed work |
 | `reviewer` | approve plans and decide reviews independently |
 
+Plan authorship is written into the plan document by the same atomic
+publication that creates or revises it, and approval fails closed unless
+the durable author record and exactly one matching attribution audit event
+agree. If an audit append is lost, approval stays blocked until
+`aperio plan-sync-authors` appends the missing history; plans created before
+governance was enabled require the explicit, recorded `aperio plan-adopt`
+procedure. A revision is never approved with unknown, delayed, corrupt, or
+conflicting authorship.
+
 Enforcement happens at the Python mutation boundaries (plan create/revise/
 approve, task claim/status/completion, execution dispatch, review submit/
 decide), not just in argument parsing. Configured actor→role mappings are
@@ -185,11 +194,15 @@ cannot decide their own review, and a new material revision invalidates
 the previous approval and every review keyed to it.
 
 Reviews are immutable, append-only records with stable `REV-NNNN` ids. A
-review references the task, the material plan revision, the submitting
-implementer, scope, evidence, and (after a decision) the independent
-reviewer, outcome (`approved`, `changes-requested`, `rejected`), findings,
-and timestamp. A decided review is never edited; further work needs a new
-record. Task completion under governance requires *both* recorded
+review references the task, the material plan revision, the work attempt
+and task/evidence revision, the recorded implementer, scope and evidence,
+and (after a decision) the independent reviewer, outcome (`approved`,
+`changes-requested`, `rejected`), findings, and timestamp. Only the recorded
+implementer may submit. A decided review is never edited; further work needs
+a new record. Reopening a task, changing its evidence, or submitting a newer
+review invalidates an older approval for completion without deleting it: the
+latest review for the current material revision must itself be approved and
+match the current attempt and evidence revision. Task completion under governance requires *both* recorded
 verification evidence and an approved review at the current material
 revision — a successful subprocess or external report is never treated as
 independent verification.
@@ -319,7 +332,8 @@ create-only via an exclusive hard-link publish). See
 7. When governance is enabled, never self-approve a plan revision, self-
    decide a review, or treat a successful process exit as verified
    completion. Declare an actor with `--actor`; the project policy decides
-   what that role may do.
+   what that role may do. Reopen or evidence changes require a fresh review,
+   and only the recorded implementer may submit.
 
 ## Development
 

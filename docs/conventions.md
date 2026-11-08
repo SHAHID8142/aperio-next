@@ -57,7 +57,12 @@
   action, target, revision, timestamp, and outcome. Audit and review records
   never contain argv, environment content, raw external diagnostics, or
   absolute paths; actor ids are declarations, not authentication.
-- Reviews are immutable and append-only: a decided review is never edited,
+- A governed plan revision must carry a durable author entry written with the
+  plan and a matching audit event before approval. Missing or conflicting
+  attribution blocks approval; recovery is explicit (`plan-adopt` for legacy
+  plans, `plan-sync-authors` for a lost audit append), never guessed.
+- Reviews are immutable and append-only and bind to the task attempt, task
+  revision, and recorded implementer; a decided review is never edited,
   a new attempt gets a new `REV-NNNN`, and completion requires recorded
   evidence plus an approved independent review at the current material
   revision.

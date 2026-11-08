@@ -65,12 +65,14 @@ from aperio.runtime import (
 from aperio.planmodel import ready_task_ids
 from aperio.adapters import ManualHandoffAdapter, LocalProcessAdapter
 from aperio.planstore import (
+    adopt_plan_author,
     approve_plan,
     create_plan,
     plan_exists,
     plan_summary,
     read_plan,
     revise_plan,
+    sync_plan_authors,
     update_task,
 )
 from aperio.portable import export_project, import_archive
@@ -230,6 +232,40 @@ def build_parser() -> argparse.ArgumentParser:
         dest="as_json",
         action="store_true",
         help="emit the full plan document as machine-readable JSON",
+    )
+
+    plan_adopt_parser = subparsers.add_parser(
+        "plan-adopt",
+        help="explicitly adopt authorship of a pre-governance plan revision",
+    )
+    plan_adopt_parser.add_argument(
+        "project_directory", help="directory of an initialized Aperio project"
+    )
+    plan_adopt_parser.add_argument(
+        "--revision", type=int,
+        help="revision to adopt (default: the current plan revision)",
+    )
+    plan_adopt_parser.add_argument(
+        "--author", required=True,
+        help="declared actor id that authored the revision",
+    )
+    plan_adopt_parser.add_argument(
+        "--reason", required=True,
+        help="why the attribution is being adopted (recorded in history)",
+    )
+    plan_adopt_parser.add_argument(
+        "--actor", help="declared operator adopting it (planner role)",
+    )
+
+    plan_sync_parser = subparsers.add_parser(
+        "plan-sync-authors",
+        help="append missing plan attribution audit records (never rewrites)",
+    )
+    plan_sync_parser.add_argument(
+        "project_directory", help="directory of an initialized Aperio project"
+    )
+    plan_sync_parser.add_argument(
+        "--actor", help="declared operator performing the repair (planner role)",
     )
 
     plan_approve_parser = subparsers.add_parser(
@@ -815,6 +851,37 @@ def _cmd_plan_show(args) -> None:
         print(f"Blocked:     {', '.join(summary['blocked_task_ids'])}")
     print()
     print("Full document: aperio plan-show <dir> --json")
+
+
+def _cmd_plan_adopt(args) -> None:
+    target = resolve_target(args.project_directory, for_writing=True)
+    aperio_dir = aperio_dir_for(target)
+    revision = args.revision
+    if revision is None:
+        revision = read_plan(aperio_dir)["plan_version"]
+    document = adopt_plan_author(
+        aperio_dir, revision, args.author,
+        reason=args.reason, actor=args.actor,
+    )
+    print(
+        f"plan revision {revision} authorship adopted as {args.author!r} "
+        f"(recorded in the plan and attribution audit; approval still "
+        "requires an independent decision)"
+    )
+
+
+def _cmd_plan_sync_authors(args) -> None:
+    target = resolve_target(args.project_directory, for_writing=True)
+    repaired = sync_plan_authors(
+        aperio_dir_for(target), actor=args.actor
+    )
+    if repaired:
+        print(
+            "attribution audit repaired for revision(s): "
+            + ", ".join(str(item) for item in repaired)
+        )
+    else:
+        print("attribution audit already complete; nothing was modified")
 
 
 def _cmd_plan_approve(args) -> None:
@@ -1585,6 +1652,10 @@ def main(argv: list[str] | None = None) -> int:
             _cmd_plan_create(args)
         elif args.command == "plan-show":
             _cmd_plan_show(args)
+        elif args.command == "plan-adopt":
+            _cmd_plan_adopt(args)
+        elif args.command == "plan-sync-authors":
+            _cmd_plan_sync_authors(args)
         elif args.command == "plan-approve":
             _cmd_plan_approve(args)
         elif args.command == "plan-revise":

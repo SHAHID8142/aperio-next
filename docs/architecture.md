@@ -512,8 +512,32 @@ and decision. ``--authorize-exec`` remains an independent human
 authorization for local-process execution; a policy approval never
 authorizes subprocess execution.
 
-**Separation of duties.** The audit log records the declared author of
-every plan revision; approval refuses that actor. A reviewer may not
+**Durable authorship.** Each governed create/revise writes an ``authors``
+entry for the new revision inside the same atomic plan publication, then
+appends a matching audit event. Approval validates both: a missing plan
+record requires explicit ``plan-adopt`` (pre-governance plans), a missing
+audit record requires ``plan-sync-authors``, and a conflict or unreadable
+audit blocks approval. Recovery never guesses an author and never overwrites
+an existing attribution. These checks run under ``plan.lock``; the audit log
+is read without taking ``policy.lock``, so the fixed lock order is preserved.
+A crash between plan and audit publication is therefore visible and
+repairable rather than silently authorless.
+
+**Work attempts.** Governed tasks carry ``attempt``, ``revision``, and
+``implementer`` fields. Claiming or reopening increments the attempt; every
+task mutation increments the revision. Reviews snapshot attempt, revision,
+and the recorded implementer, and completion only accepts the latest review
+for the current material revision when it is approved and matches all three.
+Older approvals remain immutable history but can never override a newer
+pending, changes-requested, or rejected decision, and reopening or revising
+evidence requires a fresh independent review. Completion takes
+``reviews.lock`` after ``plan.lock`` so a decision cannot land between the
+check and the published completion.
+
+**Separation of duties.** Only the recorded implementer may submit for
+review; a reviewer must differ from both the submitter and the recorded
+implementer. Role changes never rewrite those historical fields. Approval
+refuses the declared author of the revision. A reviewer may not
 decide their own submission (re-checked at decision time, so later role
 changes cannot launder it). Completion requires recorded verification
 evidence *and* an approved review for the task at the current material
@@ -544,7 +568,11 @@ the fixed order has no cycle.
 snapshot compare-and-swap under the relevant lock; interrupted writes leave
 a reserved ``.tmp`` file that is reported (never stolen or silently
 removed). Duplicate review ids and conflicting decisions are impossible by
-construction.
+construction. There is no public ``system=True`` task API. Startup failure
+uses a narrow internal recovery that verifies the run is still ``prepared``,
+owns the exact claim, and the task is still that run's ``in-progress`` claim;
+it can only return the claim to ``pending`` and can never complete or verify
+work.
 
 ## Portable export, import and integrity (Feature 05)
 

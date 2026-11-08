@@ -43,6 +43,7 @@ from aperio.handoff import handoff_path, read_handoff
 from aperio.paths import resolve_target
 from aperio.planmodel import PLAN_SCHEMA_VERSION, validate_plan_document
 from aperio.policy import (
+    PLAN_ATTRIBUTION_ACTIONS,
     POLICY_SCHEMA_VERSION,
     policy_path,
     validate_policy_document,
@@ -551,16 +552,16 @@ def check_integrity(
                                 "reviews.json",
                             )
                         )
-                    task_ids = (
-                        {task["id"] for task in plan["tasks"]}
+                    task_map = (
+                        {task["id"]: task for task in plan["tasks"]}
                         if plan is not None
-                        else set()
+                        else {}
                     )
                     for review in document["reviews"]:
                         target = review["target"]
                         if target["kind"] != "task":
                             continue
-                        if plan is not None and target["task_id"] not in task_ids:
+                        if plan is not None and target["task_id"] not in task_map:
                             errors.append(
                                 _finding(
                                     "review-orphan-task",
@@ -570,8 +571,44 @@ def check_integrity(
                                     "reviews.json",
                                 )
                             )
+                            continue
+                        task = task_map.get(target["task_id"])
+                        if task is None:
+                            continue
+                        for key, task_key in (
+                            ("attempt", "attempt"),
+                            ("task_revision", "revision"),
+                        ):
+                            if key in target and target[key] > int(
+                                task.get(task_key, 0)
+                            ):
+                                errors.append(
+                                    _finding(
+                                        "review-future-work-ref",
+                                        f"review {review['review_id']} targets "
+                                        f"{key} {target[key]} of "
+                                        f"{target['task_id']}, newer than the "
+                                        f"task's {int(task.get(task_key, 0))}",
+                                        "reviews.json",
+                                    )
+                                )
 
     audit_file = aperio_dir / "policy-audit.json"
+    if (
+        not audit_file.exists()
+        and plan is not None
+        and isinstance(plan.get("authors"), dict)
+        and plan["authors"]
+    ):
+        errors.append(
+            _finding(
+                "attribution-audit-missing",
+                "plan.json has durable author attribution but "
+                "policy-audit.json is missing; approval is blocked until "
+                "'aperio plan-sync-authors' recreates the attribution history",
+                "policy-audit.json",
+            )
+        )
     if audit_file.exists():
         if audit_file.is_symlink():
             errors.append(
@@ -606,6 +643,41 @@ def check_integrity(
                             "policy-audit.json",
                         )
                     )
+                elif plan is not None and isinstance(plan.get("authors"), dict):
+                    events = audit["events"]
+                    for revision_key, record in plan["authors"].items():
+                        matches = {
+                            event.get("actor")
+                            for event in events
+                            if isinstance(event, dict)
+                            and event.get("action") in PLAN_ATTRIBUTION_ACTIONS
+                            and event.get("revision") == int(revision_key)
+                        }
+                        if len(matches) > 1:
+                            errors.append(
+                                _finding(
+                                    "attribution-audit-conflict",
+                                    f"plan revision {revision_key} has "
+                                    "conflicting authors in the attribution "
+                                    "audit log ("
+                                    + ", ".join(sorted(str(a) for a in matches))
+                                    + "); approval is blocked until the "
+                                    "history is reconciled",
+                                    "policy-audit.json",
+                                )
+                            )
+                        elif record.get("actor") not in matches:
+                            errors.append(
+                                _finding(
+                                    "attribution-audit-missing",
+                                    f"plan revision {revision_key} attributes "
+                                    f"authorship to {record.get('actor')!r}, "
+                                    "but the attribution audit record is "
+                                    "missing; run 'aperio plan-sync-authors' "
+                                    "to repair the append-only history",
+                                    "policy-audit.json",
+                                )
+                            )
 
     # --- optional archive ----------------------------------------------
     archive_report = None

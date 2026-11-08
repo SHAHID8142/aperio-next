@@ -69,7 +69,7 @@ from aperio.errors import (
 from aperio.locks import LOCK_TIMEOUT_SECONDS, acquire_lock, release_lock
 from aperio.policy import append_event as _policy_event
 from aperio.policy import load_policy, require_action
-from aperio.planstore import read_plan, update_task
+from aperio.planstore import read_plan, release_failed_claim, update_task
 from aperio.project import require_supported_state
 from aperio.schema import utc_now_iso
 
@@ -656,7 +656,7 @@ def _run_status_or_none(aperio_dir: Path, run_id: str) -> str | None:
 
 
 def _release_startup_claim(
-    aperio_dir: Path, task_id: str, claim_owner: str
+    aperio_dir: Path, task_id: str, claim_owner: str, run_id: str
 ) -> tuple[str, str | None]:
     """Return the claim to pending ONLY when ownership and state verify.
 
@@ -672,12 +672,8 @@ def _release_startup_claim(
     if status != "in-progress" or owner != claim_owner:
         return "not_ours", owner
     try:
-        update_task(
-            aperio_dir, task_id, new_status="blocked",
-            reason="dispatch failed before execution", system=True,
-        )
-        update_task(
-            aperio_dir, task_id, new_status="pending", system=True
+        release_failed_claim(
+            aperio_dir, task_id, run_id=run_id, claim_owner=claim_owner
         )
     except AperioError:
         return "unverifiable", owner
@@ -720,7 +716,7 @@ def _finalize_startup_failure(
             claim_owner_seen = previous[1] if previous is not None else None
         else:
             claim_state, claim_owner_seen = _release_startup_claim(
-                aperio_dir, task_id, claim_owner
+                aperio_dir, task_id, claim_owner, run_id
             )
     elif status in ("cancelled", "failed", "interrupted", "completed"):
         claim_state = "run_finalized"

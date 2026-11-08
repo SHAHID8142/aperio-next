@@ -170,11 +170,39 @@ def validate_reviews_document(data: object, path: Path | str) -> dict:
                 raise StateError(
                     f"{path} is corrupt: {review_id}.target.run_id is invalid"
                 )
+            for key in ("attempt", "task_revision"):
+                if key not in target:
+                    continue
+                value = target[key]
+                if (
+                    isinstance(value, bool)
+                    or not isinstance(value, int)
+                    or value < 0
+                ):
+                    raise StateError(
+                        f"{path} is corrupt: {review_id}.target.{key} must be "
+                        "a non-negative integer"
+                    )
         submitted_by = review.get("submitted_by")
         if not isinstance(submitted_by, str) or not submitted_by.strip():
             raise StateError(
                 f"{path} is corrupt: {review_id}.submitted_by is required"
             )
+        implemented_by = review.get("implemented_by")
+        if implemented_by is not None:
+            if not isinstance(implemented_by, str) or not implemented_by.strip():
+                raise StateError(
+                    f"{path} is corrupt: {review_id}.implemented_by must be a "
+                    "non-empty string when present"
+                )
+            if implemented_by != submitted_by:
+                raise StateError(
+                    f"{path} is corrupt: review {review_id} was submitted by "
+                    f"{submitted_by!r} but attributes the implementation to "
+                    f"{implemented_by!r}. No audited reassignment workflow "
+                    "exists, so implementation attribution must name the "
+                    "submitting owner."
+                )
         for field in ("scope", "evidence"):
             value = review.get(field)
             if not isinstance(value, list) or not value or not all(
@@ -222,6 +250,11 @@ def validate_reviews_document(data: object, path: Path | str) -> dict:
                 raise StateError(
                     f"{path} is corrupt: review {review_id} was decided by its "
                     "own submitter; independent review is required"
+                )
+            if implemented_by is not None and reviewer == implemented_by:
+                raise StateError(
+                    f"{path} is corrupt: review {review_id} was decided by the "
+                    "recorded implementer; reviewer independence is required"
                 )
             if outcome in ("changes-requested", "rejected") and not (
                 isinstance(findings, str) and findings.strip()
@@ -382,6 +415,22 @@ def submit_review(
             "implementation can be submitted for Review. Finish the work and "
             "record evidence first. Nothing was modified."
         )
+    owner = task.get("implementer") or task.get("owner")
+    if not isinstance(owner, str) or not owner.strip():
+        raise StateError(
+            f"task {task_id} has no recorded implementer, so independent "
+            "review cannot establish whose work is being approved. Claim the "
+            "task explicitly before submitting. Nothing was modified."
+        )
+    if actor != owner:
+        raise StateError(
+            f"task {task_id} is implemented by {owner!r}; declared actor "
+            f"{actor!r} cannot submit it for review. Submission must come "
+            "from the recorded implementer (no implicit reassignment "
+            "workflow exists). Nothing was modified."
+        )
+    attempt = int(task.get("attempt", 0))
+    task_revision = int(task.get("revision", 0))
     _run_for_task(aperio_dir, run_id, task_id)
     scope_items = _scope_list(scope, where="--scope")
     evidence_items = _scope_list(evidence, where="--evidence")
@@ -393,8 +442,11 @@ def submit_review(
             "task_id": task_id,
             "plan_revision": revision,
             "run_id": run_id,
+            "attempt": attempt,
+            "task_revision": task_revision,
         },
         "submitted_by": actor,
+        "implemented_by": owner,
         "submitted_role": role,
         "scope": scope_items,
         "evidence": evidence_items,
@@ -412,13 +464,32 @@ def submit_review(
         document = _empty_document() if raw is None else _parse(
             raw, reviews_path(aperio_dir)
         )
-        # Re-check staleness now that the record store is locked.
+        # Re-check authorization and staleness now that the store is locked:
+        # a concurrent policy reassignment must not publish a review under a
+        # role the actor no longer holds.
+        require_action(
+            aperio_dir, actor, "review.submit", target=f"task:{task_id}"
+        )
         current_plan, current_revision = _approved_plan(aperio_dir)
         if current_revision != revision:
             raise StateError(
                 "the plan approval changed while the review was being "
                 "submitted; nothing was modified. Re-read the project and "
                 "retry against the current material revision."
+            )
+        current_task = _task(current_plan, task_id)
+        if (
+            current_task.get("status") != "in-progress"
+            or (current_task.get("implementer") or current_task.get("owner"))
+            != owner
+            or int(current_task.get("attempt", 0)) != attempt
+            or int(current_task.get("revision", 0)) != task_revision
+        ):
+            raise StateError(
+                "the task attempt changed while the review was being "
+                "submitted (status, owner, attempt, or evidence revision); "
+                "nothing was modified. Re-read the project and submit again "
+                "for the current attempt."
             )
         record["review_id"] = _next_review_id(document["reviews"])
         document["reviews"].append(record)
@@ -500,8 +571,29 @@ def decide_review(
                 "submission. Have an independent declared reviewer decide it. "
                 "Nothing was modified."
             )
-        plan, revision = _approved_plan(aperio_dir)
+        require_action(
+            aperio_dir, actor, "review.decide", target=f"review:{review_id}"
+        )
         target = record["target"]
+        implemented_by = record.get("implemented_by")
+        if (
+            implemented_by is None
+            or "attempt" not in target
+            or "task_revision" not in target
+        ):
+            raise StateError(
+                f"review {review_id} predates attempt-bound review attribution "
+                "and cannot establish which implementation or evidence it "
+                "covers. Refusing to guess; submit a new review for the "
+                "current attempt. Nothing was modified."
+            )
+        if actor == implemented_by:
+            raise StateError(
+                "separation of duties: a reviewer may not decide a review of "
+                "their own implementation. Have an independent declared "
+                "reviewer decide it. Nothing was modified."
+            )
+        plan, revision = _approved_plan(aperio_dir)
         if revision != target["plan_revision"]:
             raise StateError(
                 f"review {review_id} targets plan revision "
@@ -517,6 +609,22 @@ def decide_review(
                     f"task {target['task_id']} is already completed; the "
                     "review decision cannot change that. Reopen deliberately "
                     "if new work is needed."
+                )
+            if (
+                task.get("status") != "in-progress"
+                or int(task.get("attempt", 0)) != target["attempt"]
+                or int(task.get("revision", 0)) != target["task_revision"]
+                or (task.get("implementer") or task.get("owner"))
+                != implemented_by
+            ):
+                raise StateError(
+                    f"review {review_id} targets work attempt "
+                    f"{target['attempt']} at task revision "
+                    f"{target['task_revision']}, but the task has moved on "
+                    f"(attempt {int(task.get('attempt', 0))}, revision "
+                    f"{int(task.get('revision', 0))}). The decision would be "
+                    "stale; submit a new review for the current attempt. "
+                    "Nothing was modified."
                 )
         updated = dict(record)
         updated["outcome"] = outcome
@@ -556,50 +664,165 @@ def list_reviews(aperio_dir: Path, *, task_id: str | None = None) -> list[dict]:
     ]
 
 
-def approved_review(
+def _latest_for_revision(
     aperio_dir: Path, task_id: str, material_revision: int
 ) -> dict | None:
-    for review in list_reviews(aperio_dir, task_id=task_id):
-        if (
-            review["outcome"] == "approved"
-            and review["target"]["plan_revision"] == material_revision
-        ):
-            return review
-    return None
+    candidates = [
+        review
+        for review in list_reviews(aperio_dir, task_id=task_id)
+        if review["target"]["plan_revision"] == material_revision
+    ]
+    return candidates[-1] if candidates else None
+
+
+def approved_review(
+    aperio_dir: Path,
+    task_id: str,
+    material_revision: int,
+    *,
+    attempt: int | None = None,
+    task_revision: int | None = None,
+) -> dict | None:
+    """Latest approved review for the task/material revision.
+
+    When ``attempt``/``task_revision`` are supplied, a review only counts
+    if it targets exactly that work attempt and evidence revision. Without
+    them this is a historical lookup only and must not be used to gate
+    completion.
+    """
+    latest = _latest_for_revision(aperio_dir, task_id, material_revision)
+    if latest is None or latest["outcome"] != "approved":
+        return None
+    target = latest["target"]
+    if attempt is not None and target.get("attempt") != attempt:
+        return None
+    if task_revision is not None and target.get("task_revision") != task_revision:
+        return None
+    return latest
 
 
 def review_requirement(
-    aperio_dir: Path, task_id: str, material_revision: int
+    aperio_dir: Path,
+    task_id: str,
+    material_revision: int,
+    *,
+    attempt: int,
+    task_revision: int,
+    implemented_by: str | None = None,
+    lock: bool = False,
 ) -> dict:
-    """Return the blocking requirement for verified completion.
+    """Serialize the completion decision against concurrent review writes.
 
-    Raises StateError with actionable text when no current independent
-    approval exists. Process success is never accepted as review.
+    Completion runs while holding ``plan.lock``; taking ``reviews.lock``
+    (later in the fixed order) ensures a decision cannot land between the
+    review check and the published completion.
     """
-    review = approved_review(aperio_dir, task_id, material_revision)
-    if review is None:
-        history = list_reviews(aperio_dir, task_id=task_id)
-        latest = history[-1] if history else None
-        detail = ""
-        if latest is not None:
-            detail = (
-                f" The latest review {latest['review_id']} is "
-                f"{latest['outcome']!r}"
-                + (
-                    f" for plan revision {latest['target']['plan_revision']}"
-                    if latest["target"]["plan_revision"] != material_revision
-                    else ""
-                )
-                + "."
-            )
+    if not lock:
+        return _review_requirement(
+            aperio_dir, task_id, material_revision,
+            attempt=attempt, task_revision=task_revision,
+            implemented_by=implemented_by,
+        )
+    token = acquire_lock(
+        reviews_lock_path(aperio_dir), timeout=5.0, artifact="review records"
+    )
+    try:
+        return _review_requirement(
+            aperio_dir, task_id, material_revision,
+            attempt=attempt, task_revision=task_revision,
+            implemented_by=implemented_by,
+        )
+    finally:
+        release_lock(reviews_lock_path(aperio_dir), token)
+
+
+def _review_requirement(
+    aperio_dir: Path,
+    task_id: str,
+    material_revision: int,
+    *,
+    attempt: int,
+    task_revision: int,
+    implemented_by: str | None = None,
+) -> dict:
+    """Return the review that satisfies verified completion, or fail closed.
+
+    The latest review for the task at the current material revision is the
+    only candidate: a newer pending/changes-requested/rejected decision
+    always blocks an older approval. It must target the current work
+    attempt and task revision (so reopening or revising evidence requires
+    a fresh review), be approved, and have been decided by someone other
+    than the recorded implementer/submitter.
+    """
+    latest = _latest_for_revision(aperio_dir, task_id, material_revision)
+    if latest is None:
         raise StateError(
             f"task {task_id} cannot be completed: governance requires an "
-            f"approved independent review for the current material revision "
-            f"{material_revision}.{detail} Submit with 'aperio review-submit' "
-            "and have a different declared reviewer decide it; a successful "
-            "process exit is not verification. Nothing was modified."
+            f"approved independent review for work attempt {attempt} at the "
+            f"current material revision {material_revision}. Submit with "
+            "'aperio review-submit' and have a different declared reviewer "
+            "decide it; a successful process exit is not verification. "
+            "Nothing was modified."
         )
-    return review
+    target = latest["target"]
+    if (
+        latest.get("implemented_by") is None
+        or "attempt" not in target
+        or "task_revision" not in target
+    ):
+        raise StateError(
+            f"task {task_id} cannot be completed: the latest review "
+            f"{latest['review_id']} predates attempt-bound attribution and "
+            "cannot prove which work or evidence it covers. Submit a new "
+            "review for the current attempt. Nothing was modified."
+        )
+    if target.get("attempt") != attempt:
+        raise StateError(
+            f"task {task_id} cannot be completed: the latest review "
+            f"{latest['review_id']} covers work attempt {target.get('attempt')} "
+            f"but the current attempt is {attempt} (the task was reopened or "
+            "reclaimed). Prior approvals do not carry over; submit a new "
+            "review for this attempt. Nothing was modified."
+        )
+    if target.get("task_revision") != task_revision:
+        raise StateError(
+            f"task {task_id} cannot be completed: work or evidence changed "
+            f"after review {latest['review_id']} was submitted (task revision "
+            f"{target.get('task_revision')} reviewed, current revision "
+            f"{task_revision}). Submit a fresh review covering the current "
+            "evidence. Nothing was modified."
+        )
+    if latest.get("outcome") != "approved":
+        raise StateError(
+            f"task {task_id} cannot be completed: the latest review "
+            f"{latest['review_id']} is {latest.get('outcome')!r}"
+            + (
+                f" with findings {latest.get('findings')!r}"
+                if latest.get("findings")
+                else ""
+            )
+            + ". An older approval cannot override a newer decision; submit "
+            "a new review after addressing the findings. Nothing was "
+            "modified."
+        )
+    if latest.get("reviewer") == latest.get("implemented_by") or (
+        latest.get("reviewer") == latest.get("submitted_by")
+    ):
+        raise StateError(
+            f"task {task_id} cannot be completed: review {latest['review_id']} "
+            "was decided by its own implementer/submitter and is not "
+            "independent verification. Nothing was modified."
+        )
+    if implemented_by is not None and latest.get("implemented_by") != implemented_by:
+        raise StateError(
+            f"task {task_id} cannot be completed: review "
+            f"{latest['review_id']} attributes implementation to "
+            f"{latest.get('implemented_by')!r}, but the task's recorded "
+            f"implementer is {implemented_by!r}. Ambiguous attribution is "
+            "refused; submit a new review from the recorded implementer. "
+            "Nothing was modified."
+        )
+    return latest
 
 
 def review_status(aperio_dir: Path) -> dict:
@@ -664,13 +887,14 @@ def blocking_requirements(aperio_dir: Path) -> list[dict]:
     for task in plan["tasks"]:
         if task["status"] != "in-progress":
             continue
-        has = any(
-            review["outcome"] == "approved"
-            and review["target"].get("task_id") == task["id"]
-            and review["target"]["plan_revision"] == revision
-            for review in document["reviews"]
-        )
-        if not has:
+        try:
+            _review_requirement(
+                aperio_dir, task["id"], revision,
+                attempt=int(task.get("attempt", 0)),
+                task_revision=int(task.get("revision", 0)),
+                implemented_by=task.get("implementer") or task.get("owner"),
+            )
+        except StateError:
             blocking.append({
                 "task_id": task["id"],
                 "requirement": "approved_independent_review",

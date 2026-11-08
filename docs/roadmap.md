@@ -45,7 +45,10 @@
   separation-of-duties enforcement at Python mutation boundaries, immutable
   `REV-NNNN` review records, verification-plus-review completion gates, an
   append-only actor audit log, governance in portable memory, and policy/
-  review/audit integration with export, import, and integrity.
+  review/audit integration with export, import, and integrity. Safety gate:
+  fail-closed durable plan authorship with explicit adoption/repair,
+  attempt-bound reviews, implementer-based reviewer independence, and a
+  narrow startup-recovery path with no public completion bypass.
 
 Everything below is future work. Nothing in this list works today; do not
 claim otherwise in code, docs, or demos. Each item lands as its own

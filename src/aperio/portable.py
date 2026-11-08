@@ -367,7 +367,7 @@ def _validate_governance_context(effective: dict[str, bytes], plan: dict | None)
             "the effective post-import context contains reviews but no plan; "
             "review targets cannot be validated. Nothing was modified."
         )
-    tasks = {task["id"] for task in plan["tasks"]}
+    tasks = {task["id"]: task for task in plan["tasks"]}
     for review in reviews["reviews"]:
         target = review["target"]
         if target["plan_revision"] > plan["plan_version"]:
@@ -376,11 +376,32 @@ def _validate_governance_context(effective: dict[str, bytes], plan: dict | None)
                 f"{target['plan_revision']}, newer than the effective plan "
                 f"revision {plan['plan_version']}. Nothing was modified."
             )
-        if target["kind"] == "task" and target["task_id"] not in tasks:
+        if target["kind"] != "task":
+            continue
+        task = tasks.get(target["task_id"])
+        if task is None:
             raise StateError(
                 f"review {review['review_id']} targets task "
                 f"{target['task_id']}, which the effective post-import plan "
                 "does not define. Nothing was modified."
+            )
+        if "attempt" in target and target["attempt"] > int(
+            task.get("attempt", 0)
+        ):
+            raise StateError(
+                f"review {review['review_id']} targets work attempt "
+                f"{target['attempt']} of {target['task_id']}, newer than the "
+                f"effective task's attempt {int(task.get('attempt', 0))}. "
+                "Nothing was modified."
+            )
+        if "task_revision" in target and target["task_revision"] > int(
+            task.get("revision", 0)
+        ):
+            raise StateError(
+                f"review {review['review_id']} targets task revision "
+                f"{target['task_revision']} of {target['task_id']}, newer "
+                "than the effective task's revision "
+                f"{int(task.get('revision', 0))}. Nothing was modified."
             )
 
 
