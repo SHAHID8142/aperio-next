@@ -17,20 +17,25 @@ deadlock is possible.
 Run lifecycle (execution status is SEPARATE from the Feature-03 task
 status; exit 0 never completes a task)::
 
-    prepared (local-process, no authorization yet / dry-run)
-    awaiting-external (manual handoff prepared)
     running (local process started; pid+machine recorded atomically)
     completed (adapter finished — NOT task verification)
     failed (nonzero exit, timeout, missing executable, claim lost, ...)
     cancelled (explicit run-cancel, or stale prepared record)
     interrupted (reconciliation: recorded process no longer alive)
 
-Honest guarantees: the byte-CAS detects non-cooperating writes landing
-before the compare; a write between the compare and the rename can still
-win. Crash-consistency is best-effort (no fsync). Pids are only
-interpreted on the machine that recorded them (a hostname token is
-stored alongside); same-machine pid reuse is a documented residual
-hazard borne by the explicit run-cancel action.
+Manual handoff runs go straight from the record-creation step to
+``awaiting-external``. Honest guarantees: the byte-CAS detects
+non-cooperating writes landing before the compare; a write between the
+compare and the rename can still win. Crash-consistency is best-effort
+(no fsync). Pids are only interpreted on the machine that recorded them
+(a hostname token is stored alongside); same-machine pid reuse is a
+documented residual hazard borne by the explicit run-cancel action.
+
+Privacy boundary: raw subprocess output and external-agent diagnostics
+are stored ONLY machine-locally (``.aperio/local/runs/``); shareable
+records carry neutral outcome metadata, exit codes, truncation
+indicators, and safe project-relative artifact references — never child
+output, absolute machine paths, or full argv.
 """
 
 from __future__ import annotations
@@ -38,7 +43,7 @@ from __future__ import annotations
 import json
 import os
 import platform
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from aperio import __version__
@@ -46,7 +51,6 @@ from aperio.adapters import (
     LOCAL_PROCESS_ADAPTER_ID,
     MANUAL_ADAPTER_ID,
     get_adapter,
-    runs_dir,
     sanitize_diagnostics,
 )
 from aperio.errors import (
@@ -58,9 +62,8 @@ from aperio.errors import (
 )
 from aperio.locks import LOCK_TIMEOUT_SECONDS, acquire_lock, release_lock
 from aperio.planstore import read_plan, update_task
+from aperio.project import require_supported_state
 from aperio.schema import utc_now_iso
-from aperio.project import aperio_dir_for, require_supported_state
-from aperio.progress import update_phase
 
 EXECUTIONS_FILE_NAME = "executions.json"
 EXECUTIONS_TMP_NAME = "executions.json.tmp"
@@ -78,8 +81,6 @@ RUN_STATUSES = (
     "interrupted",
 )
 ACTIVE_RUN_STATUSES = ("prepared", "awaiting-external", "running")
-
-EXECUTIONS_JSON_FIELDS = ("schema_version", "runs")
 
 
 def executions_path(aperio_dir: Path) -> Path:
@@ -210,6 +211,17 @@ def read_executions(aperio_dir: Path) -> dict | None:
     return parse_executions_snapshot(raw, path)
 
 
+def read_executions_or_fail(aperio_dir: Path) -> dict:
+    """Read executions or raise a clear 'no runs' StateError."""
+    document = read_executions(aperio_dir)
+    if document is None:
+        raise StateError(
+            f"no execution records at {executions_path(aperio_dir)} "
+            "(no run has ever been dispatched)"
+        )
+    return document
+
+
 def _snapshot_or_new(aperio_dir: Path) -> tuple[dict, bytes | None]:
     """Read the executions snapshot under the caller's lock; returns
     (document-or-minimal-new, raw-bytes-or-None)."""
@@ -225,7 +237,9 @@ def _publish_executions(aperio_dir: Path, data: dict, snapshot: bytes | None) ->
     tmp = executions_tmp_path(aperio_dir)
     validate_executions_document(data, path)
     try:
-        payload = json.dumps(data, indent=2, ensure_ascii=False, allow_nan=False) + "\n"
+        payload = json.dumps(
+            data, indent=2, ensure_ascii=False, allow_nan=False
+        ) + "\n"
     except ValueError as exc:
         raise StateError(
             f"cannot serialize execution records at {path}: {exc}; "
@@ -315,9 +329,9 @@ class Eligibility:
 def check_eligibility(plan: dict, task_id: str, active_run: dict | None) -> Eligibility:
     """Evaluate execution eligibility for one task.
 
-    Active runs and plan approval are checked by the caller against the
-    same snapshot this plan came from; the dependency and status checks
-    run here.
+    Plan approval and the active-run check are evaluated here against the
+    snapshot the caller supplies; dependency and status checks run here
+    too, so the whole decision is made against one consistent read.
     """
     tasks = {task["id"]: task for task in plan["tasks"]}
     if task_id not in tasks:
@@ -377,17 +391,6 @@ def _active_run_for_task(runs: list[dict], task_id: str) -> dict | None:
     return None
 
 
-def eligibility_with_records(
-    aperio_dir: Path, task_id: str, plan: dict, runs: list[dict]
-) -> Eligibility:
-    return check_eligibility(
-        plan, task_id, _active_run_for_task(runs, task_id)
-    )
-
-
-# --- dispatch ----------------------------------------------------------------------
-
-
 def _next_run_id(runs: list[dict]) -> str:
     highest = 0
     for run in runs:
@@ -404,7 +407,7 @@ def _new_run_record(
     *, run_id: str, task_id: str, plan_version: int, adapter_id: str,
     status: str, owner: str | None, previous_run_id: str | None,
 ) -> dict:
-    record = {
+    return {
         "run_id": run_id,
         "task_id": task_id,
         "plan_version": plan_version,
@@ -417,14 +420,16 @@ def _new_run_record(
         "cancelled_at": None,
         "exit_code": None,
         "outcome": None,
-        "diagnostics": None,
-        "handoff_path": None,
+        "diagnostics_note": None,
+        "handoff_ref": None,
+        "local_log_ref": None,
+        "output_truncated": None,
         "pid": None,
         "machine": machine_token() if status == "running" else None,
     }
-    return record
 
 
+# --- dispatch ----------------------------------------------------------------------
 
 
 def dispatch_task(
@@ -440,13 +445,18 @@ def dispatch_task(
 ) -> dict:
     """Dispatch one task through the full protocol.
 
-    Holds ``dispatch.lock`` for the whole dispatch (short bounded wait:
-    concurrent dispatch fails fast — same-workspace execution is
-    sequential by design). Protocol: eligibility against a fresh plan
-    read → run record created (prepared) → task claimed through the
-    Feature-03 lifecycle API → adapter executes → record finalized. A
+    Acquires ``dispatch.lock`` once for the whole dispatch (short bounded
+    wait: concurrent dispatch fails fast — same-workspace execution is
+    sequential by design). Protocol: config validation → eligibility
+    against a fresh plan read → run record created → task claimed through
+    the Feature-03 lifecycle API → adapter executes → record finalized. A
     claim lost to a competing writer finalizes the record as failed;
     nothing is left dangling.
+
+    Local-process WITHOUT ``--authorize-exec`` is a read-only preview:
+    no run record is created, the task is never claimed, and no process
+    is started — a delayed preparation must not block a later authorized
+    execution.
     """
     if adapter_id not in (MANUAL_ADAPTER_ID, LOCAL_PROCESS_ADAPTER_ID):
         raise ValidationError(f"unknown agent adapter {adapter_id!r}")
@@ -456,22 +466,33 @@ def dispatch_task(
         raise StateError(f"adapter {adapter_id!r} is not available: {reason}")
     require_supported_state(aperio_dir)
 
+    # Config validation happens BEFORE any persistent mutation: an
+    # invalid config must never leave an orphaned task claim or a
+    # partial record.
+    validated_config = adapter.validate_config(config, aperio_dir)
+
     dispatch_token = acquire_lock(
         dispatch_lock_path(aperio_dir),
         timeout=dispatch_lock_timeout,
         artifact="dispatch",
     )
     try:
-        return _dispatch_under_dispatch_lock(
+        result = _dispatch_locked(
             aperio_dir, task_id, adapter=adapter, adapter_id=adapter_id,
-            config=config, authorize_exec=authorize_exec,
+            config=validated_config, authorize_exec=authorize_exec,
             previous_run_id=previous_run_id, lock_timeout=lock_timeout,
+        )
+        if result.get("status") == "preview":
+            return result
+        return _dispatch_execute(
+            aperio_dir, result, adapter=adapter, adapter_id=adapter_id,
+            config=validated_config,
         )
     finally:
         release_lock(dispatch_lock_path(aperio_dir), dispatch_token)
 
 
-def _dispatch_under_dispatch_lock(
+def _dispatch_locked(
     aperio_dir: Path,
     task_id: str,
     *,
@@ -482,18 +503,28 @@ def _dispatch_under_dispatch_lock(
     previous_run_id: str | None,
     lock_timeout: float,
 ) -> dict:
+    """Run the eligibility + record-creation steps.
+
+    The dispatch lock is already held; the executions lock is acquired
+    alone. For local-process without authorization this returns a
+    read-only preview dict (``status: "preview"``) — no record, no
+    claim. Otherwise it creates the record and returns the dispatch
+    result for the execution step.
+    """
     executions_token = acquire_lock(
         executions_lock_path(aperio_dir),
         timeout=lock_timeout,
         artifact="execution records",
     )
     try:
+        path = executions_path(aperio_dir)
+        raw = _read_snapshot_bytes(path)
+        if raw is None:
+            document = {"schema_version": EXECUTIONS_SCHEMA_VERSION, "runs": []}
+        else:
+            document = parse_executions_snapshot(raw, path)
+        runs = document["runs"]
         plan = read_plan(aperio_dir)  # lockless read; full validation
-        runs = (
-            read_executions(aperio_dir)["runs"]
-            if read_executions(aperio_dir) is not None
-            else []
-        )
         active = _active_run_for_task(runs, task_id)
         eligibility = check_eligibility(plan, task_id, active)
         if not eligibility.eligible:
@@ -514,27 +545,74 @@ def _dispatch_under_dispatch_lock(
                 )
         run_id = _next_run_id(runs)
         claim_owner = f"{adapter_id}:{run_id}"
+
+        # Local-process without authorization: entirely read-only
+        # preview — no record, no claim, no process.
+        if adapter_id == LOCAL_PROCESS_ADAPTER_ID:
+            assert config is not None  # validated before the lock
+            if not authorize_exec:
+                return {
+                    "status": "preview",
+                    "task_id": task_id,
+                    "adapter_id": adapter_id,
+                    "plan_version": plan["plan_version"],
+                    "already_claimed": already_claimed,
+                    "note": (
+                        "read-only preparation: no run record was created "
+                        "and no process was started; re-run with "
+                        "--authorize-exec to execute"
+                    ),
+                    "command": {
+                        "executable": config["executable"],
+                        "args": config["args"],
+                        "working_dir": config.get("working_dir"),
+                        "timeout_seconds": config["timeout_seconds"],
+                        "env_policy": config["env_policy"],
+                    },
+                }
         record = _new_run_record(
             run_id=run_id,
             task_id=task_id,
             plan_version=plan["plan_version"],
             adapter_id=adapter_id,
             status="prepared",
-            owner=task["owner"] if already_claimed else claim_owner,
+            owner=claim_owner,
             previous_run_id=previous_run_id,
         )
-        document, snapshot = _snapshot_or_new(aperio_dir)
-        document["runs"].append(record)
-        _publish_executions(aperio_dir, document, snapshot)
+        runs.append(record)
+        # CAS semantics: snapshot is None only when the file did not
+        # exist (creation path); otherwise the compare protects against
+        # concurrent writers between the read and the publish.
+        _publish_executions(aperio_dir, document, raw)
     finally:
         release_lock(executions_lock_path(aperio_dir), executions_token)
+    return {
+        "run_id": run_id,
+        "claim_owner": claim_owner,
+        "already_claimed": already_claimed,
+        "adapter_id": adapter_id,
+        "task_id": task_id,
+        "config": config,
+    }
+
+
+def _dispatch_execute(
+    aperio_dir: Path, dispatch_result: dict, *, adapter, adapter_id: str,
+    config: dict | None = None,
+) -> dict:
+    """Claim, execute, and finalize after the record-creation step."""
+    run_id = dispatch_result["run_id"]
+    already_claimed = dispatch_result["already_claimed"]
+    task_id = dispatch_result["task_id"]
+    claim_owner = dispatch_result["claim_owner"]
 
     # Claim through the Feature-03 lifecycle API (never nested inside the
     # executions lock). A claim lost to a competing writer finalizes the
     # record as failed — never dangling.
     if not already_claimed:
         try:
-            update_phase_claim(aperio_dir, task_id, claim_owner)
+            update_task(aperio_dir, task_id, new_status="in-progress",
+                        owner=claim_owner)
         except AperioError as exc:
             _finalize_run(
                 aperio_dir, run_id,
@@ -544,7 +622,7 @@ def _dispatch_under_dispatch_lock(
                         "claim lost: the task could not be claimed (a "
                         "competing writer may have claimed or changed it)"
                     ),
-                    "diagnostics": sanitize_diagnostics(str(exc)),
+                    "diagnostics_note": sanitize_diagnostics(str(exc)),
                     "finished_at": utc_now_iso(),
                 },
                 status="failed",
@@ -562,29 +640,27 @@ def _dispatch_under_dispatch_lock(
         pid_holder["pid"] = pid
         _flip_to_running(aperio_dir, run_id, pid)
 
-    if adapter_id == LOCAL_PROCESS_ADAPTER_ID and not authorize_exec:
-        # Preparation mode: no process is ever started without the
-        # explicit authorization flag.
-        record = _finalize_run(
+    if adapter_id == MANUAL_ADAPTER_ID:
+        result = adapter.start(
+            run_id=run_id, aperio_dir=aperio_dir,
+            task=_task_from_plan(aperio_dir, task_id), config=None,
+        )
+        return _finalize_run(
             aperio_dir, run_id,
             updates={
-                "outcome": (
-                    "preparation only: no --authorize-exec, so no process "
-                    "was started; re-run with --authorize-exec to execute"
-                ),
-                "finished_at": utc_now_iso(),
+                "status": "awaiting-external",
+                "outcome": result.get("outcome"),
+                "handoff_ref": result.get("handoff_ref"),
+                "finished_at": None,
             },
-            status="prepared",
+            status="awaiting-external",
         )
-        return record
 
     try:
         result = adapter.start(
-            run_id=run_id,
-            aperio_dir=aperio_dir,
-            task=_task_from_plan(aperio_dir, task_id),
-            config=config,
-            on_running=on_running if adapter_id == LOCAL_PROCESS_ADAPTER_ID else None,
+            run_id=run_id, aperio_dir=aperio_dir,
+            task=_task_from_plan(aperio_dir, task_id), config=config,
+            on_running=on_running,
         )
     except KeyboardInterrupt:
         if "pid" in pid_holder:
@@ -608,25 +684,12 @@ def _dispatch_under_dispatch_lock(
             updates={
                 "status": "failed",
                 "outcome": f"execution error: {exc}",
-                "diagnostics": sanitize_diagnostics(str(exc)),
+                "diagnostics_note": sanitize_diagnostics(str(exc)),
                 "finished_at": utc_now_iso(),
             },
             status="failed",
         )
         raise
-
-    if adapter_id == MANUAL_ADAPTER_ID:
-        _finalize_run(
-            aperio_dir, run_id,
-            updates={
-                "status": "awaiting-external",
-                "outcome": result.get("outcome"),
-                "handoff_path": result.get("handoff_path"),
-                "finished_at": None,
-            },
-            status="awaiting-external",
-        )
-        return _get_run(aperio_dir, run_id)
 
     status = (
         "completed"
@@ -640,13 +703,63 @@ def _dispatch_under_dispatch_lock(
             "machine": machine_token(),
             "outcome": result.get("outcome"),
             "exit_code": result.get("exit_code"),
-            "diagnostics": result.get("diagnostics"),
             "output_truncated": result.get("output_truncated"),
-            "local_log": result.get("local_log"),
+            "local_log_ref": result.get("local_log_ref"),
             "finished_at": utc_now_iso(),
         },
         status=status,
     )
+
+
+def _flip_to_running(aperio_dir: Path, run_id: str, pid: int) -> None:
+    """CAS prepared → running, recording pid + machine in the same write.
+
+    Refuses (StateError) if the run was cancelled during startup — the
+    adapter contract then kills and reaps the child.
+    """
+    token = acquire_lock(
+        executions_lock_path(aperio_dir), timeout=5.0,
+        artifact="execution records",
+    )
+    try:
+        path = executions_path(aperio_dir)
+        snapshot = _read_snapshot_bytes(path)
+        document = (
+            parse_executions_snapshot(snapshot, path)
+            if snapshot is not None
+            else None
+        )
+        if document is None:
+            raise StateError(
+                f"execution records vanished at {path}; cannot start run "
+                f"{run_id}"
+            )
+        for run in document["runs"]:
+            if run["run_id"] != run_id:
+                continue
+            if run["status"] == "cancelled":
+                raise StateError(
+                    f"run {run_id} was cancelled during startup; the "
+                    "child process has been terminated"
+                )
+            if run["status"] != "prepared":
+                raise StateError(
+                    f"run {run_id} is {run['status']!r}, not prepared; "
+                    "cannot flip to running"
+                )
+            run["status"] = "running"
+            run["pid"] = pid
+            run["machine"] = machine_token()
+            _publish_executions(aperio_dir, document, snapshot)
+            return
+        raise StateError(f"run {run_id} vanished from {path}")
+    finally:
+        release_lock(executions_lock_path(aperio_dir), token)
+
+
+def update_phase_claim(aperio_dir: Path, task_id: str, owner: str) -> dict:
+    """Claim a pending task through the Feature-03 lifecycle API."""
+    return update_task(aperio_dir, task_id, new_status="in-progress", owner=owner)
 
 
 def _task_from_plan(aperio_dir: Path, task_id: str) -> dict:
@@ -718,57 +831,6 @@ def _get_run(aperio_dir: Path, run_id: str) -> dict:
     raise StateError(f"no run {run_id} in {executions_path(aperio_dir)}")
 
 
-def update_phase_claim(aperio_dir: Path, task_id: str, owner: str) -> dict:
-    """Claim a pending task through the Feature-03 lifecycle API."""
-    return update_task(aperio_dir, task_id, new_status="in-progress", owner=owner)
-
-
-def _flip_to_running(aperio_dir: Path, run_id: str, pid: int) -> None:
-    """CAS prepared → running, recording pid + machine in the same write.
-
-    Refuses (StateError) if the run was cancelled during startup — the
-    adapter contract then kills and reaps the child.
-    """
-    token = acquire_lock(
-        executions_lock_path(aperio_dir), timeout=5.0,
-        artifact="execution records",
-    )
-    try:
-        path = executions_path(aperio_dir)
-        snapshot = _read_snapshot_bytes(path)
-        document = (
-            parse_executions_snapshot(snapshot, path)
-            if snapshot is not None
-            else None
-        )
-        if document is None:
-            raise StateError(
-                f"execution records vanished at {path}; cannot start run "
-                f"{run_id}"
-            )
-        for run in document["runs"]:
-            if run["run_id"] != run_id:
-                continue
-            if run["status"] == "cancelled":
-                raise StateError(
-                    f"run {run_id} was cancelled during startup; the "
-                    "child process has been terminated"
-                )
-            if run["status"] != "prepared":
-                raise StateError(
-                    f"run {run_id} is {run['status']!r}, not prepared; "
-                    "cannot flip to running"
-                )
-            run["status"] = "running"
-            run["pid"] = pid
-            run["machine"] = machine_token()
-            _publish_executions(aperio_dir, document, snapshot)
-            return
-        raise StateError(f"run {run_id} vanished from {path}")
-    finally:
-        release_lock(executions_lock_path(aperio_dir), token)
-
-
 def runs_dispatch(
     aperio_dir: Path,
     *,
@@ -776,11 +838,12 @@ def runs_dispatch(
     config: dict | None,
     authorize_exec: bool,
     limit: int | None = None,
-    lock_timeout: float = 5.0,
+    dispatch_lock_timeout: float = 5.0,
 ) -> list[dict]:
     """Deterministic scheduler: dispatch eligible tasks in id order.
 
-    Holds ``dispatch.lock`` for the whole run; concurrent dispatch fails
+    Acquires ``dispatch.lock`` ONCE for the whole run and dispatches each
+    task through the lock-free internal path; concurrent dispatch fails
     fast (sequential same-workspace execution by design — non-overlapping
     scopes cannot be enforced, so parallelism is not offered in 0.4.0).
     Eligibility is re-evaluated per task inside the loop.
@@ -793,7 +856,7 @@ def runs_dispatch(
 
     dispatch_token = acquire_lock(
         dispatch_lock_path(aperio_dir),
-        timeout=lock_timeout,
+        timeout=dispatch_lock_timeout,
         artifact="dispatch",
     )
     dispatched: list[dict] = []
@@ -802,7 +865,9 @@ def runs_dispatch(
             if limit is not None and len(dispatched) >= limit:
                 break
             plan = read_plan(aperio_dir)
-            eligible = _eligible_task_ids(aperio_dir, plan)
+            executions = read_executions(aperio_dir)
+            runs = executions["runs"] if executions is not None else []
+            eligible = _eligible_task_ids(plan, runs)
             remaining = [
                 task_id for task_id in eligible
                 if task_id not in {r["task_id"] for r in dispatched}
@@ -810,12 +875,17 @@ def runs_dispatch(
             if not remaining:
                 break
             task_id = remaining[0]
+            validated_config = adapter.validate_config(config, aperio_dir)
+            record = _dispatch_locked(
+                aperio_dir, task_id, adapter=adapter, adapter_id=adapter_id,
+                config=validated_config,
+                authorize_exec=authorize_exec, previous_run_id=None,
+                lock_timeout=LOCK_TIMEOUT_SECONDS,
+            )
             dispatched.append(
-                dispatch_task(
-                    aperio_dir, task_id,
-                    adapter_id=adapter_id, config=config,
-                    authorize_exec=authorize_exec,
-                    lock_timeout=lock_timeout,
+                _dispatch_execute(
+                    aperio_dir, record, adapter=adapter,
+                    adapter_id=adapter_id, config=validated_config,
                 )
             )
     finally:
@@ -823,9 +893,7 @@ def runs_dispatch(
     return dispatched
 
 
-def _eligible_task_ids(aperio_dir: Path, plan: dict) -> list[str]:
-    executions = read_executions(aperio_dir)
-    runs = executions["runs"] if executions is not None else []
+def _eligible_task_ids(plan: dict, runs: list[dict]) -> list[str]:
     eligible = []
     for task in sorted(plan["tasks"], key=lambda t: t["id"]):
         active = _active_run_for_task(runs, task["id"])
@@ -927,7 +995,9 @@ def record_external_result(
     ``result`` requires ``outcome_reported`` (non-empty string) and
     ``success_reported`` (boolean); optional ``diagnostics``. Reporting
     is attribution only — it NEVER completes the task or substitutes for
-    Feature-03 verification.
+    Feature-03 verification. Reported diagnostics are treated as
+    untrusted: they are stored machine-locally (never in the shareable
+    record) and only a neutral note enters the portable record.
     """
     if not isinstance(result, dict):
         raise ValidationError("run-report: result must be a JSON object")
@@ -955,6 +1025,7 @@ def record_external_result(
         raise ValidationError(
             "run-report: field 'diagnostics' must be a string when given"
         )
+
     token = acquire_lock(
         executions_lock_path(aperio_dir), timeout=5.0,
         artifact="execution records",
@@ -980,16 +1051,23 @@ def record_external_result(
                     "'awaiting-external'; external results can only be "
                     "recorded on manual handoff runs"
                 )
-            run["status"] = (
-                "completed" if success else "failed"
-            )
+            if diagnostics is not None and diagnostics.strip():
+                # Untrusted external text: stored machine-locally only.
+                local_log = aperio_dir / "local/runs" / f"{run_id}.log"
+                local_log.parent.mkdir(parents=True, exist_ok=True)
+                with local_log.open("a", encoding="utf-8") as fh:
+                    fh.write(
+                        f"[run-report diagnostics]\n{diagnostics.strip()}\n"
+                    )
+                run["diagnostics_note"] = (
+                    "external diagnostics stored machine-locally "
+                    f"({len(diagnostics)} chars)"
+                )
+            run["status"] = "completed" if success else "failed"
             run["outcome"] = (
                 "external agent reported "
                 + ("success" if success else "failure")
                 + f": {outcome.strip()}"
-            )
-            run["diagnostics"] = (
-                sanitize_diagnostics(diagnostics) if diagnostics else None
             )
             run["finished_at"] = utc_now_iso()
             _publish_executions(aperio_dir, document, snapshot)
@@ -1146,11 +1224,11 @@ def execution_summary(aperio_dir: Path) -> dict | None:
             f"{path} is corrupt (invalid JSON at line {exc.lineno}: "
             f"{exc.msg}); aperio will not overwrite it."
         ) from None
-    schema_version = data.get("schema_version") if isinstance(data, dict) else None
     if not isinstance(data, dict):
         raise StateError(
             f"{path} is corrupt: execution records must be a JSON object"
         )
+    schema_version = data.get("schema_version")
     if (
         isinstance(schema_version, int)
         and not isinstance(schema_version, bool)
@@ -1197,21 +1275,10 @@ def execution_summary(aperio_dir: Path) -> dict | None:
     }
 
 
-def read_executions_or_fail(aperio_dir: Path) -> dict:
-    """Read executions or raise a clear 'no runs' StateError."""
-    document = read_executions(aperio_dir)
-    if document is None:
-        raise StateError(
-            f"no execution records at {executions_path(aperio_dir)} "
-            "(no run has ever been dispatched)"
-        )
-    return document
-
-
 def execution_preview(
     aperio_dir: Path, task_id: str, *, adapter_id: str, config: dict | None
 ) -> dict:
-    """Deterministic, side-effect-free execution preview."""
+    """Deterministic, side-effect-free execution preview (JSON-safe)."""
     adapter = get_adapter(adapter_id)
     require_supported_state(aperio_dir)
     plan = read_plan(aperio_dir)
@@ -1219,7 +1286,7 @@ def execution_preview(
     runs = executions["runs"] if executions is not None else []
     active = _active_run_for_task(runs, task_id)
     eligibility = check_eligibility(plan, task_id, active)
-    preview: dict = {
+    preview = {
         "task_id": task_id,
         "adapter_id": adapter_id,
         "eligible": eligibility.eligible,
@@ -1230,5 +1297,7 @@ def execution_preview(
     }
     if eligibility.eligible:
         task = next(t for t in plan["tasks"] if t["id"] == task_id)
-        preview.update(adapter.preview(task=task, config=config, aperio_dir=aperio_dir))
+        preview.update(
+            adapter.preview(task=task, config=config, aperio_dir=aperio_dir)
+        )
     return preview

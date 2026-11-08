@@ -209,14 +209,20 @@ def test_run_report_strict_validation(run_cli, project_dir, tmp_path):
 def test_local_process_requires_authorization(run_cli, project_dir, tmp_path):
     _prepared_project(run_cli, project_dir)
     aperio_dir = project_dir / ".aperio"
-    config = _write_config(tmp_path, "cfg.json", _local_config(
-        tmp_path, project_dir=project_dir, script="print('hello')"))
-    record = dispatch_task(aperio_dir, "TASK-001", adapter_id="local-process",
+    # Unauthorized local-process dispatch is an entirely read-only
+    # preview: no record, no claim, no process (Fix 2).
+    config = _local_config(tmp_path, project_dir=project_dir,
+                           script="print('hello')")
+    result = dispatch_task(aperio_dir, "TASK-001", adapter_id="local-process",
                            config=config, authorize_exec=False)
-    assert record["status"] == "prepared"  # preparation only
-    assert record["outcome"] and "no --authorize-exec" in record["outcome"]
-    # No local log: nothing executed.
-    assert (aprio := project_dir / ".aperio/local/runs").exists() is False
+    assert result["status"] == "preview"
+    assert read_executions(aperio_dir) is None  # no record created
+    assert not (aprio := project_dir / ".aperio/local/runs").exists()
+    # The task remains eligible: a later authorized run works.
+    record = dispatch_task(aperio_dir, "TASK-001", adapter_id="local-process",
+                           config=config, authorize_exec=True)
+    assert record["run_id"] == "RUN-0001"  # first real run
+    assert record["status"] == "completed"
 
 
 def test_local_process_execution_success(run_cli, project_dir, tmp_path):
@@ -228,12 +234,12 @@ def test_local_process_execution_success(run_cli, project_dir, tmp_path):
                            config=config, authorize_exec=True)
     assert record["status"] == "completed"
     assert record["exit_code"] == 0
-    assert "hello from child" in record["diagnostics"]
-    # Raw output mirrored under local/runs/ (machine-local).
+    # Privacy boundary: raw child output stays machine-locally; the
+    # shareable record carries only neutral metadata.
+    assert "hello from child" not in json.dumps(record)
     log = project_dir / ".aperio/local/runs/RUN-0001.log"
     assert log.is_file() and b"hello from child" in log.read_bytes()
-    # ...but the shareable record keeps only the sanitized tail.
-    assert record["diagnostics"].count("hello from child") >= 1
+    assert record["local_log_ref"] == "local/runs/RUN-0001.log"
     # ...and the TASK is still in-progress: execution != verification.
     plan = json.loads((aprio := aperio_dir / "plan.json").read_text())
     assert plan["tasks"][0]["status"] == "in-progress"
@@ -249,7 +255,10 @@ def test_local_process_nonzero_exit_fails_run(run_cli, project_dir, tmp_path):
                            config=config, authorize_exec=True)
     assert record["status"] == "failed"
     assert record["exit_code"] == 3
-    assert "boom" in record["diagnostics"]
+    assert "boom" not in json.dumps(record)  # output stays local
+    log = project_dir / ".aperio/local/runs/RUN-0001.log"
+    assert b"boom" in log.read_bytes()
+    assert record.get("local_log_ref") == "local/runs/RUN-0001.log"
 
 
 def test_local_process_timeout_kills_child(run_cli, project_dir, tmp_path):
@@ -308,10 +317,13 @@ def test_local_process_env_minimal(run_cli, project_dir, tmp_path):
         tmp_path, project_dir=project_dir, script=script)
     record = dispatch_task(aperio_dir, "TASK-001", adapter_id="local-process",
                            config=config, authorize_exec=True)
-    child_env = json.loads(record["diagnostics"].split("[stdout tail]\n")[-1]
-                           .split("[stderr tail]")[0].strip())
+    # Child env output is machine-local only; read it from the local log.
+    log = project_dir / ".aperio/local/runs/RUN-0001.log"
+    child_env = json.loads(log.read_text().strip())
     assert child_env["APERIO_SECRET_TEST"] is None  # minimal env: not passed
     assert child_env["PATH"]  # lookup vars are present
+    # And the shareable record carries no child output.
+    assert "APERIO_SECRET_TEST" not in json.dumps(record)
 
 
 def test_working_dir_outside_project_refused(run_cli, project_dir, tmp_path):
@@ -660,7 +672,7 @@ def test_memory_execution_summary_additive(run_cli, project_dir):
     summary = execution_summary(aperio_dir)
     assert summary["present"] is True
     assert summary["active_runs"][0]["run_id"] == "RUN-0001"
-    assert summary["recovery_required"] is False
+    assert summary["recovery_required"] is False  # awaiting-external is normal
 
 
 def test_memory_without_executions_is_null(run_cli, project_dir):
@@ -701,15 +713,60 @@ def test_cli_agent_list_and_run_flow(run_cli, project_dir, tmp_path):
     assert len(json.loads(out)) == 1
 
 
-def test_cli_run_start_without_authorization_is_preparation(
+def test_cli_run_start_without_authorization_is_read_only(
     run_cli, project_dir, tmp_path
 ):
+    """run-start without --authorize-exec is an entirely read-only
+    preview: no record, no claim, no process; a later authorized run
+    works normally (nothing was blocked)."""
     _prepared_project(run_cli, project_dir)
     config = _write_json(tmp_path, "cfg.json", _local_config(
         tmp_path, project_dir=project_dir, script="print('x')"))
     code, out, err = run_cli("run-start", str(project_dir), "TASK-001",
                              "--agent", "local-process", "--config", config)
     assert code == 0, err
-    record = read_executions(project_dir / ".aperio")["runs"][0]
-    assert record["status"] == "prepared"
+    assert read_executions(project_dir / ".aperio") is None
     assert not (project_dir / ".aperio/local/runs").exists()
+    code, out, err = run_cli("run-start", str(project_dir), "TASK-001",
+                             "--agent", "local-process", "--config", config,
+                             "--authorize-exec")
+    assert code == 0, err
+    assert "completed" in out
+
+
+
+def test_secrets_from_child_output_stay_local(run_cli, project_dir, tmp_path):
+    """Synthetic credentials printed by a child process must never enter
+    the shareable execution record or the portable memory JSON — the
+    privacy boundary stores raw output machine-locally only."""
+    _prepared_project(run_cli, project_dir)
+    aperio_dir = project_dir / ".aperio"
+    script = (
+        "import json, sys;"
+        "print(json.dumps({"
+        "'api_key': 'ghp_AAAABBBBCCCCDDDDEEEEFFFFGGGG1234',"
+        "'password': 'hunter2-super-secret',"
+        "'token': 'AKIAIOSFODNN7EXAMPLE',"
+        "'private_path': '/Users/someone/.ssh/id_rsa',"
+        "'env_secret': 'very-secret-env-value',"
+        "}))"
+    )
+    config = _local_config(
+        tmp_path, project_dir=project_dir, script=script)
+    record = dispatch_task(aperio_dir, "TASK-001", adapter_id="local-process",
+                           config=config, authorize_exec=True)
+    assert record["status"] == "completed"
+    record_text = json.dumps(record)
+    for secret in ("ghp_AAAABBBB", "hunter2-super-secret",
+                   "AKIAIOSFODNN7EXAMPLE", "/Users/someone/.ssh",
+                   "very-secret-env-value"):
+        assert secret not in record_text, f"secret {secret!r} leaked into record"
+    # The raw output IS in the machine-local log (by design).
+    log = project_dir / ".aperio/local/runs/RUN-0001.log"
+    assert b"ghp_AAAABBBB" in log.read_bytes()
+    # The shareable record has the neutral metadata instead.
+    assert record["output_truncated"] is not None
+    assert record["local_log_ref"] == "local/runs/RUN-0001.log"
+    # Memory JSON also stays clean.
+    summary = execution_summary(aperio_dir)
+    assert "ghp_AAAABBBB" not in json.dumps(summary)

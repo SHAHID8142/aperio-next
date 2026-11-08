@@ -397,7 +397,9 @@ Built-in adapters:
   capture drained by reader threads with a full machine-local mirror
   under `.aperio/local/runs/`, hard timeout (SIGTERM → 5 s → SIGKILL;
   Windows: TerminateProcess), stdin DEVNULL, child always reaped, argv
-  NUL-rejected at validation.
+  NUL-rejected at validation. Without `--authorize-exec` the dispatch is
+  an entirely **read-only preview**: no record is created, the task is
+  never claimed, and no process is started.
 
 ### Execution records (`.aperio/executions.json`, exec-schema v1)
 

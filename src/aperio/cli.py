@@ -710,16 +710,29 @@ def _cmd_run_start(args) -> None:
     if args.as_json:
         print(json.dumps(record, indent=2, ensure_ascii=False))
         return
+    if record.get("status") == "preview":
+        print("read-only preparation (no --authorize-exec):")
+        command = record.get("command", {})
+        print(f"  task:      {record['task_id']}")
+        print(f"  adapter:   {record['adapter_id']}")
+        print(f"  executable: {command.get('executable')}")
+        for arg in command.get("args", []):
+            print(f"    arg: {arg}")
+        print(f"  working_dir: {command.get('working_dir')}")
+        print(f"  timeout: {command.get('timeout_seconds')}s; "
+              f"env: {command.get('env_policy')}")
+        print("  re-run with --authorize-exec to execute")
+        return
     print(
         f"run {record['run_id']}: {record['status']} "
         f"(task {record['task_id']}, adapter {record['adapter_id']})"
     )
     if record.get("outcome"):
         print(f"  outcome: {record['outcome']}")
-    if record.get("handoff_path"):
-        print(f"  handoff: {record['handoff_path']}")
-    if record.get("local_log"):
-        print(f"  local log: {record['local_log']}")
+    if record.get("handoff_ref"):
+        print(f"  handoff: {APERIO_DIR_NAME}/{record['handoff_ref']}")
+    if record.get("local_log_ref"):
+        print(f"  local log: {APERIO_DIR_NAME}/{record['local_log_ref']}")
 
 
 def _cmd_run_status(args) -> None:

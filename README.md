@@ -95,6 +95,8 @@ aperio run-preview ./my-project TASK-001 --agent manual   # deterministic previe
 aperio run-start ./my-project TASK-001 --agent manual     # prepare handoff (never executes)
 aperio run-start ./my-project TASK-001 --agent local-process \
   --config .aperio/local/adapter.json --authorize-exec    # REAL subprocess (explicit consent)
+apero run-start ./my-project TASK-001 --agent local-process \
+  --config .aperio/local/adapter.json                    # read-only preview (no process)
 aperio run-status ./my-project RUN-0001 --json      # inspect one run
 aperio runs-list ./my-project --json                # execution history
 aperio run-cancel ./my-project RUN-0001 --reason "changed plan"

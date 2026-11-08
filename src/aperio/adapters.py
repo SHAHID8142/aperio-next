@@ -40,7 +40,7 @@ import subprocess
 import threading
 from pathlib import Path
 
-from aperio.errors import ValidationError
+from aperio.errors import PathError, ValidationError
 from aperio.inputs import check_no_foreign_line_separators
 
 MANUAL_ADAPTER_ID = "manual"
@@ -220,6 +220,14 @@ class AgentAdapter:
         """Environment-level capability check (never config-dependent)."""
         return True, ""
 
+    def validate_config(self, config: dict | None, aperio_dir: Path) -> dict | None:
+        """Validate adapter config BEFORE any persistent mutation.
+
+        Runs before locks, records, and claims: an invalid config must
+        never leave an orphaned task claim or a partial record.
+        """
+        raise NotImplementedError
+
     def preview(self, *, task: dict, config: dict | None, aperio_dir: Path) -> dict:
         """Deterministic, side-effect-free execution preview."""
         raise NotImplementedError
@@ -262,6 +270,13 @@ class ManualHandoffAdapter(AgentAdapter):
     def available(self) -> tuple[bool, str]:
         return True, ""
 
+    def validate_config(self, config: dict | None, aperio_dir: Path) -> None:
+        if config is not None:
+            raise ValidationError(
+                "manual adapter takes no config file; use the plan's task "
+                "content as the handoff context"
+            )
+
     def preview(self, *, task: dict, config: dict | None, aperio_dir: Path) -> dict:
         return {
             "adapter_id": self.id,
@@ -285,18 +300,25 @@ class ManualHandoffAdapter(AgentAdapter):
     ) -> dict:
         handoff_path = runs_dir(aperio_dir) / f"{run_id}.handoff.md"
         handoff_path.parent.mkdir(parents=True, exist_ok=True)
-        if handoff_path.exists() or handoff_path.is_symlink():
+        if handoff_path.is_symlink():
+            raise PathError(
+                f"refusing to follow symlink at {handoff_path}; "
+                "remove it and re-run 'aperio init' to repair"
+            )
+        if handoff_path.exists():
             raise ValidationError(
                 f"run handoff already exists at {handoff_path}; "
                 "refusing to overwrite it"
             )
         document = render_run_handoff(run_id=run_id, task=task)
-        handoff_path.write_text(document, encoding="utf-8")
+        # Exclusive creation: a file that raced in is never truncated.
+        fd = os.open(handoff_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(document)
         return {
             "outcome": "manual handoff prepared; awaiting external agent",
             "exit_code": None,
-            "diagnostics": f"handoff document written: {handoff_path.name}",
-            "handoff_path": str(handoff_path),
+            "handoff_ref": f"{RUNS_DIR_NAME}/{run_id}.handoff.md",
         }
 
 
@@ -362,7 +384,11 @@ class LocalProcessAdapter(AgentAdapter):
     def available(self) -> tuple[bool, str]:
         return True, ""
 
-    def _validate_config(self, config: dict | None, aperio_dir: Path) -> dict:
+    def validate_config(self, config: dict | None, aperio_dir: Path) -> dict:
+        """Validate config (and the working-directory boundary) BEFORE
+        any persistent mutation."""
+        import sys as _sys
+        print(f"DEBUG validate_config: config={config!r} type={type(config)}", file=_sys.stderr)
         if config is None:
             raise ValidationError(
                 "local-process adapter requires a config file "
@@ -370,7 +396,12 @@ class LocalProcessAdapter(AgentAdapter):
                 "it is machine-specific and never persisted into "
                 "shareable records"
             )
-        return validate_adapter_config(config)
+        validated = validate_adapter_config(config)
+        self._resolve_working_dir(validated, aperio_dir)
+        return validated
+
+    def _validate_config(self, config: dict | None, aperio_dir: Path) -> dict:
+        return self.validate_config(config, aperio_dir)
 
     def _resolve_working_dir(self, config: dict, aperio_dir: Path) -> Path:
         raw = config.get("working_dir")
@@ -432,10 +463,24 @@ class LocalProcessAdapter(AgentAdapter):
         argv = [validated["executable"], *validated["args"]]
         local_log = local_runs_dir(aperio_dir) / f"{run_id}.log"
         local_log.parent.mkdir(parents=True, exist_ok=True)
+        if os.path.islink(local_log):
+            raise PathError(
+                f"refusing to follow symlink at {local_log}; "
+                "remove it and re-run the command to repair"
+            )
+        if local_log.exists():
+            raise StateError(
+                f"a local output log already exists at {local_log}; run "
+                "ids are unique, so this is a leftover from an older "
+                "aperio version — remove it manually if it is not needed"
+            )
         try:
-            mirror_handle = open(local_log, "ab")
-        except OSError:
-            mirror_handle = None  # mirroring is best-effort
+            mirror_handle = open(local_log, "xb")
+        except OSError as exc:
+            raise StateError(
+                f"cannot create local output log {local_log}: "
+                f"{exc.strerror or exc}; nothing was executed"
+            ) from None
 
         stdout_tail, stderr_tail, truncated = {"text": "", "bytes": 0}, {
             "text": "",
@@ -526,22 +571,21 @@ class LocalProcessAdapter(AgentAdapter):
             if timed_out
             else f"adapter finished (exit {exit_code})"
         )
-        combined = (
-            f"[stdout tail]\n{stdout_tail['text'].strip()}\n"
-            f"[stderr tail]\n{stderr_tail['text'].strip()}".strip()
-        )
+        # Privacy boundary: raw output stays in the machine-local log;
+        # the shareable record carries only neutral metadata.
         return {
             "outcome": outcome,
             "exit_code": exit_code,
             "timed_out": timed_out,
-            "diagnostics": sanitize_diagnostics(
-                combined or "(no output captured)"
-            ),
             "output_truncated": {
                 "stdout": stdout_tail["bytes"] > MAX_CAPTURE_BYTES,
                 "stderr": stderr_tail["bytes"] > MAX_CAPTURE_BYTES,
             },
-            "local_log": str(local_log),
+            "output_bytes": {
+                "stdout": stdout_tail["bytes"],
+                "stderr": stderr_tail["bytes"],
+            },
+            "local_log_ref": f"{LOCAL_RUNS_DIR_NAME}/{run_id}.log",
             "pid": pid,
         }
 
