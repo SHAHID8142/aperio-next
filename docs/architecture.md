@@ -480,6 +480,69 @@ explicit: fix the obstruction and dispatch again, or
 A failure after the child process was created keeps the claim for an
 explicit retry/verification decision (work may have run).
 
+## Workflow roles, policy and review gates (Feature 06)
+
+**Opt-in boundary.** Governance exists only when `.aperio/policies.json`
+is present with ``enabled: true``. Projects without it keep every
+Feature 01–05 behavior and API signature; new ``actor`` parameters are
+optional keyword arguments that are ignored when governance is off. There
+is no implicit migration or silent policy adoption.
+
+**Schema (v1).** ``policies.json`` records ``policy_version``, the three
+built-in roles with their permitted action subsets, the actor→role
+mapping, append-only ``actor_history`` entries for role changes, and
+declarative separation/review flags. Unknown top-level keys are preserved
+on rewrite; a newer schema is refused rather than interpreted.
+
+**Roles are responsibilities.** ``planner`` creates/revises plans and may
+approve revisions they did not author; ``implementer`` claims tasks,
+dispatches runs, submits reviews, and applies approved completion;
+``reviewer`` approves plans and decides reviews. A caller can never pass a
+role: every governed action looks the actor up in the configured mapping
+and checks the action against that role's permitted list. Unknown/missing
+actors are errors with actionable text.
+
+**Enforcement boundaries (Python, not CLI parsing).** ``create_plan``,
+``revise_plan``, ``approve_plan``, ``update_task`` (claim/status/
+completion), ``dispatch_task`` and ``runs_dispatch``, review submission
+and decision. ``--authorize-exec`` remains an independent human
+authorization for local-process execution; a policy approval never
+authorizes subprocess execution.
+
+**Separation of duties.** The audit log records the declared author of
+every plan revision; approval refuses that actor. A reviewer may not
+decide their own submission (re-checked at decision time, so later role
+changes cannot launder it). Completion requires recorded verification
+evidence *and* an approved review for the task at the current material
+revision (``approval.approved_revision``). A material revision resets
+approval and invalidates prior reviews; a review decision is re-checked
+against the current approved revision and refused as stale otherwise.
+Decided reviews are immutable; new work gets a new ``REV-NNNN`` record.
+
+**Actors are declarations.** ``--actor`` is workflow attribution only.
+Aperio enforces consistency for declared ids; genuine authentication,
+identity verification, and sandboxing are outside this feature and are
+never implied. The audit log stores actor, role, action, target, revision,
+timestamp, outcome, and review id — never argv, environment, raw external
+diagnostics, or paths.
+
+**Artifacts.** ``reviews.json`` is append-only with schema v1; duplicate
+review ids are rejected under ``reviews.lock``. ``policy-audit.json`` is an
+append-only event log. All three files are portable (Feature 05
+whitelist), validated on import (future schemas refused, reviews without
+policy or with orphaned task targets refused), and checked by
+``aperio integrity``. Export takes the same writer locks, now ordered
+``import → dispatch → plan → executions → state → handoff → decisions →
+reviews → policy``; policy mutations take ``policy.lock`` alone and review
+mutations take ``reviews.lock`` then (for audit append) ``policy.lock``, so
+the fixed order has no cycle.
+
+**Recovery.** All writes are temporary-file + ``os.replace`` with
+snapshot compare-and-swap under the relevant lock; interrupted writes leave
+a reserved ``.tmp`` file that is reported (never stolen or silently
+removed). Duplicate review ids and conflicting decisions are impossible by
+construction.
+
 ## Portable export, import and integrity (Feature 05)
 
 **Archive contract (format v1).** One ZIP file, deterministic entry order

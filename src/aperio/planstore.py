@@ -46,6 +46,12 @@ from aperio import __version__
 from aperio.errors import NotInitializedError, PathError, StateError, ValidationError
 from aperio.inputs import check_no_foreign_line_separators
 from aperio.locks import LOCK_TIMEOUT_SECONDS, acquire_lock, release_lock
+from aperio.policy import (
+    append_event as _policy_event,
+    latest_plan_author,
+    load_policy,
+    require_action,
+)
 from aperio.planmodel import (
     PLAN_SCHEMA_VERSION,
     TASK_SYSTEM_KEYS,
@@ -392,7 +398,9 @@ def _carry_lifecycle(
 # --- operations -----------------------------------------------------------------
 
 
-def create_plan(aperio_dir: Path, content: dict) -> dict:
+def create_plan(
+    aperio_dir: Path, content: dict, *, actor: str | None = None
+) -> dict:
     """Create the plan (create-only). Every task starts pending with no
     lifecycle history; the plan starts at revision 1, status draft.
 
@@ -400,6 +408,9 @@ def create_plan(aperio_dir: Path, content: dict) -> dict:
     :raises StateError: when a plan already exists (use plan-revise).
     """
     require_supported_state(aperio_dir)
+    role = require_action(
+        aperio_dir, actor, "plan.create", target="plan", revision=None
+    )
     path = plan_path(aperio_dir)
     tmp = aperio_dir / PLAN_TMP_NAME
     if os.path.islink(path):
@@ -456,6 +467,16 @@ def create_plan(aperio_dir: Path, content: dict) -> dict:
         os.unlink(tmp)
     except OSError:
         pass  # leftover is a user-resolved conflict
+    if role is not None:
+        _policy_event(
+            aperio_dir,
+            actor=actor,
+            role=role,
+            action="plan.create",
+            target="plan",
+            revision=document["plan_version"],
+            outcome="created",
+        )
     return document
 
 
@@ -498,7 +519,13 @@ def _mutate_under_lock(
         release_lock(lock_path, token)
 
 
-def revise_plan(aperio_dir: Path, content: dict, revises: int) -> dict:
+def revise_plan(
+    aperio_dir: Path,
+    content: dict,
+    revises: int,
+    *,
+    actor: str | None = None,
+) -> dict:
     """Replace the plan content with a new draft revision.
 
     ``revises`` must equal the current ``plan_version`` (stale → conflict).
@@ -513,6 +540,10 @@ def revise_plan(aperio_dir: Path, content: dict, revises: int) -> dict:
             "(the plan_version you are revising; see 'aperio plan-show')"
         )
     plan_content = validate_plan_input(content)
+    require_supported_state(aperio_dir)
+    role = require_action(
+        aperio_dir, actor, "plan.revise", target="plan", revision=revises
+    )
 
     def mutate(snapshot: dict):
         current_version = snapshot["plan_version"]
@@ -536,12 +567,28 @@ def revise_plan(aperio_dir: Path, content: dict, revises: int) -> dict:
         new_document["approval"] = _empty_approval()
         return new_document, True
 
-    document, _ = _mutate_under_lock(aperio_dir, "plan revision", mutate, LOCK_TIMEOUT_SECONDS)
+    document, _ = _mutate_under_lock(
+        aperio_dir, "plan revision", mutate, LOCK_TIMEOUT_SECONDS
+    )
+    if role is not None:
+        _policy_event(
+            aperio_dir,
+            actor=actor,
+            role=role,
+            action="plan.revise",
+            target="plan",
+            revision=document["plan_version"],
+            outcome="revised",
+        )
     return document
 
 
 def approve_plan(
-    aperio_dir: Path, revision: int | None = None, by: str | None = None
+    aperio_dir: Path,
+    revision: int | None = None,
+    by: str | None = None,
+    *,
+    actor: str | None = None,
 ) -> dict:
     """Record plan approval.
 
@@ -569,6 +616,16 @@ def approve_plan(
         if "\n" in approved_by:
             raise ValidationError("plan-approve: --by must be a single line")
 
+    require_supported_state(aperio_dir)
+    role = require_action(
+        aperio_dir, actor, "plan.approve", target="plan", revision=revision
+    )
+    governed_author = (
+        latest_plan_author(aperio_dir, revision)
+        if role is not None and revision is not None
+        else None
+    )
+
     def mutate(snapshot: dict):
         current_version = snapshot["plan_version"]
         if revision is not None and revision != current_version:
@@ -577,16 +634,41 @@ def approve_plan(
                 f"but approval was requested for revision {revision}. "
                 "Nothing was modified."
             )
+        if role is not None:
+            author = latest_plan_author(aperio_dir, current_version)
+            if author is not None and author == actor:
+                raise StateError(
+                    f"separation of duties: actor {actor!r} authored plan "
+                    f"revision {current_version} and cannot approve it. Have "
+                    "an independent declared planner or reviewer approve this "
+                    "revision. Nothing was modified."
+                )
         new_document = dict(snapshot)
         new_document["approval"] = {
             "status": "approved",
             "approved_revision": current_version,
             "approved_at": utc_now_iso(),
-            "approved_by": approved_by,
+            "approved_by": (actor if role is not None else approved_by),
         }
         return new_document, True
 
-    document, _ = _mutate_under_lock(aperio_dir, "plan approval", mutate, LOCK_TIMEOUT_SECONDS)
+    document, _ = _mutate_under_lock(
+        aperio_dir, "plan approval", mutate, LOCK_TIMEOUT_SECONDS
+    )
+    if role is not None:
+        _policy_event(
+            aperio_dir,
+            actor=actor,
+            role=role,
+            action="plan.approve",
+            target="plan",
+            revision=document["plan_version"],
+            outcome="approved",
+            note=(
+                "author differs" if governed_author != actor
+                else "author unknown"
+            ),
+        )
     return document
 
 
@@ -601,6 +683,8 @@ def update_task(
     limitations: str | None = None,
     result: str | None = None,
     reopen: bool = False,
+    actor: str | None = None,
+    system: bool = False,
     lock_timeout: float = LOCK_TIMEOUT_SECONDS,
 ) -> dict:
     """Perform one validated task-status transition (execution tracking).
@@ -615,6 +699,17 @@ def update_task(
     if not isinstance(task_id, str) or not task_id.strip():
         raise ValidationError("task-status: a task id is required")
     task_id = task_id.strip()
+    require_supported_state(aperio_dir)
+    policy = load_policy(aperio_dir)
+    role = None
+    if policy is not None and not system:
+        action = "task.claim" if new_status == "in-progress" else "task.status"
+        role = require_action(
+            aperio_dir, actor, action, target=f"task:{task_id}"
+        )
+    elif policy is not None and system:
+        role = "implementer"
+        actor = "system"
     owner = _check_single_line_payload("owner", owner)
     reason = _check_payload_text("reason", reason)
     evidence = _check_payload_text("evidence", evidence)
@@ -646,12 +741,34 @@ def update_task(
         if new_status == "in-progress" and task["status"] == "completed":
             # Explicit reopen: refuse while dependents rely on completion.
             check_reopen_allowed(snapshot, task_id)
+        if policy is not None and not system:
+            if (
+                task.get("owner")
+                and new_status in ("in-progress", "completed")
+                and task["owner"] != actor
+            ):
+                raise StateError(
+                    f"task {task_id} is owned by {task['owner']!r}; declared "
+                    f"actor {actor!r} cannot act on it. Claim or assignment "
+                    "must be explicit (separation of duties). Nothing was "
+                    "modified."
+                )
+            if new_status == "completed":
+                from aperio.reviews import review_requirement
+
+                review_requirement(
+                    aperio_dir,
+                    task_id,
+                    snapshot["approval"].get("approved_revision"),
+                )
         updated = dict(task)
         if new_status == "in-progress":
             updated["status"] = "in-progress"
             if task["status"] == "pending":
                 # Fresh claim: the claiming agent takes ownership.
-                updated["owner"] = (owner or "").strip() or None
+                updated["owner"] = (
+                    actor if policy is not None else None
+                ) or (owner or "").strip() or None
             elif task["status"] == "completed":
                 # Reopen: clear the verification block (durable history
                 # belongs in the decision log); the new owner takes over.
@@ -699,8 +816,21 @@ def update_task(
         new_document["plan_version"] = snapshot["plan_version"] + 1
         return new_document, True
 
-    document, _ = _mutate_under_lock(aperio_dir, "task update", mutate, lock_timeout)
-    return next(t for t in document["tasks"] if t["id"] == task_id)
+    document, _ = _mutate_under_lock(
+        aperio_dir, "task update", mutate, lock_timeout
+    )
+    updated_task = next(t for t in document["tasks"] if t["id"] == task_id)
+    if role is not None:
+        _policy_event(
+            aperio_dir,
+            actor=actor,
+            role=role,
+            action="task.status",
+            target=f"task:{task_id}",
+            revision=document["plan_version"],
+            outcome=updated_task["status"],
+        )
+    return updated_task
 
 
 def plan_summary(aperio_dir: Path) -> dict | None:

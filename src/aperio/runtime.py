@@ -67,6 +67,8 @@ from aperio.errors import (
     ValidationError,
 )
 from aperio.locks import LOCK_TIMEOUT_SECONDS, acquire_lock, release_lock
+from aperio.policy import append_event as _policy_event
+from aperio.policy import load_policy, require_action
 from aperio.planstore import read_plan, update_task
 from aperio.project import require_supported_state
 from aperio.schema import utc_now_iso
@@ -449,6 +451,7 @@ def dispatch_task(
     config: dict | None,
     authorize_exec: bool,
     previous_run_id: str | None = None,
+    actor: str | None = None,
     dispatch_lock_timeout: float = 5.0,
     lock_timeout: float = LOCK_TIMEOUT_SECONDS,
 ) -> dict:
@@ -474,6 +477,11 @@ def dispatch_task(
     if not available:
         raise StateError(f"adapter {adapter_id!r} is not available: {reason}")
     require_supported_state(aperio_dir)
+    policy_role = None
+    if load_policy(aperio_dir) is not None:
+        policy_role = require_action(
+            aperio_dir, actor, "execution.dispatch", target=f"task:{task_id}"
+        )
 
     # Config validation happens BEFORE any persistent mutation: an
     # invalid config must never leave an orphaned task claim or a
@@ -489,14 +497,27 @@ def dispatch_task(
         result = _dispatch_locked(
             aperio_dir, task_id, adapter=adapter, adapter_id=adapter_id,
             config=validated_config, authorize_exec=authorize_exec,
-            previous_run_id=previous_run_id, lock_timeout=lock_timeout,
+            previous_run_id=previous_run_id, actor=actor,
+            lock_timeout=lock_timeout,
         )
         if result.get("status") == "preview":
             return result
-        return _dispatch_execute(
+        record = _dispatch_execute(
             aperio_dir, result, adapter=adapter, adapter_id=adapter_id,
-            config=validated_config,
+            config=validated_config, actor=actor,
         )
+        if policy_role is not None:
+            _policy_event(
+                aperio_dir,
+                actor=actor,
+                role=policy_role,
+                action="execution.dispatch",
+                target=f"task:{task_id}",
+                revision=record.get("plan_version"),
+                outcome=str(record.get("status", "")),
+                note=f"run {record.get('run_id')}",
+            )
+        return record
     finally:
         release_lock(dispatch_lock_path(aperio_dir), dispatch_token)
 
@@ -510,6 +531,7 @@ def _dispatch_locked(
     config: dict | None,
     authorize_exec: bool,
     previous_run_id: str | None,
+    actor: str | None = None,
     lock_timeout: float,
 ) -> dict:
     """Run the eligibility + record-creation steps.
@@ -652,9 +674,11 @@ def _release_startup_claim(
     try:
         update_task(
             aperio_dir, task_id, new_status="blocked",
-            reason="dispatch failed before execution",
+            reason="dispatch failed before execution", system=True,
         )
-        update_task(aperio_dir, task_id, new_status="pending")
+        update_task(
+            aperio_dir, task_id, new_status="pending", system=True
+        )
     except AperioError:
         return "unverifiable", owner
     return "released", owner
@@ -769,7 +793,7 @@ def _with_note(exc: AperioError, note: str) -> AperioError:
 
 def _dispatch_execute(
     aperio_dir: Path, dispatch_result: dict, *, adapter, adapter_id: str,
-    config: dict | None = None,
+    config: dict | None = None, actor: str | None = None,
 ) -> dict:
     """Claim, execute, and finalize after the record-creation step."""
     run_id = dispatch_result["run_id"]
@@ -783,7 +807,7 @@ def _dispatch_execute(
     if not already_claimed:
         try:
             update_task(aperio_dir, task_id, new_status="in-progress",
-                        owner=claim_owner)
+                        owner=claim_owner, actor=actor)
         except AperioError as exc:
             _finalize_run(
                 aperio_dir, run_id,
@@ -1052,6 +1076,7 @@ def runs_dispatch(
     config: dict | None,
     authorize_exec: bool,
     limit: int | None = None,
+    actor: str | None = None,
     dispatch_lock_timeout: float = 5.0,
 ) -> list[dict]:
     """Deterministic scheduler: dispatch eligible tasks in id order.
@@ -1094,11 +1119,20 @@ def runs_dispatch(
             if not remaining:
                 break
             task_id = remaining[0]
+            policy_role = None
+            if load_policy(aperio_dir) is not None:
+                policy_role = require_action(
+                    aperio_dir,
+                    actor,
+                    "execution.dispatch",
+                    target=f"task:{task_id}",
+                )
             validated_config = adapter.validate_config(config, aperio_dir)
             record = _dispatch_locked(
                 aperio_dir, task_id, adapter=adapter, adapter_id=adapter_id,
                 config=validated_config,
                 authorize_exec=authorize_exec, previous_run_id=None,
+                actor=actor,
                 lock_timeout=LOCK_TIMEOUT_SECONDS,
             )
             if record.get("status") == "preview":
@@ -1107,12 +1141,23 @@ def runs_dispatch(
                 # preview data to the execution step.
                 dispatched.append(record)
                 continue
-            dispatched.append(
-                _dispatch_execute(
-                    aperio_dir, record, adapter=adapter,
-                    adapter_id=adapter_id, config=validated_config,
-                )
+            executed = _dispatch_execute(
+                aperio_dir, record, adapter=adapter,
+                adapter_id=adapter_id, config=validated_config,
+                actor=actor,
             )
+            if policy_role is not None:
+                _policy_event(
+                    aperio_dir,
+                    actor=actor,
+                    role=policy_role,
+                    action="execution.dispatch",
+                    target=f"task:{task_id}",
+                    revision=executed.get("plan_version"),
+                    outcome=str(executed.get("status", "")),
+                    note=f"run {executed.get('run_id')}",
+                )
+            dispatched.append(executed)
     finally:
         release_lock(dispatch_lock_path(aperio_dir), dispatch_token)
     return dispatched

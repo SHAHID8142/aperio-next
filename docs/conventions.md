@@ -49,9 +49,22 @@
 - No secrets, tokens, or environment contents are ever persisted into
   `.aperio/` except `.aperio/local/`; templates must remain free of
   credential-shaped placeholders (see `tests/test_no_secrets.py`).
+- Governance is opt-in: never require `--actor` or impose review gates on a
+  project without an enabled `policies.json`. Enforcement lives at the
+  Python mutation boundary, not in CLI parsing, and roles always come from
+  the configured actor mapping — never from a caller-supplied label.
+- Every governed action appends an audit event with declared actor, role,
+  action, target, revision, timestamp, and outcome. Audit and review records
+  never contain argv, environment content, raw external diagnostics, or
+  absolute paths; actor ids are declarations, not authentication.
+- Reviews are immutable and append-only: a decided review is never edited,
+  a new attempt gets a new `REV-NNNN`, and completion requires recorded
+  evidence plus an approved independent review at the current material
+  revision.
 - Whole-project operations acquire writer locks in the fixed global order
   `import`, `dispatch`, `plan`, `executions`, `state`, `handoff`,
-  `decisions`, and single-writer commands take exactly one of those locks.
+  `decisions`, `reviews`, `policy`, and single-writer commands take exactly
+  one of those locks.
   Never hold a later lock while waiting for an earlier one; import rejects a
   destination that changed while it was preparing rather than overwriting a
   newer update.

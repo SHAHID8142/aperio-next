@@ -167,6 +167,7 @@ def test_to_dict_schema_is_stable(run_cli, project_dir):
         "handoff",
         "plan",
         "execution",
+        "governance",
         "missing",
         "skipped_headings",
         "malformed_entries",
@@ -174,6 +175,8 @@ def test_to_dict_schema_is_stable(run_cli, project_dir):
     }
     assert dumped["plan"] is None  # no plan created yet: normal state
     assert dumped["execution"] is None  # no runs recorded yet: normal state
+    # Feature 06 additive governance block; disabled by default.
+    assert dumped["governance"]["enabled"] is False
     assert set(dumped["state"].keys()) == {
         "schema_version",
         "name",
@@ -211,6 +214,7 @@ def test_cli_memory_json_machine_readable(run_cli, project_dir):
         "handoff",
         "plan",
         "execution",
+        "governance",
         "missing",
         "skipped_headings",
         "malformed_entries",
@@ -219,6 +223,7 @@ def test_cli_memory_json_machine_readable(run_cli, project_dir):
     assert data["state"]["name"] == project_dir.name
     assert data["plan"] is None  # freshly initialized: no plan yet
     assert data["execution"] is None  # no execution records yet
+    assert data["governance"]["enabled"] is False
 
 
 def test_cli_memory_json_via_subprocess(run_cli, project_dir):

@@ -46,6 +46,8 @@ from aperio.handoff import (
     read_handoff,
 )
 from aperio.paths import resolve_target
+from aperio.policy import policy_summary
+from aperio.reviews import blocking_requirements, review_status
 from aperio.runtime import execution_summary
 from aperio.planstore import plan_summary
 from aperio.project import APERIO_DIR_NAME, aperio_dir_for, require_supported_state
@@ -72,6 +74,7 @@ class ProjectContext:
     handoff: HandoffRead | None
     plan: dict | None
     execution: dict | None
+    governance: dict = field(default_factory=dict)
     missing: list[str] = field(default_factory=list)
     skipped_headings: int = 0
     malformed_entries: list[str] = field(default_factory=list)
@@ -113,6 +116,7 @@ class ProjectContext:
             ),
             "plan": self.plan,
             "execution": self.execution,
+            "governance": self.governance,
             "missing": list(self.missing),
             "skipped_headings": self.skipped_headings,
             "malformed_entries": list(self.malformed_entries),
@@ -138,7 +142,16 @@ def load_context(project_path: str | Path) -> ProjectContext:
         handoff=None,
         plan=plan_summary(aperio_dir),
         execution=execution_summary(aperio_dir),
+        governance={},
     )
+
+    governance = policy_summary(aperio_dir)
+    reviews = review_status(aperio_dir)
+    governance["reviews"] = reviews
+    governance["pending_reviews"] = reviews.get("pending", [])
+    governance["latest_reviews"] = list(reviews.get("latest", {}).values())
+    governance["blocking_requirements"] = blocking_requirements(aperio_dir)
+    context.governance = governance
 
     brief_path = aperio_dir / BRIEF_FILE_NAME
     _reject_shareable_symlink(brief_path)

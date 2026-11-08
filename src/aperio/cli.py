@@ -14,6 +14,19 @@ Commands:
     aperio integrity <dir> [--archive F]
                                       validate portable context consistency
     aperio upgrade <dir> [--apply]    preview or apply explicit schema upgrades
+    aperio roles [--json]             list built-in workflow roles and actions
+    aperio policy-init <dir> ...      enable governance and assign declared actors
+    aperio policy-show <dir>          inspect roles, actors, and rules
+    aperio policy-assign <dir> ACTOR --role ROLE
+                                      assign/change a declared actor role
+    aperio policy-permissions <dir> --actor ID
+                                      show one actor's permitted actions
+    aperio review-submit <dir> --task TASK-001 ...
+                                      submit an implementation for review
+    aperio review-decide <dir> REV-0001 --outcome ...
+                                      record an independent review decision
+    aperio review-list <dir> [--task TASK-001]
+    aperio review-status <dir>        pending reviews and completion blockers
 
 Exit codes:
     0  success
@@ -61,6 +74,21 @@ from aperio.planstore import (
     update_task,
 )
 from aperio.portable import export_project, import_archive
+from aperio.policy import (
+    ALL_ACTIONS,
+    ROLE_ACTIONS,
+    ROLES,
+    assign_actor,
+    initialize_policy,
+    policy_status,
+    read_policy,
+)
+from aperio.reviews import (
+    decide_review,
+    list_reviews,
+    review_status,
+    submit_review,
+)
 from aperio.progress import update_phase
 from aperio.upgrade import apply_upgrade, plan_upgrade
 from aperio.project import (
@@ -81,10 +109,10 @@ def build_parser() -> argparse.ArgumentParser:
         prog=_PROG,
         description=(
             "Aperio: model-agnostic, multi-agent software development "
-            "orchestrator (Features 01-05: project foundation, portable "
+            "orchestrator (Features 01-06: project foundation, portable "
             "agent memory and handoff, planning and execution, cross-machine "
             "portable export/import with integrity and schema-upgrade "
-            "foundations)."
+            "foundations, workflow roles and independent review gates)."
         ),
     )
     parser.add_argument(
@@ -186,6 +214,9 @@ def build_parser() -> argparse.ArgumentParser:
         "scope, exclusions, assumptions, risks, strategy, "
         "acceptance_criteria, verification_strategy, tasks)",
     )
+    plan_create_parser.add_argument(
+        "--actor", help="declared actor id (required when governance is enabled)"
+    )
 
     plan_show_parser = subparsers.add_parser(
         "plan-show",
@@ -217,6 +248,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--by",
         help="label recording who approved (not cryptographic proof)",
     )
+    plan_approve_parser.add_argument(
+        "--actor", help="declared actor id (required when governance is enabled)"
+    )
 
     plan_revise_parser = subparsers.add_parser(
         "plan-revise",
@@ -236,6 +270,9 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         required=True,
         help="the plan_version being revised (stale revisions are refused)",
+    )
+    plan_revise_parser.add_argument(
+        "--actor", help="declared actor id (required when governance is enabled)"
     )
 
     task_list_parser = subparsers.add_parser(
@@ -279,6 +316,9 @@ def build_parser() -> argparse.ArgumentParser:
     task_status_parser.add_argument(
         "--result", help="verification result: passed or failed (completion requires passed)"
     )
+    task_status_parser.add_argument(
+        "--actor", help="declared actor id (required when governance is enabled)"
+    )
 
     agent_list_parser = subparsers.add_parser(
         "agent-list",
@@ -319,6 +359,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_start_parser.add_argument(
         "--previous-run", help="link a retry to the run it replaces"
+    )
+    run_start_parser.add_argument(
+        "--actor", help="declared actor id (required when governance is enabled)"
     )
     run_start_parser.add_argument(
         "--json", dest="as_json", action="store_true",
@@ -452,6 +495,134 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="deliberately reopen a completed task (clears its verification "
         "block - record durable history with 'aperio decision-add' first)",
+    )
+
+    roles_parser = subparsers.add_parser(
+        "roles", help="list built-in workflow roles and permitted actions",
+    )
+    roles_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit the role matrix as machine-readable JSON",
+    )
+
+    policy_init_parser = subparsers.add_parser(
+        "policy-init",
+        help="create and enable workflow governance for a project (never replaces)",
+    )
+    policy_init_parser.add_argument("project_directory")
+    policy_init_parser.add_argument(
+        "--assign", action="append", default=[], metavar="ACTOR:ROLE",
+        help="assign a declared actor to planner, implementer, or reviewer "
+             "(repeatable)",
+    )
+    policy_init_parser.add_argument(
+        "--by", help="declared operator label recording who set this up",
+    )
+    policy_init_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit the policy document as machine-readable JSON",
+    )
+
+    policy_show_parser = subparsers.add_parser(
+        "policy-show", help="inspect the project policy and actor assignments",
+    )
+    policy_show_parser.add_argument("project_directory")
+    policy_show_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit the policy document as machine-readable JSON",
+    )
+
+    policy_assign_parser = subparsers.add_parser(
+        "policy-assign",
+        help="assign an actor to a role (history is preserved)",
+    )
+    policy_assign_parser.add_argument("project_directory")
+    policy_assign_parser.add_argument("actor", help="declared actor id")
+    policy_assign_parser.add_argument(
+        "--role", required=True, choices=ROLES,
+        help="planner, implementer, or reviewer",
+    )
+    policy_assign_parser.add_argument("--by", help="declared operator label")
+    policy_assign_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit the updated policy as machine-readable JSON",
+    )
+
+    policy_permissions_parser = subparsers.add_parser(
+        "policy-permissions",
+        help="show the declared permissions and duties of one actor",
+    )
+    policy_permissions_parser.add_argument("project_directory")
+    policy_permissions_parser.add_argument("--actor", required=True)
+    policy_permissions_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit permissions as machine-readable JSON",
+    )
+
+    review_submit_parser = subparsers.add_parser(
+        "review-submit",
+        help="submit an in-progress implementation for independent review",
+    )
+    review_submit_parser.add_argument("project_directory")
+    review_submit_parser.add_argument(
+        "--task", required=True, help="task id being submitted",
+    )
+    review_submit_parser.add_argument("--run", help="optional run id for evidence")
+    review_submit_parser.add_argument("--actor", help="declared implementer id")
+    review_submit_parser.add_argument(
+        "--scope", action="append", default=[],
+        help="reviewed scope item (repeatable; at least one required)",
+    )
+    review_submit_parser.add_argument(
+        "--evidence", action="append", default=[],
+        help="evidence reference (repeatable; at least one required)",
+    )
+    review_submit_parser.add_argument(
+        "--limitations", help="known limitations (recorded verbatim, single line)",
+    )
+    review_submit_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit the review record as machine-readable JSON",
+    )
+
+    review_decide_parser = subparsers.add_parser(
+        "review-decide",
+        help="record an immutable approval, changes request, or rejection",
+    )
+    review_decide_parser.add_argument("project_directory")
+    review_decide_parser.add_argument("review_id", help="review id, e.g. REV-0001")
+    review_decide_parser.add_argument("--actor", help="declared reviewer id")
+    review_decide_parser.add_argument(
+        "--outcome", required=True,
+        choices=("approved", "changes-requested", "rejected"),
+    )
+    review_decide_parser.add_argument(
+        "--findings", help="required for changes-requested and rejected",
+    )
+    review_decide_parser.add_argument("--limitations")
+    review_decide_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit the decided review as machine-readable JSON",
+    )
+
+    review_list_parser = subparsers.add_parser(
+        "review-list", help="list review history (append-only)",
+    )
+    review_list_parser.add_argument("project_directory")
+    review_list_parser.add_argument("--task", help="only this task's reviews")
+    review_list_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit the reviews as machine-readable JSON",
+    )
+
+    review_status_parser = subparsers.add_parser(
+        "review-status",
+        help="show pending reviews and what still blocks verified completion",
+    )
+    review_status_parser.add_argument("project_directory")
+    review_status_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit the status as machine-readable JSON",
     )
 
     return parser
@@ -604,7 +775,9 @@ def _cmd_phase_set(args) -> None:
 def _cmd_plan_create(args) -> None:
     content = _read_plan_input(args.file)
     target = resolve_target(args.project_directory, for_writing=True)
-    document = create_plan(aperio_dir_for(target), content)
+    document = create_plan(
+        aperio_dir_for(target), content, actor=args.actor
+    )
     print(
         f"plan created at {APERIO_DIR_NAME}/plan.json "
         f"(revision {document['plan_version']}, draft; "
@@ -647,7 +820,8 @@ def _cmd_plan_show(args) -> None:
 def _cmd_plan_approve(args) -> None:
     target = resolve_target(args.project_directory, for_writing=True)
     document = approve_plan(
-        aperio_dir_for(target), revision=args.revision, by=args.by
+        aperio_dir_for(target), revision=args.revision, by=args.by,
+        actor=args.actor,
     )
     approval = document["approval"]
     print(
@@ -662,7 +836,10 @@ def _cmd_plan_approve(args) -> None:
 def _cmd_plan_revise(args) -> None:
     content = _read_plan_input(args.file)
     target = resolve_target(args.project_directory, for_writing=True)
-    document = revise_plan(aperio_dir_for(target), content, revises=args.revises)
+    document = revise_plan(
+        aperio_dir_for(target), content, revises=args.revises,
+        actor=args.actor,
+    )
     print(
         f"plan revised: now revision {document['plan_version']} "
         f"({len(document['tasks'])} task(s); approval reset to draft - "
@@ -786,6 +963,7 @@ def _cmd_run_start(args) -> None:
         config=config,
         authorize_exec=args.authorize_exec,
         previous_run_id=args.previous_run,
+        actor=args.actor,
     )
     if args.as_json:
         print(json.dumps(record, indent=2, ensure_ascii=False))
@@ -1006,6 +1184,7 @@ def _cmd_task_status(args) -> None:
         limitations=values.get("limitations"),
         result=values.get("result"),
         reopen=args.reopen,
+        actor=args.actor,
     )
     verification = task["verification"]
     extra = ""
@@ -1141,6 +1320,249 @@ def _cmd_upgrade(args) -> int:
     return 0
 
 
+def _cmd_roles(args) -> None:
+    matrix = {
+        role: {"actions": list(ROLE_ACTIONS[role])} for role in ROLES
+    }
+    if args.as_json:
+        print(json.dumps(matrix, indent=2, ensure_ascii=False))
+        return
+    print("Built-in workflow roles (declared responsibilities, not providers):")
+    for role in ROLES:
+        print(f"  {role:12s} " + ", ".join(ROLE_ACTIONS[role]))
+    print()
+    print(
+        "Role permissions are enforced from the configured actor mapping in "
+        "policies.json; a caller-supplied role label is never trusted."
+    )
+
+
+def _parse_assignments(pairs: list[str]) -> list[tuple[str, str]]:
+    parsed: list[tuple[str, str]] = []
+    for item in pairs:
+        if ":" not in item:
+            raise ValidationError(
+                "--assign must look like ACTOR:ROLE "
+                f"(got {item!r})"
+            )
+        actor, role = item.split(":", 1)
+        if role not in ROLES:
+            raise ValidationError(
+                f"--assign role must be one of {', '.join(ROLES)}"
+            )
+        parsed.append((actor, role))
+    return parsed
+
+
+def _cmd_policy_init(args) -> None:
+    target = resolve_target(args.project_directory, for_writing=True)
+    policy = initialize_policy(
+        aperio_dir_for(target),
+        assignments=_parse_assignments(args.assign),
+        by=args.by,
+    )
+    if args.as_json:
+        print(json.dumps(policy, indent=2, ensure_ascii=False))
+        return
+    print(
+        f"workflow governance enabled at {APERIO_DIR_NAME}/"
+        f"{'policies.json'} (policy revision {policy['policy_version']})"
+    )
+    if not policy["actors"]:
+        print("  (no actors assigned yet: use 'aperio policy-assign')")
+    for actor, assignment in policy["actors"].items():
+        print(f"  {actor} -> {assignment['role']}")
+    print(
+        "Declared actor ids are workflow declarations, not authenticated "
+        "identity; enforce real identity at your process boundary."
+    )
+
+
+def _cmd_policy_show(args) -> None:
+    target = resolve_target(args.project_directory, for_writing=False)
+    aperio_dir = aperio_dir_for(target)
+    policy = read_policy(aperio_dir)
+    if policy is None:
+        if args.as_json:
+            print(json.dumps({"present": False, "enabled": False}, indent=2))
+            return
+        print(
+            "No policy configured; this project is ungoverned (legacy "
+            "behavior). Enable with 'aperio policy-init'."
+        )
+        return
+    if args.as_json:
+        print(json.dumps(policy, indent=2, ensure_ascii=False))
+        return
+    print(
+        f"Policy:      revision {policy['policy_version']} "
+        f"(schema {policy['schema_version']}, "
+        f"{'enabled' if policy['enabled'] else 'disabled'})"
+    )
+    print(f"Updated:     {policy.get('updated_at')}")
+    print("Actors:")
+    if not policy["actors"]:
+        print("  (none assigned)")
+    for actor, assignment in sorted(policy["actors"].items()):
+        print(f"  {actor} -> {assignment['role']}")
+    print("Rules:")
+    for key, value in sorted(policy.get("separation", {}).items()):
+        print(f"  separation.{key}: {value}")
+    for key, value in sorted(policy.get("review", {}).items()):
+        print(f"  review.{key}: {value}")
+
+
+def _cmd_policy_assign(args) -> None:
+    target = resolve_target(args.project_directory, for_writing=True)
+    policy = assign_actor(
+        aperio_dir_for(target), args.actor, args.role, by=args.by
+    )
+    if args.as_json:
+        print(json.dumps(policy, indent=2, ensure_ascii=False))
+        return
+    print(
+        f"actor {args.actor} assigned to {args.role} "
+        f"(policy revision {policy['policy_version']}); historical "
+        "attribution is preserved"
+    )
+
+
+def _cmd_policy_permissions(args) -> None:
+    target = resolve_target(args.project_directory, for_writing=False)
+    aperio_dir = aperio_dir_for(target)
+    policy = read_policy(aperio_dir)
+    if policy is None:
+        raise StateError(
+            "no project policy is configured; run 'aperio policy-init' first"
+        )
+    actor = args.actor
+    assignment = policy["actors"].get(actor)
+    if assignment is None:
+        raise StateError(
+            f"actor {actor!r} is not assigned in the project policy; unknown "
+            "actors are never given a guessed role"
+        )
+    role = assignment["role"]
+    report = {
+        "actor": actor,
+        "role": role,
+        "actions": list(policy["roles"][role]["actions"]),
+        "separation": dict(policy.get("separation", {})),
+        "review": dict(policy.get("review", {})),
+        "declared_not_authenticated": True,
+    }
+    if args.as_json:
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        return
+    print(f"Actor:       {actor} (declared, not authenticated)")
+    print(f"Role:        {role}")
+    print("Actions:     " + (", ".join(report["actions"]) or "(none)"))
+    for key, value in sorted(report["separation"].items()):
+        print(f"Rule:        separation.{key} = {value}")
+    for key, value in sorted(report["review"].items()):
+        print(f"Rule:        review.{key} = {value}")
+
+
+def _cmd_review_submit(args) -> None:
+    target = resolve_target(args.project_directory, for_writing=True)
+    record = submit_review(
+        aperio_dir_for(target),
+        actor=args.actor,
+        task_id=args.task,
+        scope=args.scope,
+        evidence=args.evidence,
+        limitations=args.limitations,
+        run_id=args.run,
+    )
+    if args.as_json:
+        print(json.dumps(record, indent=2, ensure_ascii=False))
+        return
+    print(
+        f"review {record['review_id']} submitted for {record['target']['task_id']} "
+        f"at plan revision {record['target']['plan_revision']} "
+        f"(status: pending; independent reviewer required)"
+    )
+
+
+def _cmd_review_decide(args) -> None:
+    target = resolve_target(args.project_directory, for_writing=True)
+    record = decide_review(
+        aperio_dir_for(target),
+        args.review_id,
+        actor=args.actor,
+        outcome=args.outcome,
+        findings=args.findings,
+        limitations=args.limitations,
+    )
+    if args.as_json:
+        print(json.dumps(record, indent=2, ensure_ascii=False))
+        return
+    print(
+        f"review {record['review_id']}: {record['outcome']} "
+        f"by {record['reviewer']} at {record['decided_at']}"
+    )
+    if record.get("findings"):
+        print(f"findings: {record['findings']}")
+
+
+def _cmd_review_list(args) -> None:
+    target = resolve_target(args.project_directory, for_writing=False)
+    reviews = list_reviews(aperio_dir_for(target), task_id=args.task)
+    if args.as_json:
+        print(json.dumps(reviews, indent=2, ensure_ascii=False))
+        return
+    if not reviews:
+        print("No reviews recorded.")
+        return
+    for review in reviews:
+        target_label = review["target"].get("task_id") or "plan"
+        print(
+            f"{review['review_id']}  {target_label:10s} "
+            f"rev {review['target']['plan_revision']:<3} "
+            f"{review['outcome']:17s} by {review['submitted_by']}"
+            + (f" -> {review['reviewer']}" if review["reviewer"] else "")
+        )
+
+
+def _cmd_review_status(args) -> None:
+    target = resolve_target(args.project_directory, for_writing=False)
+    aperio_dir = aperio_dir_for(target)
+    status = review_status(aperio_dir)
+    policy = policy_status(aperio_dir)
+    from aperio.reviews import blocking_requirements
+
+    report = {
+        "governance_enabled": bool(policy.get("enabled")),
+        "reviews": status,
+        "blocking_requirements": blocking_requirements(aperio_dir),
+    }
+    if args.as_json:
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        return
+    print(
+        "Governance:  "
+        + ("enabled" if report["governance_enabled"] else "not enabled")
+    )
+    if not status.get("present"):
+        print("Reviews:     none recorded")
+        return
+    if status.get("unsupported"):
+        print("Reviews:     unsupported schema (not interpreted)")
+        return
+    pending = status.get("pending", [])
+    print(f"Pending:     {len(pending)}")
+    for item in pending:
+        task = item["target"].get("task_id") or "plan"
+        print(f"  {item['review_id']}  {task}  (submitted by {item['submitted_by']})")
+    blocking = report["blocking_requirements"]
+    print("Blocking verified completion: " + (str(len(blocking)) if blocking else "none"))
+    for item in blocking:
+        print(
+            f"  {item['task_id']} needs an approved independent review at plan "
+            f"revision {item['plan_revision']}"
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point. Returns a process exit code."""
     parser = build_parser()
@@ -1197,6 +1619,24 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_integrity(args)
         elif args.command == "upgrade":
             return _cmd_upgrade(args)
+        elif args.command == "roles":
+            _cmd_roles(args)
+        elif args.command == "policy-init":
+            _cmd_policy_init(args)
+        elif args.command == "policy-show":
+            _cmd_policy_show(args)
+        elif args.command == "policy-assign":
+            _cmd_policy_assign(args)
+        elif args.command == "policy-permissions":
+            _cmd_policy_permissions(args)
+        elif args.command == "review-submit":
+            _cmd_review_submit(args)
+        elif args.command == "review-decide":
+            _cmd_review_decide(args)
+        elif args.command == "review-list":
+            _cmd_review_list(args)
+        elif args.command == "review-status":
+            _cmd_review_status(args)
         else:  # pragma: no cover - argparse enforces required subcommand
             parser.error(f"unknown command: {args.command!r}")
     except AperioError as exc:

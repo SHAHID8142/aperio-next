@@ -169,6 +169,9 @@ state.json.tmp
 handoff.md.tmp
 plan.json.tmp
 executions.json.tmp
+policies.json.tmp
+reviews.json.tmp
+policy-audit.json.tmp
 state.lock
 decisions.lock
 handoff.lock
@@ -176,6 +179,8 @@ plan.lock
 executions.lock
 dispatch.lock
 import.lock
+reviews.lock
+policy.lock
 """
 
 LOCAL_README_TEMPLATE = """\

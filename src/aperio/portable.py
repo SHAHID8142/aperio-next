@@ -105,7 +105,19 @@ from aperio.planmodel import (
     PLAN_SCHEMA_VERSION,
     validate_plan_document,
 )
+from aperio.policy import (
+    POLICY_LOCK_NAME,
+    POLICY_SCHEMA_VERSION,
+    policy_path,
+    validate_policy_document,
+)
 from aperio.planstore import PLAN_LOCK_NAME, plan_path
+from aperio.reviews import (
+    REVIEW_LOCK_NAME,
+    REVIEWS_SCHEMA_VERSION,
+    reviews_path,
+    validate_reviews_document,
+)
 from aperio.progress import STATE_LOCK_NAME
 from aperio.project import (
     aperio_dir_for,
@@ -151,6 +163,8 @@ LOCK_ORDER: tuple[str, ...] = (
     "state",
     "handoff",
     "decisions",
+    "reviews",
+    "policy",
 )
 
 TOP_LEVEL_FILES: tuple[str, ...] = (
@@ -160,6 +174,9 @@ TOP_LEVEL_FILES: tuple[str, ...] = (
     "handoff.md",
     "plan.json",
     "executions.json",
+    "policies.json",
+    "reviews.json",
+    "policy-audit.json",
 )
 
 RUN_HANDOFF_PATTERN = re.compile(r"^runs/RUN-[0-9]+\.handoff\.md$")
@@ -185,6 +202,8 @@ def _lock_targets(aperio_dir: Path) -> dict[str, Path]:
         "state": aperio_dir / STATE_LOCK_NAME,
         "handoff": aperio_dir / HANDOFF_LOCK_NAME,
         "decisions": aperio_dir / DECISIONS_LOCK_NAME,
+        "reviews": aperio_dir / REVIEW_LOCK_NAME,
+        "policy": aperio_dir / POLICY_LOCK_NAME,
     }
 
 
@@ -295,13 +314,74 @@ def _effective_context(
     with the imported content.
     """
     effective = dict(archive_files)
-    for rel in ("plan.json", "executions.json"):
+    for rel in (
+        "plan.json",
+        "executions.json",
+        "policies.json",
+        "reviews.json",
+    ):
         if rel in effective:
             continue
         current = _read_destination_file(aperio_dir, rel)
         if current is not None:
             effective[rel] = current
     return effective
+
+
+def _validate_governance_context(effective: dict[str, bytes], plan: dict | None) -> None:
+    """Policy/review merge rules (import never drops attribution)."""
+    policy = None
+    if "policies.json" in effective:
+        policy = _decode_json(effective["policies.json"], "effective:policies.json")
+        version = policy.get("schema_version")
+        if version != POLICY_SCHEMA_VERSION:
+            raise StateError(
+                "the effective post-import policies.json uses schema version "
+                f"{version}, which this aperio does not support; importing "
+                "would interpret governance it cannot understand. Nothing "
+                "was modified."
+            )
+        validate_policy_document(policy, Path("effective:policies.json"))
+
+    if "reviews.json" not in effective:
+        return
+    reviews = _decode_json(effective["reviews.json"], "effective:reviews.json")
+    version = reviews.get("schema_version")
+    if version != REVIEWS_SCHEMA_VERSION:
+        raise StateError(
+            "the effective post-import reviews.json uses schema version "
+            f"{version}, which this aperio does not support. Nothing was "
+            "modified."
+        )
+    validate_reviews_document(reviews, Path("effective:reviews.json"))
+    if reviews["reviews"] and policy is None:
+        raise StateError(
+            "the effective post-import context would contain review history "
+            "without a policies.json; approvals must stay attributable to a "
+            "configured actor mapping. Nothing was modified."
+        )
+    if not reviews["reviews"]:
+        return
+    if plan is None:
+        raise StateError(
+            "the effective post-import context contains reviews but no plan; "
+            "review targets cannot be validated. Nothing was modified."
+        )
+    tasks = {task["id"] for task in plan["tasks"]}
+    for review in reviews["reviews"]:
+        target = review["target"]
+        if target["plan_revision"] > plan["plan_version"]:
+            raise StateError(
+                f"review {review['review_id']} targets plan revision "
+                f"{target['plan_revision']}, newer than the effective plan "
+                f"revision {plan['plan_version']}. Nothing was modified."
+            )
+        if target["kind"] == "task" and target["task_id"] not in tasks:
+            raise StateError(
+                f"review {review['review_id']} targets task "
+                f"{target['task_id']}, which the effective post-import plan "
+                "does not define. Nothing was modified."
+            )
 
 
 def _validate_merged_context(
@@ -343,6 +423,7 @@ def _validate_merged_context(
             )
         validate_executions_document(runs, Path("effective:executions.json"))
 
+    _validate_governance_context(effective, plan)
     if not runs or not runs["runs"]:
         return
     if plan is None:
@@ -815,6 +896,41 @@ def export_project(
                 "(import repairs it)"
             )
 
+        for rel, label in (
+            ("policies.json", "policy"),
+            ("reviews.json", "reviews"),
+            ("policy-audit.json", "audit"),
+        ):
+            if os.path.lexists(aperio_dir / rel):
+                files[rel] = _read_export_file(aperio_dir, rel)
+                parsed = _decode_json(files[rel], rel)
+                version = parsed.get("schema_version")
+                if isinstance(version, bool) or not isinstance(version, int):
+                    raise StateError(
+                        f"cannot export: {rel} has no integer schema_version; "
+                        "run 'aperio integrity' and repair it first"
+                    )
+                schemas[label] = version
+                supported = {
+                    "policy": POLICY_SCHEMA_VERSION,
+                    "reviews": REVIEWS_SCHEMA_VERSION,
+                    "audit": POLICY_SCHEMA_VERSION,
+                }[label]
+                if version > supported:
+                    warnings.append(
+                        f"{rel} uses schema version {version} (newer than "
+                        "this aperio); exported verbatim without interpretation"
+                    )
+                elif label == "policy":
+                    validate_policy_document(parsed, Path("archive:" + rel))
+                elif label == "reviews":
+                    validate_reviews_document(parsed, Path("archive:" + rel))
+                elif not isinstance(parsed.get("events"), list):
+                    raise StateError(
+                        f"cannot export: {rel} is corrupt ('events' must be "
+                        "a list); run 'aperio integrity' first"
+                    )
+
         total = sum(len(data) for data in files.values())
         if len(files) > MAX_ENTRIES:
             raise StateError(
@@ -1281,6 +1397,79 @@ def _validate_payload(archive: PortableArchive) -> None:
                         f"revision {run['plan_version']}, newer than the "
                         f"included plan revision {plan['plan_version']}"
                     )
+
+    if "policies.json" in files:
+        policy = _decode_json(files["policies.json"], "archive:policies.json")
+        policy_version = policy.get("schema_version")
+        if isinstance(policy_version, bool) or not isinstance(policy_version, int):
+            raise _manifest_error("policies.json schema_version must be an integer")
+        if policy_version > POLICY_SCHEMA_VERSION:
+            raise StateError(
+                f"policies.json uses policy schema version {policy_version}, "
+                f"newer than supported version {POLICY_SCHEMA_VERSION}; this "
+                "aperio will not interpret it. Upgrade aperio before importing."
+            )
+        if policy_version != POLICY_SCHEMA_VERSION:
+            raise StateError(
+                f"policies.json uses unsupported policy schema version "
+                f"{policy_version}; no migration is implemented for it"
+            )
+        if schemas.get("policy") != policy_version:
+            raise _manifest_error("manifest schemas.policy does not match policies.json")
+        validate_policy_document(policy, Path("archive:policies.json"))
+        archive.schemas["policy"] = policy_version
+    elif "policy" in schemas:
+        raise _manifest_error(
+            "manifest declares a policy schema but policies.json is absent"
+        )
+
+    if "reviews.json" in files:
+        reviews = _decode_json(files["reviews.json"], "archive:reviews.json")
+        review_version = reviews.get("schema_version")
+        if isinstance(review_version, bool) or not isinstance(review_version, int):
+            raise _manifest_error("reviews.json schema_version must be an integer")
+        if review_version > REVIEWS_SCHEMA_VERSION:
+            raise StateError(
+                f"reviews.json uses review schema version {review_version}, "
+                f"newer than supported version {REVIEWS_SCHEMA_VERSION}; this "
+                "aperio will not interpret it. Upgrade aperio before importing."
+            )
+        if review_version != REVIEWS_SCHEMA_VERSION:
+            raise StateError(
+                f"reviews.json uses unsupported review schema version "
+                f"{review_version}; no migration is implemented for it"
+            )
+        if schemas.get("reviews") != review_version:
+            raise _manifest_error("manifest schemas.reviews does not match reviews.json")
+        validate_reviews_document(reviews, Path("archive:reviews.json"))
+        archive.schemas["reviews"] = review_version
+        if reviews["reviews"] and "policies.json" not in files:
+            raise StateError(
+                "the archive contains review history but no policies.json; "
+                "governance records must travel with their policy. Importing "
+                "would leave unattributed approval history. Nothing was "
+                "modified."
+            )
+    elif "reviews" in schemas:
+        raise _manifest_error(
+            "manifest declares a reviews schema but reviews.json is absent"
+        )
+
+    if "policy-audit.json" in files:
+        audit = _decode_json(files["policy-audit.json"], "archive:policy-audit.json")
+        audit_version = audit.get("schema_version")
+        if audit_version != POLICY_SCHEMA_VERSION:
+            raise StateError(
+                f"policy-audit.json uses unsupported schema version "
+                f"{audit_version!r}; this aperio will not interpret it"
+            )
+        if not isinstance(audit.get("events"), list):
+            raise _manifest_error("policy-audit.json 'events' must be a list")
+        archive.schemas["audit"] = audit_version
+    elif "audit" in schemas:
+        raise _manifest_error(
+            "manifest declares an audit schema but policy-audit.json is absent"
+        )
 
     archive.warnings.extend(warnings)
 

@@ -1,13 +1,14 @@
 # aperio-next
 
 **Aperio** is a model-agnostic, multi-agent software development orchestrator.
-This repository contains **Features 01–05**: the project foundation
+This repository contains **Features 01–06**: the project foundation
 (bootstrap and inspect portable project state), portable agent memory
 (read shared context, record decisions, hand off work), project planning
 with a dependency-validated task graph and evidence-based execution
 tracking, a model-agnostic execution runtime, and cross-machine
 portability (validated export/import, integrity checks, and a versioned
-schema-upgrade foundation).
+schema-upgrade foundation), and optional workflow governance (declared agent
+roles, separation of duties, and immutable independent review records).
 
 Anything not listed below is **planned, not implemented**. See
 [docs/roadmap.md](docs/roadmap.md) for what is coming and
@@ -20,6 +21,7 @@ Anything not listed below is **planned, not implemented**. See
 - Implemented (Feature 03): `aperio plan-create`, `aperio plan-show [--json]`, `aperio plan-approve`, `aperio plan-revise`, `aperio task-list [--json]`, `aperio task-status`
 - Implemented (Feature 04): `aperio agent-list`, `aperio run-preview`, `aperio run-start [--authorize-exec]`, `aperio run-status`, `aperio runs-list`, `aperio run-cancel`, `aperio runs-reconcile`, `aperio run-report`, `aperio run-handoff`
 - Implemented (Feature 05): `aperio export [--dry-run] [--json]`, `aperio import [--replace] [--dry-run]`, `aperio integrity [--archive] [--json]`, `aperio upgrade [--apply] [--json]`
+- Implemented (Feature 06): `aperio roles`, `aperio policy-init`, `aperio policy-show`, `aperio policy-assign`, `aperio policy-permissions`, `aperio review-submit`, `aperio review-decide`, `aperio review-list`, `aperio review-status`
 - Not implemented (by design, yet): model-provider integrations (Claude/Codex/Cursor/ZCode adapters), autonomous coding, sandboxed execution, Cloud sync
 
 ## Requirements
@@ -106,6 +108,23 @@ aperio run-cancel ./my-project RUN-0001 --reason "changed plan"
 aperio runs-reconcile ./my-project                  # detect interrupted runs
 aperio run-report ./my-project RUN-0001 --file report.json  # consume external result
 
+# Workflow governance (Feature 06; optional, operator-enabled)
+aperio roles                                          # role/action matrix
+aperio policy-init ./my-project --assign planner-a:planner \
+  --assign dev-b:implementer --assign rev-c:reviewer  # explicit enablement
+aperio plan-create ./my-project --file plan.json --actor planner-a
+aperio plan-approve ./my-project --actor rev-c         # independent approval
+aperio task-status ./my-project TASK-001 --status in-progress \
+  --owner dev-b --actor dev-b
+aperio review-submit ./my-project --task TASK-001 --actor dev-b \
+  --scope "acceptance criteria" --evidence "pytest: 42 passed"
+aperio review-decide ./my-project REV-0001 --actor rev-c \
+  --outcome approved --findings "criteria met"
+aperio task-status ./my-project TASK-001 --status completed \
+  --evidence "pytest: 42 passed" --limitations none --result passed \
+  --actor dev-b
+aperio review-status ./my-project --json              # pending + blocking gates
+
 # Cross-machine portability (Feature 05)
 aperio export ./my-project --dry-run                  # validate + preview, write nothing
 aperio export ./my-project --output ./project.zip     # portable archive (must not exist)
@@ -140,6 +159,52 @@ Safety rules:
 Reads `.aperio/state.json` and reports project name, schema version, phase, timestamps,
 and which context files exist. It **never writes or creates anything**. Missing context
 files are reported so a follow-up `init` can repair them.
+
+### Workflow governance and independent reviews (Feature 06)
+
+Governance is **opt-in**: a project without `.aperio/policies.json` keeps
+Feature 01–05 behavior exactly (no `--actor` required, no completion gate).
+`aperio policy-init` enables it explicitly and never replaces an existing
+policy.
+
+Three built-in roles describe responsibilities, not AI providers:
+
+| Role | May do |
+|---|---|
+| `planner` | create/revise plans, approve plans authored by someone else |
+| `implementer` | claim tasks, dispatch execution, submit reviews, complete reviewed work |
+| `reviewer` | approve plans and decide reviews independently |
+
+Enforcement happens at the Python mutation boundaries (plan create/revise/
+approve, task claim/status/completion, execution dispatch, review submit/
+decide), not just in argument parsing. Configured actor→role mappings are
+the only source of truth: a caller-supplied role label is never trusted,
+and an unassigned actor id is an error. Separation of duties is mandatory:
+the planner who authored a revision cannot approve it, an implementer
+cannot decide their own review, and a new material revision invalidates
+the previous approval and every review keyed to it.
+
+Reviews are immutable, append-only records with stable `REV-NNNN` ids. A
+review references the task, the material plan revision, the submitting
+implementer, scope, evidence, and (after a decision) the independent
+reviewer, outcome (`approved`, `changes-requested`, `rejected`), findings,
+and timestamp. A decided review is never edited; further work needs a new
+record. Task completion under governance requires *both* recorded
+verification evidence and an approved review at the current material
+revision — a successful subprocess or external report is never treated as
+independent verification.
+
+**Trust boundary:** `--actor` is a declared id, not authenticated identity.
+Aperio enforces workflow consistency for those declarations; it does not
+prove who ran the command. Real human/agent authentication and sandboxing
+are outside this feature and are not claimed.
+
+Governance artifacts travel with Feature 05 archives (`policies.json`,
+`reviews.json`, `policy-audit.json`). Import validates them, refuses
+orphaned task reviews and future schemas, and keeps attribution intact.
+`aperio memory --json` adds a `governance` block: enabled flag, policy
+revision, actor assignments, pending reviews, latest outcomes, and the
+approval requirements currently blocking completion.
 
 ### Portable export/import (Feature 05)
 
@@ -251,6 +316,10 @@ create-only via an exclusive hard-link publish). See
 6. To move a project between machines, use `aperio export` / `aperio import`
    and verify the result with `aperio integrity`. The archive carries the
    shareable context only; `local/` never travels.
+7. When governance is enabled, never self-approve a plan revision, self-
+   decide a review, or treat a successful process exit as verified
+   completion. Declare an actor with `--actor`; the project policy decides
+   what that role may do.
 
 ## Development
 

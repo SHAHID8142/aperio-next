@@ -42,6 +42,16 @@ from aperio.errors import AperioError
 from aperio.handoff import handoff_path, read_handoff
 from aperio.paths import resolve_target
 from aperio.planmodel import PLAN_SCHEMA_VERSION, validate_plan_document
+from aperio.policy import (
+    POLICY_SCHEMA_VERSION,
+    policy_path,
+    validate_policy_document,
+)
+from aperio.reviews import (
+    REVIEWS_SCHEMA_VERSION,
+    reviews_path,
+    validate_reviews_document,
+)
 from aperio.planstore import plan_path
 from aperio.portable import (
     RUN_HANDOFF_PATTERN,
@@ -70,6 +80,9 @@ _RESERVED_TEMP_NAMES = frozenset(
         "plan.json.tmp",
         "executions.json.tmp",
         "handoff.md.tmp",
+        "policies.json.tmp",
+        "reviews.json.tmp",
+        "policy-audit.json.tmp",
     }
 )
 _RESERVED_LOCK_NAMES = frozenset(
@@ -81,6 +94,8 @@ _RESERVED_LOCK_NAMES = frozenset(
         "decisions.lock",
         "dispatch.lock",
         "import.lock",
+        "reviews.lock",
+        "policy.lock",
     }
 )
 
@@ -117,6 +132,9 @@ def check_integrity(
         "plan": None,
         "executions": None,
         "handoff": None,
+        "policy": None,
+        "reviews": None,
+        "audit": None,
     }
     missing: list[str] = []
     unexpected: list[str] = []
@@ -441,6 +459,151 @@ def check_integrity(
                             f"{rel} is not referenced by any execution record; "
                             "it is historical and not exported",
                             rel,
+                        )
+                    )
+
+
+    # --- workflow governance (Feature 06) -------------------------------
+    policy = None
+    policy_file = policy_path(aperio_dir)
+    if policy_file.exists():
+        if policy_file.is_symlink():
+            errors.append(
+                _finding("symlink-file", "policies.json is a symlink", "policies.json")
+            )
+        else:
+            version = _schema_of(policy_file)
+            schemas["policy"] = version
+            if isinstance(version, int) and version > POLICY_SCHEMA_VERSION:
+                errors.append(
+                    _finding(
+                        "policy-unsupported-schema",
+                        f"policies.json uses schema version {version}, newer "
+                        f"than supported {POLICY_SCHEMA_VERSION}; it is not "
+                        "interpreted (upgrade aperio)",
+                        "policies.json",
+                    )
+                )
+            else:
+                try:
+                    policy = json.loads(policy_file.read_bytes().decode("utf-8"))
+                    validate_policy_document(policy, policy_file)
+                except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    errors.append(
+                        _finding(
+                            "policy-invalid",
+                            f"policies.json is unreadable/invalid: {exc}",
+                            "policies.json",
+                        )
+                    )
+                except AperioError as exc:
+                    errors.append(
+                        _finding("policy-invalid", str(exc), "policies.json")
+                    )
+
+    reviews_file = reviews_path(aperio_dir)
+    if reviews_file.exists():
+        if reviews_file.is_symlink():
+            errors.append(
+                _finding("symlink-file", "reviews.json is a symlink", "reviews.json")
+            )
+        else:
+            version = _schema_of(reviews_file)
+            schemas["reviews"] = version
+            if isinstance(version, int) and version > REVIEWS_SCHEMA_VERSION:
+                errors.append(
+                    _finding(
+                        "reviews-unsupported-schema",
+                        f"reviews.json uses schema version {version}, newer "
+                        f"than supported {REVIEWS_SCHEMA_VERSION}; it is not "
+                        "interpreted (upgrade aperio)",
+                        "reviews.json",
+                    )
+                )
+            else:
+                try:
+                    document = json.loads(
+                        reviews_file.read_bytes().decode("utf-8")
+                    )
+                    validate_reviews_document(document, reviews_file)
+                except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    errors.append(
+                        _finding(
+                            "reviews-invalid",
+                            f"reviews.json is unreadable/invalid: {exc}",
+                            "reviews.json",
+                        )
+                    )
+                    document = None
+                except AperioError as exc:
+                    errors.append(
+                        _finding("reviews-invalid", str(exc), "reviews.json")
+                    )
+                    document = None
+                if document is not None:
+                    if document["reviews"] and policy is None:
+                        warnings.append(
+                            _finding(
+                                "reviews-without-policy",
+                                "reviews.json exists without a valid "
+                                "policies.json; approval history has no "
+                                "configured actor mapping",
+                                "reviews.json",
+                            )
+                        )
+                    task_ids = (
+                        {task["id"] for task in plan["tasks"]}
+                        if plan is not None
+                        else set()
+                    )
+                    for review in document["reviews"]:
+                        target = review["target"]
+                        if target["kind"] != "task":
+                            continue
+                        if plan is not None and target["task_id"] not in task_ids:
+                            errors.append(
+                                _finding(
+                                    "review-orphan-task",
+                                    f"review {review['review_id']} targets task "
+                                    f"{target['task_id']}, which the plan does "
+                                    "not define",
+                                    "reviews.json",
+                                )
+                            )
+
+    audit_file = aperio_dir / "policy-audit.json"
+    if audit_file.exists():
+        if audit_file.is_symlink():
+            errors.append(
+                _finding(
+                    "symlink-file", "policy-audit.json is a symlink",
+                    "policy-audit.json",
+                )
+            )
+        else:
+            schemas["audit"] = _schema_of(audit_file)
+            try:
+                audit = json.loads(audit_file.read_bytes().decode("utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+                errors.append(
+                    _finding(
+                        "audit-invalid",
+                        f"policy-audit.json is unreadable/invalid: {exc}",
+                        "policy-audit.json",
+                    )
+                )
+            else:
+                if (
+                    not isinstance(audit, dict)
+                    or audit.get("schema_version") != POLICY_SCHEMA_VERSION
+                    or not isinstance(audit.get("events"), list)
+                ):
+                    errors.append(
+                        _finding(
+                            "audit-invalid",
+                            "policy-audit.json must be schema "
+                            f"{POLICY_SCHEMA_VERSION} with an 'events' list",
+                            "policy-audit.json",
                         )
                     )
 

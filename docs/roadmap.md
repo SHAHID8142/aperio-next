@@ -39,14 +39,22 @@
   refusal of future versions). `.aperio/local/` never travels, and
   execution metadata is machine-neutral in transit.
 
+- **Feature 06 — Agent roles, workflow policies & independent review
+  gates:** opt-in `policies.json` with planner/implementer/reviewer
+  responsibilities, declared actor→role mapping with preserved history,
+  separation-of-duties enforcement at Python mutation boundaries, immutable
+  `REV-NNNN` review records, verification-plus-review completion gates, an
+  append-only actor audit log, governance in portable memory, and policy/
+  review/audit integration with export, import, and integrity.
+
 Everything below is future work. Nothing in this list works today; do not
 claim otherwise in code, docs, or demos. Each item lands as its own
 assignment ("one feature per assignment").
 
-## Feature 06 — (to be scoped)
+## Feature 07 — (to be scoped)
 
-No Feature 06 work has started. The next assignment is defined by the
-project owner after independent review of Feature 05.
+No Feature 07 work has started. The next assignment is defined by the
+project owner after independent review of Feature 06.
 
 ## Later / exploratory
 
