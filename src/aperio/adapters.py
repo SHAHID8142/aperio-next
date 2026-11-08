@@ -23,7 +23,8 @@ Built-in adapters:
   project, minimal environment by default, bounded output capture with a
   full mirror under ``.aperio/local/runs/`` (machine-local, git-ignored),
   hard timeout with SIGTERM→grace→SIGKILL (Windows: TerminateProcess, no
-  grace), stdin DEVNULL, always reaped.
+  grace), stdin DEVNULL, always reaped. No output text ever enters a
+  shareable record.
 
 Honest boundary: ``--authorize-exec`` is a procedural human-in-the-loop
 checkpoint, not a sandbox. A tool with shell access can bypass aperio
@@ -35,13 +36,17 @@ powerful and NOT sandboxed.
 from __future__ import annotations
 
 import os
-import re
 import subprocess
 import threading
 from pathlib import Path
 
-from aperio.errors import PathError, ValidationError
-from aperio.inputs import check_no_foreign_line_separators
+from aperio.artifacts import (
+    check_artifact_dir,
+    create_exclusive_text,
+    discard_created_file,
+    open_exclusive_binary,
+)
+from aperio.errors import ValidationError
 
 MANUAL_ADAPTER_ID = "manual"
 LOCAL_PROCESS_ADAPTER_ID = "local-process"
@@ -54,17 +59,10 @@ DEFAULT_TIMEOUT_SECONDS = 120
 MAX_TIMEOUT_SECONDS = 3600
 MAX_CAPTURE_BYTES = 64 * 1024  # per stream, retained tail
 
-_ARGV_ITEM_RE = re.compile(r"^[^\x00]*$")  # NUL is never legal in argv
-
 
 def runs_dir(aperio_dir: Path) -> Path:
     """Directory holding per-run portable artifacts (shareable)."""
     return aperio_dir / RUNS_DIR_NAME
-
-
-def local_runs_dir(aperio_dir: Path) -> Path:
-    """Machine-local directory for raw run output (never shared)."""
-    return aperio_dir / LOCAL_RUNS_DIR_NAME
 
 
 def validate_adapter_config(config: object) -> dict:
@@ -189,23 +187,6 @@ def build_environment(config: dict) -> dict:
     return _minimal_environment()
 
 
-def sanitize_diagnostics(text: str, limit: int = 2000) -> str:
-    """Bound and clean free-form diagnostics for the shareable record.
-
-    Decoding already used errors='replace'; control characters other than
-    newline/tab are dropped so the shareable record stays readable, and
-    the text is hard-truncated (the full output lives only in the
-    machine-local log).
-    """
-    cleaned = "".join(
-        char for char in text if char in ("\n", "\t") or ord(char) >= 32
-    )
-    cleaned = cleaned.strip()
-    if len(cleaned) > limit:
-        cleaned = cleaned[:limit] + f"... [truncated, {len(cleaned)} chars total]"
-    return cleaned
-
-
 class AgentAdapter:
     """Contract for execution-capable agents (plain class, no magic).
 
@@ -250,8 +231,10 @@ class AgentAdapter:
         cancelled during startup), the adapter must terminate and reap
         the child, then re-raise.
 
-        :returns: a result dict with at least ``outcome``, ``exit_code``
-            (int or None), and ``diagnostics``.
+        :returns: a result dict with at least ``outcome`` and
+            ``exit_code`` (int or None). Raw output and untrusted external
+            text belong in machine-local files, never in the returned
+            shareable fields.
         """
         raise NotImplementedError
 
@@ -298,23 +281,15 @@ class ManualHandoffAdapter(AgentAdapter):
         config: dict | None,
         on_running=None,
     ) -> dict:
-        handoff_path = runs_dir(aperio_dir) / f"{run_id}.handoff.md"
-        handoff_path.parent.mkdir(parents=True, exist_ok=True)
-        if handoff_path.is_symlink():
-            raise PathError(
-                f"refusing to follow symlink at {handoff_path}; "
-                "remove it and re-run 'aperio init' to repair"
-            )
-        if handoff_path.exists():
-            raise ValidationError(
-                f"run handoff already exists at {handoff_path}; "
-                "refusing to overwrite it"
-            )
+        handoff_dir = check_artifact_dir(aperio_dir, RUNS_DIR_NAME)
+        handoff_path = handoff_dir / f"{run_id}.handoff.md"
         document = render_run_handoff(run_id=run_id, task=task)
-        # Exclusive creation: a file that raced in is never truncated.
-        fd = os.open(handoff_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(document)
+        # Exclusive creation through the shared path policy: the whole
+        # parent chain is validated (no symlinked runs directory) and a
+        # file that raced in is never truncated.
+        create_exclusive_text(
+            handoff_path, document, what="run handoff document"
+        )
         return {
             "outcome": "manual handoff prepared; awaiting external agent",
             "exit_code": None,
@@ -387,8 +362,6 @@ class LocalProcessAdapter(AgentAdapter):
     def validate_config(self, config: dict | None, aperio_dir: Path) -> dict:
         """Validate config (and the working-directory boundary) BEFORE
         any persistent mutation."""
-        import sys as _sys
-        print(f"DEBUG validate_config: config={config!r} type={type(config)}", file=_sys.stderr)
         if config is None:
             raise ValidationError(
                 "local-process adapter requires a config file "
@@ -399,9 +372,6 @@ class LocalProcessAdapter(AgentAdapter):
         validated = validate_adapter_config(config)
         self._resolve_working_dir(validated, aperio_dir)
         return validated
-
-    def _validate_config(self, config: dict | None, aperio_dir: Path) -> dict:
-        return self.validate_config(config, aperio_dir)
 
     def _resolve_working_dir(self, config: dict, aperio_dir: Path) -> Path:
         raw = config.get("working_dir")
@@ -428,7 +398,7 @@ class LocalProcessAdapter(AgentAdapter):
         return resolved
 
     def preview(self, *, task: dict, config: dict | None, aperio_dir: Path) -> dict:
-        validated = self._validate_config(config, aperio_dir)
+        validated = self.validate_config(config, aperio_dir)
         working_dir = self._resolve_working_dir(validated, aperio_dir)
         return {
             "adapter_id": self.id,
@@ -441,8 +411,9 @@ class LocalProcessAdapter(AgentAdapter):
             "env_policy": validated["env_policy"],
             "risk_notes": [
                 "runs a real local process with the configured privileges",
-                "output is captured machine-locally; only a bounded, "
-                "sanitized tail enters the shareable record",
+                "output is captured machine-locally only; the shareable "
+                "record carries neutral metadata (exit code, bytes, "
+                "truncation flags), never output text",
                 "exit 0 means the adapter finished - task completion still "
                 "requires Feature-03 verification with evidence",
             ],
@@ -457,30 +428,15 @@ class LocalProcessAdapter(AgentAdapter):
         config: dict | None,
         on_running=None,
     ) -> dict:
-        validated = self._validate_config(config, aperio_dir)
+        validated = self.validate_config(config, aperio_dir)
         working_dir = self._resolve_working_dir(validated, aperio_dir)
 
         argv = [validated["executable"], *validated["args"]]
-        local_log = local_runs_dir(aperio_dir) / f"{run_id}.log"
-        local_log.parent.mkdir(parents=True, exist_ok=True)
-        if os.path.islink(local_log):
-            raise PathError(
-                f"refusing to follow symlink at {local_log}; "
-                "remove it and re-run the command to repair"
-            )
-        if local_log.exists():
-            raise StateError(
-                f"a local output log already exists at {local_log}; run "
-                "ids are unique, so this is a leftover from an older "
-                "aperio version — remove it manually if it is not needed"
-            )
-        try:
-            mirror_handle = open(local_log, "xb")
-        except OSError as exc:
-            raise StateError(
-                f"cannot create local output log {local_log}: "
-                f"{exc.strerror or exc}; nothing was executed"
-            ) from None
+        log_dir = check_artifact_dir(aperio_dir, "local", "runs")
+        local_log = log_dir / f"{run_id}.log"
+        mirror_handle = open_exclusive_binary(
+            local_log, what="local output log"
+        )
 
         stdout_tail, stderr_tail, truncated = {"text": "", "bytes": 0}, {
             "text": "",
@@ -511,16 +467,21 @@ class LocalProcessAdapter(AgentAdapter):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
-        except FileNotFoundError as exc:
+        except FileNotFoundError:
+            # Nothing ran: remove the empty log created for this attempt so
+            # the next attempt (or a re-read) is not confused by it.
+            discard_created_file(local_log, mirror_handle)
             raise ValidationError(
                 f"local-process: executable not found: {validated['executable']}"
             ) from None
         except PermissionError as exc:
+            discard_created_file(local_log, mirror_handle)
             raise ValidationError(
                 f"local-process: cannot execute {validated['executable']}: "
                 f"{exc.strerror or exc}"
             ) from None
         except ValueError as exc:
+            discard_created_file(local_log, mirror_handle)
             raise ValidationError(
                 f"local-process: invalid argv: {exc}"
             ) from None
@@ -531,7 +492,8 @@ class LocalProcessAdapter(AgentAdapter):
                 on_running(pid)
             except BaseException:
                 # The run was cancelled or rejected during startup: kill
-                # and reap the child, then propagate the refusal.
+                # and reap the child, then propagate the refusal. The log
+                # is kept: the child may already have written output.
                 process.terminate()
                 try:
                     process.wait(timeout=5)

@@ -31,11 +31,12 @@ compare and the rename can still win. Crash-consistency is best-effort
 (a hostname token is stored alongside); same-machine pid reuse is a
 documented residual hazard borne by the explicit run-cancel action.
 
-Privacy boundary: raw subprocess output and external-agent diagnostics
-are stored ONLY machine-locally (``.aperio/local/runs/``); shareable
-records carry neutral outcome metadata, exit codes, truncation
-indicators, and safe project-relative artifact references — never child
-output, absolute machine paths, or full argv.
+Privacy boundary: raw subprocess output, external-reported outcomes and
+external-agent diagnostics are stored ONLY machine-locally
+(``.aperio/local/runs/``); shareable records carry neutral outcome
+metadata, exit codes, truncation indicators, and safe project-relative
+artifact references — never child output, raw external text, absolute
+machine paths, or full argv.
 """
 
 from __future__ import annotations
@@ -43,15 +44,20 @@ from __future__ import annotations
 import json
 import os
 import platform
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from aperio import __version__
 from aperio.adapters import (
     LOCAL_PROCESS_ADAPTER_ID,
     MANUAL_ADAPTER_ID,
     get_adapter,
-    sanitize_diagnostics,
+    runs_dir,
+)
+from aperio.artifacts import (
+    check_artifact_dir,
+    create_exclusive_text,
+    read_confined_artifact,
 )
 from aperio.errors import (
     AperioError,
@@ -81,6 +87,9 @@ RUN_STATUSES = (
     "interrupted",
 )
 ACTIVE_RUN_STATUSES = ("prepared", "awaiting-external", "running")
+RUN_ID_RE = re.compile(r"^RUN-\d+$")
+RUN_HANDOFF_SUFFIX = ".handoff.md"
+EXTERNAL_REPORT_FILE_SUFFIX = ".report.txt"
 
 
 def executions_path(aperio_dir: Path) -> Path:
@@ -622,7 +631,12 @@ def _dispatch_execute(
                         "claim lost: the task could not be claimed (a "
                         "competing writer may have claimed or changed it)"
                     ),
-                    "diagnostics_note": sanitize_diagnostics(str(exc)),
+                    "diagnostics_note": (
+                        "task claim rejected "
+                        f"({type(exc).__name__}); the actionable error was "
+                        "reported to the operator and is not stored in the "
+                        "shareable record"
+                    ),
                     "finished_at": utc_now_iso(),
                 },
                 status="failed",
@@ -683,8 +697,15 @@ def _dispatch_execute(
             aperio_dir, run_id,
             updates={
                 "status": "failed",
-                "outcome": f"execution error: {exc}",
-                "diagnostics_note": sanitize_diagnostics(str(exc)),
+                "outcome": (
+                    "execution error: the adapter did not start "
+                    f"({type(exc).__name__}); the actionable error was "
+                    "reported to the operator"
+                ),
+                "diagnostics_note": (
+                    "execution failed before any result was recorded; "
+                    "re-run the command to see the specific error"
+                ),
                 "finished_at": utc_now_iso(),
             },
             status="failed",
@@ -847,6 +868,11 @@ def runs_dispatch(
     fast (sequential same-workspace execution by design — non-overlapping
     scopes cannot be enforced, so parallelism is not offered in 0.4.0).
     Eligibility is re-evaluated per task inside the loop.
+
+    Without ``authorize_exec`` a local-process run returns one read-only
+    preview dict per eligible task (``status: "preview"``): no records,
+    no task claims, and no processes are created, so a later authorized
+    dispatch works normally.
     """
     require_supported_state(aperio_dir)
     adapter = get_adapter(adapter_id)
@@ -882,6 +908,12 @@ def runs_dispatch(
                 authorize_exec=authorize_exec, previous_run_id=None,
                 lock_timeout=LOCK_TIMEOUT_SECONDS,
             )
+            if record.get("status") == "preview":
+                # Unauthorized local-process scheduling is a read-only
+                # preview: no record, no claim, no process. Never hand
+                # preview data to the execution step.
+                dispatched.append(record)
+                continue
             dispatched.append(
                 _dispatch_execute(
                     aperio_dir, record, adapter=adapter,
@@ -995,9 +1027,16 @@ def record_external_result(
     ``result`` requires ``outcome_reported`` (non-empty string) and
     ``success_reported`` (boolean); optional ``diagnostics``. Reporting
     is attribution only — it NEVER completes the task or substitutes for
-    Feature-03 verification. Reported diagnostics are treated as
-    untrusted: they are stored machine-locally (never in the shareable
-    record) and only a neutral note enters the portable record.
+    Feature-03 verification.
+
+    Privacy boundary: both ``outcome_reported`` and ``diagnostics`` are
+    untrusted, potentially secret-bearing external text. They are written
+    to one machine-local file under ``.aperio/local/runs/`` (created
+    exclusively, never appended to or truncated) and the shareable record
+    receives only neutral, bounded status and attribution metadata: a
+    fixed outcome phrase, the success boolean, lengths, and a local-file
+    note. No raw external text, absolute path, or private identifier can
+    reach ``executions.json`` or portable memory.
     """
     if not isinstance(result, dict):
         raise ValidationError("run-report: result must be a JSON object")
@@ -1025,7 +1064,10 @@ def record_external_result(
         raise ValidationError(
             "run-report: field 'diagnostics' must be a string when given"
         )
+    outcome_text = outcome.strip()
+    diagnostics_text = (diagnostics or "").strip()
 
+    require_supported_state(aperio_dir)
     token = acquire_lock(
         executions_lock_path(aperio_dir), timeout=5.0,
         artifact="execution records",
@@ -1051,30 +1093,86 @@ def record_external_result(
                     "'awaiting-external'; external results can only be "
                     "recorded on manual handoff runs"
                 )
-            if diagnostics is not None and diagnostics.strip():
-                # Untrusted external text: stored machine-locally only.
-                local_log = aperio_dir / "local/runs" / f"{run_id}.log"
-                local_log.parent.mkdir(parents=True, exist_ok=True)
-                with local_log.open("a", encoding="utf-8") as fh:
-                    fh.write(
-                        f"[run-report diagnostics]\n{diagnostics.strip()}\n"
-                    )
-                run["diagnostics_note"] = (
-                    "external diagnostics stored machine-locally "
-                    f"({len(diagnostics)} chars)"
-                )
-            run["status"] = "completed" if success else "failed"
-            run["outcome"] = (
-                "external agent reported "
-                + ("success" if success else "failure")
-                + f": {outcome.strip()}"
+            # Untrusted external text: machine-local, exclusive creation.
+            # A raw external report is machine-local evidence and never
+            # enters a shareable record or portable memory.
+            report_dir = check_artifact_dir(aperio_dir, "local", "runs")
+            report_path = report_dir / f"{run_id}{EXTERNAL_REPORT_FILE_SUFFIX}"
+            report_body = (
+                "[run-report]\n"
+                f"run: {run_id}\n"
+                f"task: {run['task_id']}\n"
+                f"adapter: {run['adapter_id']}\n"
+                f"success_reported: {'true' if success else 'false'}\n"
+                "\n## outcome_reported\n"
+                f"{outcome_text}\n"
             )
-            run["finished_at"] = utc_now_iso()
+            if diagnostics_text:
+                report_body += f"\n## diagnostics\n{diagnostics_text}\n"
+            create_exclusive_text(
+                report_path, report_body, what="external run report"
+            )
+            finished_at = utc_now_iso()
+            run["status"] = "completed" if success else "failed"
+            run["outcome"] = "external agent reported " + (
+                "success" if success else "failure"
+            )
+            run["external_reported"] = {
+                "success": success,
+                "attributed_to": "external-agent",
+                "reported_at": finished_at,
+                "outcome_chars": len(outcome_text),
+                "diagnostics_chars": len(diagnostics_text),
+                "raw_stored_locally": True,
+            }
+            run["diagnostics_note"] = (
+                "external diagnostics stored machine-locally "
+                f"({len(diagnostics_text)} chars)"
+                if diagnostics_text
+                else None
+            )
+            run["finished_at"] = finished_at
             _publish_executions(aperio_dir, document, snapshot)
             return run
         raise StateError(f"no run {run_id} in {path}")
     finally:
         release_lock(executions_lock_path(aperio_dir), token)
+
+
+def read_run_handoff(aperio_dir: Path, run_id: str) -> str:
+    """Return the prepared run-handoff document for a manual run.
+
+    The reference is read from the record's current ``handoff_ref`` schema
+    (``runs/<run-id>.handoff.md``) and resolved only inside the project's
+    ``.aperio/runs/`` directory: traversal, absolute paths, malformed
+    references, symlinked directories or leaves, and links resolving to
+    outside files are all refused with an actionable error.
+    """
+    if not isinstance(run_id, str) or not RUN_ID_RE.match(run_id):
+        raise ValidationError("run-handoff: run id must look like RUN-NNNN")
+    require_supported_state(aperio_dir)
+    run = _get_run(aperio_dir, run_id)
+    ref = run.get("handoff_ref")
+    if not ref:
+        raise StateError(
+            f"run {run_id} has no prepared run-handoff document (only "
+            "manual runs prepare one)"
+        )
+    expected = f"runs/{run_id}{RUN_HANDOFF_SUFFIX}"
+    if ref != expected:
+        raise StateError(
+            f"run {run_id} records an unexpected run-handoff reference "
+            f"{ref!r}; this aperio resolves only the current handoff_ref "
+            f"schema ({expected!r}). Nothing was read; inspect the "
+            "execution records manually."
+        )
+    return read_confined_artifact(
+        runs_dir(aperio_dir),
+        ref,
+        dir_name="runs",
+        suffix=RUN_HANDOFF_SUFFIX,
+        what="run handoff document",
+    )
 
 
 def reconcile_runs(aperio_dir: Path) -> dict:

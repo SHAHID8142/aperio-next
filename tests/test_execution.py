@@ -8,6 +8,7 @@ from __future__ import annotations
 import concurrent.futures
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -15,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+from aperio.artifacts import create_exclusive_text, read_confined_artifact
 from aperio.errors import NotInitializedError, PathError, StateError, ValidationError
 from aperio.planstore import approve_plan, create_plan, update_task
 from aperio.planstore import plan_summary  # noqa: F401  (integration probe)
@@ -23,8 +25,10 @@ from aperio.runtime import (
     dispatch_task,
     execution_summary,
     read_executions,
+    read_run_handoff,
     reconcile_runs,
     record_external_result,
+    runs_dispatch,
 )
 
 PLAN_INPUT = {
@@ -770,3 +774,651 @@ def test_secrets_from_child_output_stay_local(run_cli, project_dir, tmp_path):
     # Memory JSON also stays clean.
     summary = execution_summary(aperio_dir)
     assert "ghp_AAAABBBB" not in json.dumps(summary)
+
+
+# --- stabilization: debug output / config secrecy ---------------------------------------
+
+SYNTHETIC_CONFIG_SECRET = "ghp_" + "CONFIGSECRET" * 3
+
+
+def test_no_debug_config_dump_in_output_or_records(
+    run_cli, project_dir, tmp_path
+):
+    """A config value (argv item) must never be echoed by aperio itself:
+    no DEBUG dump to stderr, and nothing in the shareable record or
+    portable memory."""
+    _prepared_project(run_cli, project_dir)
+    aperio_dir = project_dir / ".aperio"
+    config = _local_config(
+        tmp_path, project_dir=project_dir, script="print('ok')",
+        args=["-c", "print('ok')", SYNTHETIC_CONFIG_SECRET],
+    )
+    config_path = _write_config(tmp_path, "cfg.json", config)
+    code, out, err = run_cli(
+        "run-start", str(project_dir), "TASK-001",
+        "--agent", "local-process", "--config", config_path,
+        "--authorize-exec",
+    )
+    assert code == 0, err
+    assert SYNTHETIC_CONFIG_SECRET not in out
+    assert SYNTHETIC_CONFIG_SECRET not in err
+    assert "DEBUG" not in err
+    assert "DEBUG" not in out
+    records = (aperio_dir / "executions.json").read_text()
+    assert SYNTHETIC_CONFIG_SECRET not in records
+    memory = json.dumps(execution_summary(aperio_dir))
+    assert SYNTHETIC_CONFIG_SECRET not in memory
+
+
+def test_invalid_config_error_does_not_echo_config(
+    run_cli, project_dir, tmp_path
+):
+    """An invalid config produces one actionable line, never a traceback
+    and never a dump of the (possibly secret-bearing) config object."""
+    _prepared_project(run_cli, project_dir)
+    config = {"executable": "", "secret_extra": SYNTHETIC_CONFIG_SECRET}
+    config_path = _write_config(tmp_path, "cfg.json", config)
+    code, out, err = run_cli(
+        "run-start", str(project_dir), "TASK-001",
+        "--agent", "local-process", "--config", config_path,
+        "--authorize-exec",
+    )
+    assert code == 1
+    assert "Traceback" not in err
+    assert "aperio: error:" in err
+    assert SYNTHETIC_CONFIG_SECRET not in err
+    assert SYNTHETIC_CONFIG_SECRET not in out
+    assert read_executions(project_dir / ".aperio") is None
+
+
+# --- stabilization: run-handoff schema + confinement --------------------------------------
+
+
+def _tamper_handoff_ref(aperio_dir: Path, ref) -> None:
+    path = aperio_dir / "executions.json"
+    document = json.loads(path.read_text())
+    document["runs"][0]["handoff_ref"] = ref
+    path.write_text(json.dumps(document))
+
+
+def test_run_handoff_cli_reads_prepared_manual_handoff(run_cli, project_dir):
+    """End-to-end: a freshly prepared manual handoff can be read back by
+    the CLI through the current handoff_ref schema."""
+    aperio_dir = _prepared_project(run_cli, project_dir)
+    record = dispatch_task(
+        aperio_dir, "TASK-001", adapter_id="manual",
+        config=None, authorize_exec=False,
+    )
+    assert record["handoff_ref"] == f"runs/{record['run_id']}.handoff.md"
+    code, out, err = run_cli(
+        "run-handoff", str(project_dir), record["run_id"]
+    )
+    assert code == 0, err
+    assert "<!-- aperio:run-handoff:v1 -->" in out
+    assert "Build" in out
+    code, out, err = run_cli(
+        "run-status", str(project_dir), record["run_id"]
+    )
+    assert code == 0, err
+    assert f".aperio/runs/{record['run_id']}.handoff.md" in out
+    # Store-level reader returns the same document.
+    text = read_run_handoff(aperio_dir, record["run_id"])
+    assert "<!-- aperio:run-handoff:v1 -->" in text
+
+
+@pytest.mark.parametrize("bad_ref", [
+    "../outside.md",
+    "runs/../../outside.md",
+    "/etc/passwd",
+    "runs/other-run.handoff.md",
+    "local/runs/RUN-0001.log",
+    "runs/RUN-0001.md",
+    7,
+    None,
+])
+def test_run_handoff_rejects_malformed_or_outside_references(
+    run_cli, project_dir, tmp_path, bad_ref
+):
+    aperio_dir = _prepared_project(run_cli, project_dir)
+    outside = tmp_path / "outside.md"
+    outside.write_text("OUTSIDE-SECRET")
+    record = dispatch_task(
+        aperio_dir, "TASK-001", adapter_id="manual",
+        config=None, authorize_exec=False,
+    )
+    _tamper_handoff_ref(aperio_dir, bad_ref)
+    code, out, err = run_cli(
+        "run-handoff", str(project_dir), record["run_id"]
+    )
+    assert code == 1
+    assert "Traceback" not in err
+    assert "aperio: error:" in err
+    assert "OUTSIDE-SECRET" not in out
+    assert outside.read_text() == "OUTSIDE-SECRET"
+
+
+def test_run_handoff_refuses_symlinked_runs_directory(
+    run_cli, project_dir, tmp_path
+):
+    aperio_dir = _prepared_project(run_cli, project_dir)
+    record = dispatch_task(
+        aperio_dir, "TASK-001", adapter_id="manual",
+        config=None, authorize_exec=False,
+    )
+    real_runs = aperio_dir / "runs"
+    outside = tmp_path / "outside-runs"
+    shutil.move(str(real_runs), str(outside))
+    os.symlink(outside, real_runs)
+    code, out, err = run_cli(
+        "run-handoff", str(project_dir), record["run_id"]
+    )
+    assert code == 1
+    assert "symlink" in err
+    assert "Traceback" not in err
+    assert (outside / f"{record['run_id']}.handoff.md").is_file()
+
+
+def test_run_handoff_refuses_symlinked_leaf(run_cli, project_dir, tmp_path):
+    aperio_dir = _prepared_project(run_cli, project_dir)
+    record = dispatch_task(
+        aperio_dir, "TASK-001", adapter_id="manual",
+        config=None, authorize_exec=False,
+    )
+    handoff = aperio_dir / "runs" / f"{record['run_id']}.handoff.md"
+    outside = tmp_path / "outside-handoff.md"
+    handoff.unlink()
+    os.symlink(outside, handoff)  # dangling: target never created
+    code, out, err = run_cli(
+        "run-handoff", str(project_dir), record["run_id"]
+    )
+    assert code == 1
+    assert "symlink" in err
+    assert not outside.exists()
+
+
+def test_run_handoff_without_reference_is_actionable(run_cli, project_dir):
+    aperio_dir = _prepared_project(run_cli, project_dir)
+    record = dispatch_task(
+        aperio_dir, "TASK-001", adapter_id="manual",
+        config=None, authorize_exec=False,
+    )
+    _tamper_handoff_ref(aperio_dir, None)
+    code, out, err = run_cli(
+        "run-handoff", str(project_dir), record["run_id"]
+    )
+    assert code == 1
+    assert "no prepared run-handoff document" in err
+    assert "Traceback" not in err
+
+
+@pytest.mark.parametrize("ref", [
+    "../outside.md",
+    "runs/../../outside.md",
+    "runs/./RUN-0001.handoff.md",
+    "runs//RUN-0001.handoff.md",
+    "/abs/RUN-0001.handoff.md",
+    "local/runs/RUN-0001.handoff.md",
+    "runs/.handoff.md",
+    "runs/sub/RUN-0001.handoff.md",
+    "runs\\RUN-0001.handoff.md",
+    "runs/RUN-0001.handoff.md\x00.txt",
+])
+def test_read_confined_artifact_rejects_unsafe_references(
+    run_cli, project_dir, tmp_path, ref
+):
+    """Defense-in-depth: the shared reader itself enforces confinement,
+    independent of the caller's exact-reference check."""
+    aperio_dir = _prepared_project(run_cli, project_dir)
+    outside = tmp_path / "outside.md"
+    outside.write_text("OUTSIDE-SECRET")
+    runs = aperio_dir / "runs"
+    runs.mkdir(exist_ok=True)
+    (runs / "RUN-0001.handoff.md").write_text("ok")
+    with pytest.raises((PathError, StateError)):
+        read_confined_artifact(
+            runs, ref, dir_name="runs", suffix=".handoff.md"
+        )
+    assert outside.read_text() == "OUTSIDE-SECRET"
+
+
+def test_read_confined_artifact_refuses_linked_leaf(run_cli, project_dir, tmp_path):
+    aperio_dir = _prepared_project(run_cli, project_dir)
+    runs = aperio_dir / "runs"
+    runs.mkdir(exist_ok=True)
+    outside = tmp_path / "outside.md"
+    outside.write_text("OUTSIDE-SECRET")
+    os.symlink(outside, runs / "RUN-0001.handoff.md")
+    with pytest.raises(PathError, match="symlink"):
+        read_confined_artifact(
+            runs, "runs/RUN-0001.handoff.md",
+            dir_name="runs", suffix=".handoff.md",
+        )
+    assert outside.read_text() == "OUTSIDE-SECRET"
+
+
+def test_read_confined_artifact_refuses_linked_directory(
+    run_cli, project_dir, tmp_path
+):
+    aperio_dir = _prepared_project(run_cli, project_dir)
+    outside = tmp_path / "outside-runs"
+    outside.mkdir()
+    (outside / "RUN-0001.handoff.md").write_text("OUTSIDE-SECRET")
+    os.symlink(outside, aperio_dir / "runs")
+    with pytest.raises(PathError, match="symlink"):
+        read_confined_artifact(
+            aperio_dir / "runs", "runs/RUN-0001.handoff.md",
+            dir_name="runs", suffix=".handoff.md",
+        )
+    assert (outside / "RUN-0001.handoff.md").read_text() == "OUTSIDE-SECRET"
+
+
+# --- stabilization: artifact path safety --------------------------------------------------
+
+
+def test_local_runs_parent_symlink_refused(run_cli, project_dir, tmp_path):
+    """A symlinked .aperio/local/runs must never redirect child output
+    outside the project."""
+    _prepared_project(run_cli, project_dir)
+    aperio_dir = project_dir / ".aperio"
+    outside = tmp_path / "outside-local-runs"
+    outside.mkdir()
+    os.symlink(outside, aperio_dir / "local" / "runs")
+    config = _local_config(
+        tmp_path, project_dir=project_dir, script="print('x')")
+    with pytest.raises(PathError, match="symlink"):
+        dispatch_task(aperio_dir, "TASK-001", adapter_id="local-process",
+                      config=config, authorize_exec=True)
+    assert list(outside.iterdir()) == []
+    # The run record exists (created before execution) but failed cleanly.
+    document = read_executions(aperio_dir)
+    assert document["runs"][0]["status"] == "failed"
+    assert not (aperio_dir / "executions.lock").exists()
+
+
+def test_local_runs_parent_non_directory_refused(run_cli, project_dir, tmp_path):
+    _prepared_project(run_cli, project_dir)
+    aperio_dir = project_dir / ".aperio"
+    (aperio_dir / "local" / "runs").write_text("occupied")
+    config = _local_config(
+        tmp_path, project_dir=project_dir, script="print('x')")
+    with pytest.raises(PathError, match="non-directory occupant"):
+        dispatch_task(aperio_dir, "TASK-001", adapter_id="local-process",
+                      config=config, authorize_exec=True)
+
+
+def test_manual_runs_symlink_refused(run_cli, project_dir, tmp_path):
+    _prepared_project(run_cli, project_dir)
+    aperio_dir = project_dir / ".aperio"
+    outside = tmp_path / "outside-runs"
+    outside.mkdir()
+    os.symlink(outside, aperio_dir / "runs")
+    with pytest.raises(PathError, match="symlink"):
+        dispatch_task(aperio_dir, "TASK-001", adapter_id="manual",
+                      config=None, authorize_exec=False)
+    assert list(outside.iterdir()) == []
+
+
+def test_dangling_handoff_symlink_never_followed(run_cli, project_dir, tmp_path):
+    _prepared_project(run_cli, project_dir)
+    aperio_dir = project_dir / ".aperio"
+    runs = aperio_dir / "runs"
+    runs.mkdir()
+    outside = tmp_path / "not-created.md"
+    os.symlink(outside, runs / "RUN-0001.handoff.md")
+    with pytest.raises(PathError, match="symlink"):
+        dispatch_task(aperio_dir, "TASK-001", adapter_id="manual",
+                      config=None, authorize_exec=False)
+    assert not outside.exists()
+
+
+def test_occupied_local_log_is_preserved_not_truncated(
+    run_cli, project_dir, tmp_path
+):
+    _prepared_project(run_cli, project_dir)
+    aperio_dir = project_dir / ".aperio"
+    log_dir = aperio_dir / "local" / "runs"
+    log_dir.mkdir(parents=True)
+    occupied = log_dir / "RUN-0001.log"
+    occupied.write_text("PRESERVE-ME")
+    config = _local_config(
+        tmp_path, project_dir=project_dir, script="print('x')")
+    with pytest.raises(StateError, match="already occupied"):
+        dispatch_task(aperio_dir, "TASK-001", adapter_id="local-process",
+                      config=config, authorize_exec=True)
+    assert occupied.read_text() == "PRESERVE-ME"
+    assert read_executions(aperio_dir)["runs"][0]["status"] == "failed"
+
+
+def test_missing_executable_cleans_up_log(run_cli, project_dir, tmp_path):
+    _prepared_project(run_cli, project_dir)
+    aperio_dir = project_dir / ".aperio"
+    config = _local_config(
+        tmp_path, project_dir=project_dir, script="print('x')",
+        executable=str(tmp_path / "definitely-not-here"),
+    )
+    with pytest.raises(ValidationError, match="executable not found"):
+        dispatch_task(aperio_dir, "TASK-001", adapter_id="local-process",
+                      config=config, authorize_exec=True)
+    assert not (aperio_dir / "local/runs/RUN-0001.log").exists()
+    assert read_executions(aperio_dir)["runs"][0]["status"] == "failed"
+    # The shareable record carries no absolute machine path from the error.
+    records = (aperio_dir / "executions.json").read_text()
+    assert str(tmp_path) not in records
+    assert not (aperio_dir / "executions.lock").exists()
+
+
+def test_permission_failure_is_an_aperio_error(
+    run_cli, project_dir, tmp_path
+):
+    if not hasattr(os, "geteuid") or os.geteuid() == 0:
+        pytest.skip("permission checks are meaningless as root")
+    _prepared_project(run_cli, project_dir)
+    aperio_dir = project_dir / ".aperio"
+    local_dir = aperio_dir / "local"
+    config = _local_config(
+        tmp_path, project_dir=project_dir, script="print('x')")
+    local_dir.chmod(0o500)
+    try:
+        with pytest.raises(StateError, match="cannot create artifact directory"):
+            dispatch_task(aperio_dir, "TASK-001", adapter_id="local-process",
+                          config=config, authorize_exec=True)
+    finally:
+        local_dir.chmod(0o700)
+
+
+def test_exclusive_artifact_creation_race(tmp_path):
+    """Only one racing writer may create the leaf; the winner's content
+    is never truncated and the loser reports a conflict."""
+    target = tmp_path / "raced.handoff.md"
+
+    def attempt(index: int) -> str:
+        try:
+            create_exclusive_text(target, f"payload-{index}")
+            return f"won-{index}"
+        except StateError:
+            return f"lost-{index}"
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        outcomes = list(pool.map(attempt, range(8)))
+    winners = [o for o in outcomes if o.startswith("won-")]
+    assert len(winners) == 1
+    index = winners[0].split("-")[1]
+    assert target.read_text() == f"payload-{index}"
+
+
+def test_run_report_diagnostics_symlink_refused(
+    run_cli, project_dir, tmp_path
+):
+    aperio_dir = _prepared_project(run_cli, project_dir)
+    dispatch_task(aperio_dir, "TASK-001", adapter_id="manual",
+                  config=None, authorize_exec=False)
+    outside = tmp_path / "outside-local-runs"
+    outside.mkdir()
+    os.symlink(outside, aperio_dir / "local" / "runs")
+    with pytest.raises(PathError, match="symlink"):
+        record_external_result(aperio_dir, "RUN-0001", {
+            "outcome_reported": "done",
+            "success_reported": True,
+            "diagnostics": "notes",
+        })
+    assert list(outside.iterdir()) == []
+    # No partial mutation: the run is still awaiting an external report.
+    assert read_executions(aperio_dir)["runs"][0]["status"] == "awaiting-external"
+
+
+def test_run_report_occupied_report_file_preserved(run_cli, project_dir):
+    aperio_dir = _prepared_project(run_cli, project_dir)
+    dispatch_task(aperio_dir, "TASK-001", adapter_id="manual",
+                  config=None, authorize_exec=False)
+    report_dir = aperio_dir / "local" / "runs"
+    report_dir.mkdir(parents=True)
+    occupied = report_dir / "RUN-0001.report.txt"
+    occupied.write_text("PRESERVE-ME")
+    with pytest.raises(StateError, match="already occupied"):
+        record_external_result(aperio_dir, "RUN-0001", {
+            "outcome_reported": "done", "success_reported": True,
+        })
+    assert occupied.read_text() == "PRESERVE-ME"
+    assert read_executions(aperio_dir)["runs"][0]["status"] == "awaiting-external"
+
+
+# --- stabilization: external-result privacy ----------------------------------------------
+
+EXTERNAL_SECRETS = (
+    "ghp_" + "EXTERNAL" * 4,
+    "hunter2-external-password",
+    "AKIA" + "Q" * 16,
+    "/Users/private-operator/.ssh/id_rsa",
+    "acme-internal-project-codename",
+)
+
+
+def _external_result_payload() -> dict:
+    secret_blob = " ".join(EXTERNAL_SECRETS)
+    return {
+        "outcome_reported": f"finished the work; {secret_blob}",
+        "success_reported": True,
+        "diagnostics": f"password=... path=... {secret_blob}",
+    }
+
+
+def test_external_report_text_stays_machine_local(run_cli, project_dir):
+    """Raw external-reported text must never enter executions.json or
+    portable memory; only neutral bounded metadata may be shareable."""
+    aperio_dir = _prepared_project(run_cli, project_dir)
+    dispatch_task(aperio_dir, "TASK-001", adapter_id="manual",
+                  config=None, authorize_exec=False)
+    run = record_external_result(aperio_dir, "RUN-0001", _external_result_payload())
+    assert run["outcome"] == "external agent reported success"
+    assert run["external_reported"]["raw_stored_locally"] is True
+    records = (aperio_dir / "executions.json").read_text()
+    memory = json.dumps(execution_summary(aperio_dir))
+    for secret in EXTERNAL_SECRETS:
+        assert secret not in json.dumps(run)
+        assert secret not in records
+        assert secret not in memory
+    # The raw report is kept machine-locally by design.
+    local = (aperio_dir / "local/runs/RUN-0001.report.txt").read_text()
+    for secret in EXTERNAL_SECRETS:
+        assert secret in local
+
+
+def test_external_report_cli_output_is_clean(run_cli, project_dir, tmp_path):
+    aperio_dir = _prepared_project(run_cli, project_dir)
+    dispatch_task(aperio_dir, "TASK-001", adapter_id="manual",
+                  config=None, authorize_exec=False)
+    report = tmp_path / "report.json"
+    report.write_text(json.dumps(_external_result_payload()))
+    code, out, err = run_cli("run-report", str(project_dir), "RUN-0001",
+                             "--file", str(report))
+    assert code == 0, err
+    for secret in EXTERNAL_SECRETS:
+        assert secret not in out
+        assert secret not in err
+    records = (aperio_dir / "executions.json").read_text()
+    for secret in EXTERNAL_SECRETS:
+        assert secret not in records
+
+
+# --- stabilization: scheduler preview / subprocess dispatch -------------------------------
+
+PLAN_INPUT_INDEPENDENT = {
+    "objective": "Deliver independent work",
+    "expected_outcome": "Both tasks run",
+    "scope": ["work"], "exclusions": [], "assumptions": [], "risks": [],
+    "strategy": "incremental",
+    "acceptance_criteria": ["both run"],
+    "verification_strategy": "pytest",
+    "tasks": [
+        {"id": "TASK-002", "title": "Second", "objective": "B",
+         "deliverables": ["b"], "acceptance_criteria": ["b"],
+         "depends_on": []},
+        {"id": "TASK-001", "title": "First", "objective": "A",
+         "deliverables": ["a"], "acceptance_criteria": ["a"],
+         "depends_on": []},
+    ],
+}
+
+
+def _independent_project(run_cli, project_dir):
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    create_plan(aperio_dir, PLAN_INPUT_INDEPENDENT)
+    approve_plan(aperio_dir)
+    return aperio_dir
+
+
+def test_runs_dispatch_preview_is_read_only_then_authorized_works(
+    run_cli, project_dir, tmp_path
+):
+    aperio_dir = _independent_project(run_cli, project_dir)
+    marker = tmp_path / "child-ran.txt"
+    script = f"open({str(marker)!r}, 'a').write('ran\\n')"
+    config = _local_config(tmp_path, project_dir=project_dir, script=script)
+
+    previews = runs_dispatch(
+        aperio_dir, adapter_id="local-process", config=config,
+        authorize_exec=False,
+    )
+    assert [p["status"] for p in previews] == ["preview", "preview"]
+    assert [p["task_id"] for p in previews] == ["TASK-001", "TASK-002"]
+    assert all("run_id" not in p for p in previews)
+    assert read_executions(aperio_dir) is None
+    assert not marker.exists()
+    plan = json.loads((aperio_dir / "plan.json").read_text())
+    assert {t["status"] for t in plan["tasks"]} == {"pending"}
+    assert not (aperio_dir / "local/runs").exists()
+    assert not (aperio_dir / "dispatch.lock").exists()
+
+    results = runs_dispatch(
+        aperio_dir, adapter_id="local-process", config=config,
+        authorize_exec=True,
+    )
+    assert [r["task_id"] for r in results] == ["TASK-001", "TASK-002"]
+    assert [r["run_id"] for r in results] == ["RUN-0001", "RUN-0002"]
+    assert [r["status"] for r in results] == ["completed", "completed"]
+    assert marker.read_text().count("ran") == 2
+    document = read_executions(aperio_dir)
+    assert [r["task_id"] for r in document["runs"]] == ["TASK-001", "TASK-002"]
+    # Exit 0 never completes a task: verification stays manual.
+    plan = json.loads((aperio_dir / "plan.json").read_text())
+    assert {t["status"] for t in plan["tasks"]} == {"in-progress"}
+    assert not (aperio_dir / "dispatch.lock").exists()
+
+
+def test_runs_dispatch_manual_still_creates_handoffs(run_cli, project_dir):
+    aperio_dir = _independent_project(run_cli, project_dir)
+    results = runs_dispatch(
+        aperio_dir, adapter_id="manual", config=None, authorize_exec=False,
+    )
+    assert [r["status"] for r in results] == ["awaiting-external", "awaiting-external"]
+    for record in results:
+        assert record["handoff_ref"] == f"runs/{record['run_id']}.handoff.md"
+        assert read_run_handoff(aperio_dir, record["run_id"])
+
+
+def test_cancel_during_process_startup_is_clean(
+    run_cli, project_dir, tmp_path, monkeypatch
+):
+    """Cancelling while the child is starting must terminate/reap it, keep
+    the cancelled status, and leave no lock or dangling claim behind."""
+    from aperio import runtime as runtime_module
+
+    _prepared_project(run_cli, project_dir)
+    aperio_dir = project_dir / ".aperio"
+    original = runtime_module._flip_to_running
+
+    def flip_then_cancel(dir_path, run_id, pid):
+        runtime_module.cancel_run(dir_path, run_id, reason="test startup cancel")
+        original(dir_path, run_id, pid)  # raises: run was cancelled
+
+    monkeypatch.setattr(runtime_module, "_flip_to_running", flip_then_cancel)
+    config = _local_config(
+        tmp_path, project_dir=project_dir,
+        script="import time; time.sleep(30)",
+    )
+    with pytest.raises(StateError, match="cancelled"):
+        dispatch_task(aperio_dir, "TASK-001", adapter_id="local-process",
+                      config=config, authorize_exec=True)
+    document = read_executions(aperio_dir)
+    assert document["runs"][0]["status"] == "cancelled"
+    for lock in ("executions.lock", "dispatch.lock"):
+        assert not (aperio_dir / lock).exists()
+
+
+# --- stabilization: CLI error surfaces ----------------------------------------------------
+
+
+def test_cli_operational_errors_are_actionable(run_cli, project_dir, tmp_path):
+    """Existing log, invalid config, missing executable, unknown run and
+    unreadable report file all return exit 1 with one clean line."""
+    _prepared_project(run_cli, project_dir)
+    aperio_dir = project_dir / ".aperio"
+
+    # invalid config
+    bad_config = _write_json(tmp_path, "bad.json", {"args": ["x"]})
+    code, out, err = run_cli(
+        "run-start", str(project_dir), "TASK-001",
+        "--agent", "local-process", "--config", bad_config,
+        "--authorize-exec",
+    )
+    assert code == 1 and "Traceback" not in err and "aperio: error:" in err
+
+    # missing executable
+    missing = _local_config(
+        tmp_path, project_dir=project_dir, script="print('x')",
+        executable=str(tmp_path / "no-such-binary"),
+    )
+    missing_path = _write_config(tmp_path, "missing.json", missing)
+    code, out, err = run_cli(
+        "run-start", str(project_dir), "TASK-001",
+        "--agent", "local-process", "--config", missing_path,
+        "--authorize-exec",
+    )
+    assert code == 1 and "Traceback" not in err
+    assert "executable not found" in err
+
+    # existing log collision (retry run id will be RUN-0002)
+    log_dir = aperio_dir / "local" / "runs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    (log_dir / "RUN-0002.log").write_text("PRESERVE-ME")
+    good = _write_json(tmp_path, "good.json", _local_config(
+        tmp_path, project_dir=project_dir, script="print('ok')"))
+    code, out, err = run_cli(
+        "run-start", str(project_dir), "TASK-001",
+        "--agent", "local-process", "--config", good,
+        "--authorize-exec",
+    )
+    assert code == 1 and "Traceback" not in err
+    assert "already occupied" in err
+    assert (log_dir / "RUN-0002.log").read_text() == "PRESERVE-ME"
+
+    # unknown run
+    code, out, err = run_cli("run-status", str(project_dir), "RUN-9999")
+    assert code == 1 and "Traceback" not in err
+    # unreadable report file
+    code, out, err = run_cli(
+        "run-report", str(project_dir), "RUN-0001",
+        "--file", str(tmp_path / "absent.json"),
+    )
+    assert code == 1 and "Traceback" not in err
+
+
+def test_cli_run_report_lifecycle(run_cli, project_dir, tmp_path):
+    """Manual flow: dispatch -> handoff -> run-report -> verification is
+    still pending (reporting never completes the task)."""
+    aperio_dir = _prepared_project(run_cli, project_dir)
+    record = dispatch_task(aperio_dir, "TASK-001", adapter_id="manual",
+                           config=None, authorize_exec=False)
+    report = tmp_path / "report.json"
+    report.write_text(json.dumps({
+        "outcome_reported": "done", "success_reported": True,
+    }))
+    code, out, err = run_cli("run-report", str(project_dir),
+                             record["run_id"], "--file", str(report))
+    assert code == 0, err
+    plan = json.loads((aperio_dir / "plan.json").read_text())
+    assert plan["tasks"][0]["status"] == "in-progress"
+    code, out, err = run_cli("runs-reconcile", str(project_dir))
+    assert code == 0, err
+    assert not (aperio_dir / "executions.lock").exists()

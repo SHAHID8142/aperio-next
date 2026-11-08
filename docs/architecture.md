@@ -408,14 +408,41 @@ Single file, dict-based, unknown keys preserved; every mutation under
 (`RUN-NNNN`, sequential under the lock), `task_id`, `plan_version`,
 `adapter_id`, `status` (`prepared` / `awaiting-external` / `running` /
 `completed` / `failed` / `cancelled` / `interrupted`), timestamps,
-`exit_code`, bounded sanitized `diagnostics`, `handoff_path`, `pid` +
-`machine` (recorded atomically with the running flip; pids are only
-interpreted on the recording machine), `previous_run_id` (retries),
-`outcome_note` (cancellation precedence). Cancel-vs-finalize precedence:
-a cancelled run is never resurrected; cancel of a finalized run is
-refused. `plan_changed_since_start` is DERIVED at read time (never
-stored). Future exec-schema versions: refused on writes, degraded
-summary in memory; corrupt → fatal StateError.
+`exit_code`, neutral metadata (`diagnostics_note`, `external_reported`),
+`handoff_ref` (`runs/<run-id>.handoff.md`, the current reference schema),
+`local_log_ref` (`local/runs/<run-id>.log`), `pid` + `machine` (recorded
+atomically with the running flip; pids are only interpreted on the
+recording machine), `previous_run_id` (retries), `outcome_note`
+(cancellation precedence). Cancel-vs-finalize precedence: a cancelled
+run is never resurrected; cancel of a finalized run is refused.
+`plan_changed_since_start` is DERIVED at read time (never stored).
+Future exec-schema versions: refused on writes, degraded summary in
+memory; corrupt → fatal StateError.
+
+**Privacy boundary for external results.** `outcome_reported` and
+`diagnostics` from `run-report` are untrusted and potentially
+secret-bearing. They are written together to one machine-local file
+(`local/runs/<run-id>.report.txt`, created exclusively — never appended
+to or truncated) and the shareable record receives only a fixed neutral
+phrase (`external agent reported success|failure`), the success boolean,
+text lengths, and an attribution block (`external_reported`). Raw text,
+absolute paths, and private identifiers cannot reach `executions.json` or
+`aperio memory --json`.
+
+**Run-handoff reads.** `run-handoff` resolves only the current
+`handoff_ref` schema, exactly `runs/<run-id>.handoff.md`, inside
+`.aperio/runs/`. Traversal, absolute paths, malformed references, a
+symlinked `runs/` directory, and a symlinked leaf are refused with a
+clean error; the target of any link is never read or modified.
+
+**Artifact path policy.** All run artifacts validate the whole parent
+chain (no symlink at any level, no non-directory occupant) and are
+created with `O_CREAT|O_EXCL` (+ `O_NOFOLLOW` where available), so
+aperio never truncates or appends to a file it did not just create and
+never writes outside the project. The same policy covers `run-report`
+diagnostics writes. Check-then-create is not atomic against a hostile
+process running as the same user (documented residual hazard); the
+exclusive-create flag closes the practical race on the leaf.
 
 ### Dispatch, authorization and reconciliation
 

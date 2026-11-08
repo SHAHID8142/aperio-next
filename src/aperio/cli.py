@@ -25,7 +25,7 @@ from pathlib import Path
 
 from aperio import __version__
 from aperio.decisions import append_decision
-from aperio.errors import AperioError, ValidationError
+from aperio.errors import AperioError, StateError, ValidationError
 from aperio.handoff import (
     HANDOFF_FIELDS,
     HandoffContent,
@@ -40,6 +40,7 @@ from aperio.runtime import (
     execution_preview,
     read_executions,
     read_executions_or_fail,
+    read_run_handoff,
     reconcile_runs,
     record_external_result,
 )
@@ -762,10 +763,12 @@ def _print_run(run: dict) -> None:
         print(f"Outcome:     {run['outcome']}")
     if run.get("exit_code") is not None:
         print(f"Exit code:   {run['exit_code']}")
-    if run.get("diagnostics"):
-        print(f"Diagnostics: {run['diagnostics']}")
-    if run.get("handoff_path"):
-        print(f"Handoff:     {run['handoff_path']}")
+    if run.get("diagnostics_note"):
+        print(f"Diagnostics: {run['diagnostics_note']}")
+    if run.get("handoff_ref"):
+        print(f"Handoff:     {APERIO_DIR_NAME}/{run['handoff_ref']}")
+    if run.get("local_log_ref"):
+        print(f"Local log:   {APERIO_DIR_NAME}/{run['local_log_ref']}")
     if run.get("previous_run_id"):
         print(f"Retry of:    {run['previous_run_id']}")
 
@@ -846,18 +849,7 @@ def _cmd_run_handoff(args) -> None:
     aperio = aperio_dir_for(
         resolve_target(args.project_directory, for_writing=False)
     )
-    document = read_executions_or_fail(aperio)
-    for run in document["runs"]:
-        if run["run_id"] == args.run_id:
-            handoff = run.get("handoff_path")
-            if not handoff:
-                raise StateError(
-                    f"run {args.run_id} has no prepared run-handoff "
-                    "document (only manual runs prepare one)"
-                )
-            print(Path(handoff).read_text(encoding="utf-8"), end="")
-            return
-    raise StateError(f"no run {args.run_id} in this project")
+    print(read_run_handoff(aperio, args.run_id), end="")
 
 
 def _cmd_task_status(args) -> None:
