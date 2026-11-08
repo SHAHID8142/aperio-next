@@ -30,15 +30,23 @@
   ``--authorize-exec`` is a procedural human-in-the-loop checkpoint, not
   a sandbox.
 
+- **Feature 05 — Cross-machine portability, integrity & schema-upgrade
+  foundation:** `aperio export` (validated, whitelisted ZIP archive with a
+  versioned SHA-256 manifest), `aperio import` (full pre-write validation,
+  conflict-preserving, `--replace` approval, lock + rollback), `aperio
+  integrity` (read-only consistency report, optional archive check), and
+  `aperio upgrade` (dry-run preview, explicit migration registry, backups,
+  refusal of future versions). `.aperio/local/` never travels, and
+  execution metadata is machine-neutral in transit.
+
 Everything below is future work. Nothing in this list works today; do not
 claim otherwise in code, docs, or demos. Each item lands as its own
 assignment ("one feature per assignment").
 
-## Feature 05 — Cross-machine portability tooling
+## Feature 06 — (to be scoped)
 
-Export/import of the shareable subset of `.aperio/` (explicitly excluding
-`local/`), integrity checks, and a defined upgrade path between schema
-versions (state, handoff, and plan schemas).
+No Feature 06 work has started. The next assignment is defined by the
+project owner after independent review of Feature 05.
 
 ## Later / exploratory
 

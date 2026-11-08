@@ -1,11 +1,13 @@
 # aperio-next
 
 **Aperio** is a model-agnostic, multi-agent software development orchestrator.
-This repository contains **Features 01–03**: the project foundation
+This repository contains **Features 01–05**: the project foundation
 (bootstrap and inspect portable project state), portable agent memory
-(read shared context, record decisions, hand off work), and project
-planning with a dependency-validated task graph and evidence-based
-execution tracking.
+(read shared context, record decisions, hand off work), project planning
+with a dependency-validated task graph and evidence-based execution
+tracking, a model-agnostic execution runtime, and cross-machine
+portability (validated export/import, integrity checks, and a versioned
+schema-upgrade foundation).
 
 Anything not listed below is **planned, not implemented**. See
 [docs/roadmap.md](docs/roadmap.md) for what is coming and
@@ -17,7 +19,8 @@ Anything not listed below is **planned, not implemented**. See
 - Implemented (Feature 02): `aperio memory [--json]`, `aperio decision-add`, `aperio handoff-write`, `aperio phase-set`
 - Implemented (Feature 03): `aperio plan-create`, `aperio plan-show [--json]`, `aperio plan-approve`, `aperio plan-revise`, `aperio task-list [--json]`, `aperio task-status`
 - Implemented (Feature 04): `aperio agent-list`, `aperio run-preview`, `aperio run-start [--authorize-exec]`, `aperio run-status`, `aperio runs-list`, `aperio run-cancel`, `aperio runs-reconcile`, `aperio run-report`, `aperio run-handoff`
-- Not implemented (by design, yet): model-provider integrations (Claude/Codex/Cursor/ZCode adapters), autonomous coding, sandboxed execution
+- Implemented (Feature 05): `aperio export [--dry-run] [--json]`, `aperio import [--replace] [--dry-run]`, `aperio integrity [--archive] [--json]`, `aperio upgrade [--apply] [--json]`
+- Not implemented (by design, yet): model-provider integrations (Claude/Codex/Cursor/ZCode adapters), autonomous coding, sandboxed execution, Cloud sync
 
 ## Requirements
 
@@ -95,13 +98,22 @@ aperio run-preview ./my-project TASK-001 --agent manual   # deterministic previe
 aperio run-start ./my-project TASK-001 --agent manual     # prepare handoff (never executes)
 aperio run-start ./my-project TASK-001 --agent local-process \
   --config .aperio/local/adapter.json --authorize-exec    # REAL subprocess (explicit consent)
-apero run-start ./my-project TASK-001 --agent local-process \
+aperio run-start ./my-project TASK-001 --agent local-process \
   --config .aperio/local/adapter.json                    # read-only preview (no process)
 aperio run-status ./my-project RUN-0001 --json      # inspect one run
 aperio runs-list ./my-project --json                # execution history
 aperio run-cancel ./my-project RUN-0001 --reason "changed plan"
 aperio runs-reconcile ./my-project                  # detect interrupted runs
 aperio run-report ./my-project RUN-0001 --file report.json  # consume external result
+
+# Cross-machine portability (Feature 05)
+aperio export ./my-project --dry-run                  # validate + preview, write nothing
+aperio export ./my-project --output ./project.zip     # portable archive (must not exist)
+aperio import ./destination ./project.zip --dry-run   # validate the whole archive first
+aperio import ./destination ./project.zip             # never overwrites without --replace
+aperio integrity ./my-project                         # read-only consistency report
+aperio integrity ./my-project --archive ./project.zip # also verify manifest hashes
+aperio upgrade ./my-project                           # dry-run schema preview
 ```
 
 ### `aperio init`
@@ -128,6 +140,41 @@ Safety rules:
 Reads `.aperio/state.json` and reports project name, schema version, phase, timestamps,
 and which context files exist. It **never writes or creates anything**. Missing context
 files are reported so a follow-up `init` can repair them.
+
+### Portable export/import (Feature 05)
+
+`export` writes a versioned ZIP archive of the **shareable** subset of
+`.aperio/` only: `state.json`, `brief.md`, `decisions.md`, `handoff.md`,
+`plan.json`, a machine-neutral projection of `executions.json`, and the
+handoff documents of awaiting-external runs. `.aperio/local/` (local logs,
+external reports, credentials), locks, temporary files, and the generated
+`.gitignore` are excluded by construction — the exporter never walks the
+directory tree. Execution records travel with `pid`, `machine`, and
+`local_log_ref` nulled, so a pid from another computer can never be
+interpreted locally.
+
+`import` validates the complete archive before touching the destination:
+manifest schema, path whitelist (no absolute paths, `..`, duplicates,
+hidden names, `local/`), member types (no directories, symlinks, or
+encryption), bounded decompressed sizes, and SHA-256 per file. Existing
+files are preserved byte-for-byte; identical bytes are accepted as
+unchanged, and replacing differing context requires explicit `--replace`
+after review. `state.json` is written last, and in-process failures roll
+back their own writes.
+
+**Honesty note:** manifest hashes detect corruption, not authorship. They
+do not authenticate an archive and cannot prove that hand-written briefs,
+decisions, or handoffs contain no secrets. Review shareable text before
+sending it anywhere.
+
+`integrity` reports — never repairs — schema versions, plan graph and task
+lifecycle consistency, malformed/duplicate decision entries, handoff
+format, execution-record references, missing or unexpected shareable
+files, and (with `--archive`) archive manifest integrity. `upgrade`
+previews schema versions per artifact; it applies only explicitly
+registered migrations, refuses newer versions, and backs up originals
+under `.aperio/local/backups/` before any write. No migrations exist in
+this release, so it is a framework, not a conversion path.
 
 ### `aperio memory` (Feature 02)
 
@@ -194,6 +241,9 @@ create-only via an exclusive hard-link publish). See
    `phase-set`, `task-status`.
 5. Never store credentials anywhere under `.aperio/` except `.aperio/local/`, which is
    git-ignored and not portable by definition.
+6. To move a project between machines, use `aperio export` / `aperio import`
+   and verify the result with `aperio integrity`. The archive carries the
+   shareable context only; `local/` never travels.
 
 ## Development
 

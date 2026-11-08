@@ -9,6 +9,11 @@ Commands:
     aperio handoff-write <dir> --file <handoff.json>
                                       replace the handoff with a validated one
     aperio phase-set <dir> <phase>    update the project phase (compare-and-swap)
+    aperio export <dir> [--output F]  export shareable context to a portable archive
+    aperio import <dir> <archive>     import a portable archive (preview by default)
+    aperio integrity <dir> [--archive F]
+                                      validate portable context consistency
+    aperio upgrade <dir> [--apply]    preview or apply explicit schema upgrades
 
 Exit codes:
     0  success
@@ -32,13 +37,13 @@ from aperio.handoff import (
     write_handoff,
 )
 from aperio.inputs import read_json_fields
+from aperio.integrity import check_integrity
 from aperio.memory import load_context
 from aperio.paths import resolve_target
 from aperio.runtime import (
     cancel_run,
     dispatch_task,
     execution_preview,
-    read_executions,
     read_executions_or_fail,
     read_run_handoff,
     reconcile_runs,
@@ -55,7 +60,9 @@ from aperio.planstore import (
     revise_plan,
     update_task,
 )
+from aperio.portable import export_project, import_archive
 from aperio.progress import update_phase
+from aperio.upgrade import apply_upgrade, plan_upgrade
 from aperio.project import (
     APERIO_DIR_NAME,
     InitResult,
@@ -74,8 +81,10 @@ def build_parser() -> argparse.ArgumentParser:
         prog=_PROG,
         description=(
             "Aperio: model-agnostic, multi-agent software development "
-            "orchestrator (Feature 01: project foundation; Feature 02: "
-            "portable agent memory and handoff)."
+            "orchestrator (Features 01-05: project foundation, portable "
+            "agent memory and handoff, planning and execution, cross-machine "
+            "portable export/import with integrity and schema-upgrade "
+            "foundations)."
         ),
     )
     parser.add_argument(
@@ -368,6 +377,76 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_handoff_parser.add_argument("project_directory")
     run_handoff_parser.add_argument("run_id")
+
+    export_parser = subparsers.add_parser(
+        "export",
+        help="export shareable project context to a portable ZIP archive",
+    )
+    export_parser.add_argument("project_directory")
+    export_parser.add_argument(
+        "--output",
+        help="archive path (must not exist; default: ./aperio-<name>-<utc>.zip)",
+    )
+    export_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="validate and preview exactly what would be exported; write nothing",
+    )
+    export_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit a machine-readable report",
+    )
+
+    import_parser = subparsers.add_parser(
+        "import",
+        help="import a portable archive into a project (validate + preview first)",
+    )
+    import_parser.add_argument("project_directory")
+    import_parser.add_argument("archive", help="portable archive to import")
+    import_parser.add_argument(
+        "--replace",
+        action="store_true",
+        help="replace existing portable context (explicit operator approval; "
+             "review the archive first)",
+    )
+    import_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="validate the complete archive and preview actions; write nothing",
+    )
+    import_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit a machine-readable report",
+    )
+
+    integrity_parser = subparsers.add_parser(
+        "integrity",
+        help="validate the portable context of a project (read-only)",
+    )
+    integrity_parser.add_argument("project_directory")
+    integrity_parser.add_argument(
+        "--archive",
+        help="also validate this portable archive (manifest hashes included)",
+    )
+    integrity_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit a machine-readable report",
+    )
+
+    upgrade_parser = subparsers.add_parser(
+        "upgrade",
+        help="preview (default) or apply explicit, versioned schema upgrades",
+    )
+    upgrade_parser.add_argument("project_directory")
+    upgrade_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="apply implemented migrations after writing a backup",
+    )
+    upgrade_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit a machine-readable report",
+    )
     task_status_parser.add_argument(
         "--reopen",
         action="store_true",
@@ -938,6 +1017,130 @@ def _cmd_task_status(args) -> None:
     print(f"task {task['id']}: {task['status']}{owner}{extra}")
 
 
+def _cmd_export(args) -> None:
+    report = export_project(
+        args.project_directory, output=args.output, dry_run=args.dry_run
+    )
+    if args.as_json:
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        return
+    if report["dry_run"]:
+        print("export preview (dry run): validation complete, nothing written")
+    else:
+        print(
+            f"exported {len(report['files'])} file(s) to {report['archive']}"
+        )
+    print(
+        f"  format: {report['format']} v{report['format_version']}; "
+        f"{report['total_bytes']} bytes"
+    )
+    for entry in report["files"]:
+        print(f"  {entry['size']:>8}  {entry['sha256'][:16]}...  {entry['path']}")
+    for warning in report["warnings"]:
+        print(f"  warning: {warning}")
+    print(
+        "  note: hashes detect corruption only; they do not authenticate the "
+        "archive and cannot prove that hand-written files contain no secrets. "
+        "Review shareable text before sharing."
+    )
+
+
+def _cmd_import(args) -> None:
+    report = import_archive(
+        args.project_directory,
+        args.archive,
+        replace=args.replace,
+        dry_run=args.dry_run,
+    )
+    if args.as_json:
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        return
+    if report["dry_run"]:
+        print(
+            "import preview (dry run): the archive is fully validated; "
+            "nothing written"
+        )
+    else:
+        print(f"imported into {report['destination']}")
+    print(f"  format: {report['format']} v{report['format_version']}")
+    for marker, key in (
+        ("create", "created"), ("replace", "replaced"),
+        ("unchanged", "unchanged"),
+    ):
+        for rel in report[key]:
+            print(f"  {marker:<9} {APERIO_DIR_NAME}/{rel}")
+    for warning in report["warnings"]:
+        print(f"  warning: {warning}")
+    if report["dry_run"]:
+        print("  re-run without --dry-run to apply")
+
+
+def _cmd_integrity(args) -> int:
+    report = check_integrity(
+        args.project_directory, archive_path=args.archive
+    )
+    if args.as_json:
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        return 0 if report["ok"] else 1
+    if report["ok"]:
+        print("integrity: OK")
+    else:
+        print(f"integrity: {len(report['errors'])} error(s)")
+    for finding in report["errors"]:
+        location = finding.get("path")
+        where = f" [{location}]" if location else ""
+        print(f"  error: {finding['message']}{where}")
+    for finding in report["warnings"]:
+        location = finding.get("path")
+        where = f" [{location}]" if location else ""
+        print(f"  warning: {finding['message']}{where}")
+    schemas = report["schemas"]
+    print(
+        "  schemas: "
+        + ", ".join(f"{name}={value}" for name, value in schemas.items())
+    )
+    if report.get("archive"):
+        archive = report["archive"]
+        print(
+            f"  archive: OK ({archive['files']} file(s), "
+            f"{archive['format']} v{archive['format_version']})"
+        )
+    return 0 if report["ok"] else 1
+
+
+def _cmd_upgrade(args) -> int:
+    report = (
+        apply_upgrade(args.project_directory)
+        if args.apply
+        else plan_upgrade(args.project_directory)
+    )
+    if args.as_json:
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        return 0 if report["ok"] else 1
+    if report["applied"]:
+        print(f"schema upgrade applied; backup at {report['backup']}")
+    elif args.apply:
+        print("schema upgrade: nothing to migrate; project unchanged")
+    else:
+        print("schema upgrade preview (dry run): nothing written")
+    for entry in report["artifacts"]:
+        version = entry["current_version"]
+        supported = entry["supported_version"]
+        print(
+            f"  {entry['artifact']:<11} current={version!s:<6} "
+            f"supported={supported!s:<6} {entry['action']:<8} "
+            f"{entry['description']}"
+        )
+    for warning in report["warnings"]:
+        print(f"  warning: {warning}")
+    if not report["ok"]:
+        print("  blocked: resolve the entries above; no automatic conversion exists")
+        return 1
+    if not args.apply:
+        print("  re-run with --apply to migrate supported versions")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point. Returns a process exit code."""
     parser = build_parser()
@@ -986,6 +1189,14 @@ def main(argv: list[str] | None = None) -> int:
             _cmd_run_report(args)
         elif args.command == "run-handoff":
             _cmd_run_handoff(args)
+        elif args.command == "export":
+            _cmd_export(args)
+        elif args.command == "import":
+            _cmd_import(args)
+        elif args.command == "integrity":
+            return _cmd_integrity(args)
+        elif args.command == "upgrade":
+            return _cmd_upgrade(args)
         else:  # pragma: no cover - argparse enforces required subcommand
             parser.error(f"unknown command: {args.command!r}")
     except AperioError as exc:

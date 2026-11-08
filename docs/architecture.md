@@ -480,6 +480,71 @@ explicit: fix the obstruction and dispatch again, or
 A failure after the child process was created keeps the claim for an
 explicit retry/verification decision (work may have run).
 
+## Portable export, import and integrity (Feature 05)
+
+**Archive contract (format v1).** One ZIP file, deterministic entry order
+and timestamps, containing `manifest.json` plus `files/<rel>` entries:
+
+- `manifest.json`: `format` (`aperio-portable-export`), `format_version`
+  (1), `aperio_version`, `created_at`, `schemas` (state/plan/executions/
+  handoff versions), and a `files` list with `path`, `size`, and SHA-256.
+- Exported relative paths are an explicit whitelist: `state.json`,
+  `brief.md`, `decisions.md`, `handoff.md`, `plan.json`,
+  `executions.json`, and `runs/RUN-NNNN.handoff.md` for awaiting-external
+  runs. There is no directory walk, so unlisted content cannot leak in.
+- `.aperio/local/`, lock files, reserved temporary files, and the
+  generated `.gitignore` are excluded by construction. The importer
+  re-validates every path against the same whitelist, so a tampered
+  manifest cannot introduce `local/` or traversal paths.
+- Execution records are exported as a portable projection: `pid` and
+  `machine` are set to null and `local_log_ref` is dropped. A
+  prepared/running run blocks execution-metadata export (a live process
+  cannot be handed off); a project with an awaiting-external run exports
+  its record and handoff document so another machine can finish it.
+
+**Validation before any write.** Import reads and validates the complete
+archive in memory: container sanity (regular file, bounded size, ZIP
+only), no directory/symlink/encrypted/duplicate members, manifest shape
+and supported `format_version`, per-file size and hash equality, bounded
+decompression (zip-bomb protection), UTF-8 text only, supported artifact
+schemas, and payload relationships (run→task references exist, included
+plan revision is not older than any run, awaiting-external runs have their
+exact `runs/<run>.handoff.md`, `local_log_ref` stays under `local/`).
+
+**Destination policy.** Existing files are never overwritten by default:
+identical bytes are "unchanged"; differing bytes abort with the conflicting
+paths, and `--replace` is the explicit approval to substitute them.
+Symlinked or non-regular leaves are refused even with `--replace`. A
+destination that is not initialized but already has a non-matching
+`.aperio/` is refused (only a recoverable partial import with matching
+bytes is completed). `state.json` is written last, so a crash cannot leave
+a project that merely claims to be imported. Apply runs under
+`.aperio/import.lock`; a failing write rolls back this call's created and
+replaced files. Multi-file import is not a filesystem transaction and no
+`fsync` is issued: a hard crash can leave a subset, which `integrity`
+diagnoses and a re-run finishes (matching bytes are accepted).
+
+**Integrity.** `aperio integrity` is diagnostic only. It checks supported
+schema versions, full plan graph/lifecycle validity, decision-log
+malformed/duplicate entries, handoff format (newer formats are reported,
+never converted), execution records and their references, missing expected
+files, unexpected leftovers (reserved temp/lock names are called out
+specifically), and optionally an archive's manifest. Errors exit 1;
+warnings (missing optional files, malformed history, leftovers) do not.
+
+**Schema upgrade foundation.** Versions are detected independently for
+state, plan, executions, and handoff. `aperio upgrade` previews a per-
+artifact table; `--apply` only runs explicitly registered JSON migrations,
+refuses newer or unmigratable versions, writes a backup (originals +
+SHA-256 manifest) under `.aperio/local/backups/`, and restores original
+bytes if a write fails. No migration path exists in this release; the
+registry is intentionally empty rather than fictional.
+
+**Honesty limits.** SHA-256 in the manifest detects corruption and
+accidental modification; it does not authenticate the archive and cannot
+prove that manually authored shareable text contains no secrets. Aperio
+never claims otherwise, and operators are told to review what they share.
+
 ## Cross-agent portability principles (implemented)
 
 1. **Plain text, standard formats.** Everything portable is JSON or
@@ -506,7 +571,11 @@ explicit retry/verification decision (work may have run).
 3. Read `brief.md` → `decisions.md` (append-only history; damage is
    reported in metadata) → `handoff.md` (current handoff) → the plan
    summary (approval state and task readiness).
-4. Write progress back through the APIs: `aperio decision-add` (append
+4. To move the project to another machine, `aperio export` the shareable
+   context, `aperio import` it there (review with `--dry-run`; `--replace`
+   only after inspecting conflicts), then `aperio integrity` — remember
+   that `local/` never travels and hashes are not authentication.
+5. Write progress back through the APIs: `aperio decision-add` (append
    only), `aperio handoff-write` (validated replacement, optional CAS),
    `aperio phase-set` (compare-and-swap), `aperio task-status` (validated
    transitions, evidence-required completion). Never touch `local/` unless

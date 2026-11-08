@@ -58,6 +58,7 @@ RESERVED_GITIGNORE_LINES = (
     "plan.lock",
     "executions.lock",
     "dispatch.lock",
+    "import.lock",
 )
 LOCAL_DIR_NAME = "local"
 
@@ -174,6 +175,7 @@ handoff.lock
 plan.lock
 executions.lock
 dispatch.lock
+import.lock
 """
 
 LOCAL_README_TEMPLATE = """\
@@ -462,6 +464,25 @@ def init_project(raw_path: str) -> InitResult:
         result.created.append(f"{APERIO_DIR_NAME}/{_STATE}")
 
     return result
+
+
+def ensure_local_scaffolding(aperio_dir: Path) -> list[str]:
+    """Create missing machine-local scaffolding after a portable import.
+
+    Adds ``local/``, ``local/README.md``, and ``.gitignore`` when absent —
+    never overwriting imported or user content. These files are excluded
+    from export (machine scaffolding, not portable context), so a fresh
+    import restores them locally. Returns the relative paths created.
+    """
+    _reject_symlink(aperio_dir)
+    created: list[str] = []
+    if _ensure_dir(aperio_dir / LOCAL_DIR_NAME):
+        created.append(f"{LOCAL_DIR_NAME}/")
+    if _ensure_file(aperio_dir / _LOCAL_README, LOCAL_README_TEMPLATE):
+        created.append(_LOCAL_README)
+    if _ensure_file(aperio_dir / _GITIGNORE, APERIO_GITIGNORE_TEMPLATE):
+        created.append(_GITIGNORE)
+    return created
 
 
 # --- status -------------------------------------------------------------------
