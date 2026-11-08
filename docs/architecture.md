@@ -66,6 +66,10 @@ src/aperio/
 ├── goals.py       universal goal contract: validate, identity, work graph,
 │                  goal → context pack (M2, goal-schema v1)
 ├── profiles.py    data-only task-profile registry (M2, profile v1)
+├── memstore.py    universal memory records + append-only store (M3,
+│                  memory-schema v1): validation, identity, review states
+├── memrecall.py   deterministic memory retrieval (M3, memory-recall v1)
+├── memportable.py portable memory exchange (M3, aperio-memory-export v1)
 ├── decisions.py   append-only decision log: strict grammar, parse, append
 ├── errors.py      AperioError + PathError / NotInitializedError /
 │                  StateError / ValidationError
@@ -86,7 +90,8 @@ src/aperio/
 ```
 
 Dependency direction is strictly downward: `cli → memory/planning/handoff/
-decisions/progress/context_pack → project/schema/paths/locks → errors`.
+decisions/progress/context_pack/memrecall/memportable → project/schema/paths/
+locks/artifacts → errors`.
 `context_pack` is a read-only composition layer: it may read validated
 shareable artifacts, but it never writes project state or launches an agent.
 Nothing imports upward. The CLI layer is the only module allowed to print.
@@ -151,6 +156,27 @@ Key contracts:
 See [context-pack.md](context-pack.md) for the full command and JSON
 contract.
 
+## Universal memory (M3)
+
+`memstore` owns one operator-named JSONL file: a header, immutable `memory`
+records, and immutable `transition` records, each line carrying a chain hash
+of everything before it. Current state is replayed from the log, never
+rewritten; a line that breaks the chain is reported and skipped. Records use
+memory-schema v1 with content-derived identity (state, timestamps, actor,
+paths, and versions are excluded), bounded fields, and strict type/choice
+validation.
+
+`memrecall` ranks scope applicability, bounded keyword overlap, review state,
+freshness, and budget — deterministic, inspectable, and explicitly
+non-semantic. `memportable` writes and validates its own versioned exchange
+document; imports always enter as `proposed` and duplicates/conflicts are
+reported, never resolved silently.
+
+`context_pack` accepts already-selected memory items plus a retrieval report.
+Memory items are priority 9 in the existing ordering — after operator briefs,
+project records, and operator-selected files — so memory can never displace
+operator context inside the shared byte budget.
+
 ## Universal goal contract (M2)
 
 `aperio goal-check` / `aperio goal-pack` / `aperio profiles` add the missing
@@ -195,6 +221,15 @@ Key contracts:
   instructions (not operator-approved)"; `content.goal.authority`
   (`operator` | `untrusted`) keeps JSON and Markdown aligned. Nothing
   promotes a proposal automatically.
+- **Universal memory is append-only and trust-explicit.** `memstore` holds
+  memory-schema v1 records in one operator-named JSONL file: an immutable
+  record followed by immutable review transitions, each line carrying a chain
+  hash of everything before it (corruption detection only, never
+  authentication). Current state is replayed, never rewritten. `memrecall`
+  ranks scope, keyword overlap, review state, freshness, and budget
+  deterministically; `memportable` exchanges selected records in its own
+  versioned format. Imports always land as `proposed`; hashes prove integrity,
+  not authorship.
 - **Safe output publication.** `--output` goes through
   `artifacts.publish_text_atomic`: exclusive `mkstemp` temporary creation
   (never follows or truncates a planted temporary path), atomic no-clobber

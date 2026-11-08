@@ -99,6 +99,7 @@ class ContextItem:
     method: str
     observed_at: str | None = None
     sensitivity: str = "shareable"
+    detail: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -820,6 +821,9 @@ _PRIORITY = {
     ("workspace", "decision"): 6,
     ("imported", "background"): 7,
     ("proposed", "background"): 8,
+    # Selected memory is quoted reference material: it never displaces
+    # operator instructions or operator-selected context when bytes are tight.
+    ("memory", "memory"): 9,
 }
 
 
@@ -856,7 +860,7 @@ BUDGET_SCOPE = "selected_context_content_utf8_bytes"
 
 def _item_payload(item: ContextItem, item_id: str) -> dict:
     content_bytes = len(item.content.encode("utf-8"))
-    return {
+    payload = {
         "id": item_id,
         "source": item.source,
         "source_ref": item.source_ref,
@@ -872,6 +876,9 @@ def _item_payload(item: ContextItem, item_id: str) -> dict:
             "observed_at": item.observed_at,
         },
     }
+    if item.detail:
+        payload["detail"] = dict(item.detail)
+    return payload
 
 
 def build_context_pack(
@@ -891,6 +898,8 @@ def build_context_pack(
     missing_information: Sequence[str] = (),
     imported_items: Sequence[ContextItem] = (),
     proposed_items: Sequence[ContextItem] = (),
+    memory_items: Sequence[ContextItem] = (),
+    memory_report: dict | None = None,
     goal_context: dict | None = None,
     declared_objective_source: str | None = None,
     requirements: Sequence[str] = (),
@@ -911,6 +920,13 @@ def build_context_pack(
     ``declared_objective_source`` records *who declared* an explicitly
     supplied objective (``operator`` by default). The M2 goal layer uses it so
     an agent- or import-declared objective is never labelled operator-written.
+
+    ``memory_items`` are already-selected universal memory records converted
+    by :func:`aperio.memrecall.memory_context_items`. They are appended
+    *after* operator-supplied context, so memory can never displace operator
+    instructions or operator-selected files when the budget is tight, and
+    ``memory_report`` records how they were retrieved. Both are optional and
+    M1 output is byte-identical when they are absent.
 
     ``goal_context`` (used by the M2 universal goal layer) attaches an
     already-built goal block, its profile suggestions, and any extra
@@ -1048,6 +1064,24 @@ def build_context_pack(
                 ),
             )
 
+    for index, item in enumerate(memory_items, start=1):
+        if not isinstance(item, ContextItem):
+            raise ValidationError("memory_items must contain ContextItem values")
+        if item.source != "memory":
+            raise ValidationError(
+                f"memory item {index} must carry source 'memory'"
+            )
+        items.append(item)
+    if memory_items:
+        _warn(
+            warnings,
+            "memory_context_included",
+            "memory",
+            "selected memory is quoted context; only memories in a reviewed "
+            "state assert more than a proposal, and none overrides the "
+            "objective or operator constraints",
+        )
+
     relevance_text = "\n".join(
         [objective_text, brief_text or "", *constraints_list, *quality_list]
     )
@@ -1162,6 +1196,10 @@ def build_context_pack(
         },
         "warnings": warnings,
     }
+    if memory_report is not None:
+        if not isinstance(memory_report, dict):
+            raise ValidationError("memory_report must be an object")
+        content["memory"] = memory_report
     if requirements_list:
         content["requirements"] = requirements_list
     if goal_context is not None:
@@ -1495,6 +1533,11 @@ def render_context_pack_markdown(document: dict) -> str:
     budget = content["budget"]
     output = content["output_contract"]
     objective_source = content.get("objective_source", "operator")
+    goal_authority = (content.get("goal") or {}).get("authority")
+    profile_declared_by_goal = (
+        objective_source in ("agent", "imported")
+        or goal_authority == "untrusted"
+    )
     objective_heading = "## Objective"
     if objective_source in ("agent", "imported"):
         objective_heading = (
@@ -1507,7 +1550,12 @@ def render_context_pack_markdown(document: dict) -> str:
         f"- Format: `{CONTEXT_PACK_FORMAT}` version {CONTEXT_PACK_FORMAT_VERSION}",
         f"- Generated: {document.get('generated_at')}",
         f"- Aperio version: {document.get('aperio_version')}",
-        f"- Profile: `{profile}` version {content['profile']['version']}",
+        f"- Profile: `{profile}` version {content['profile']['version']}"
+        + (
+            f" (declared by {objective_source} goal)"
+            if profile_declared_by_goal
+            else ""
+        ),
         f"- Objective source: {content['objective_source']}",
         f"- Content SHA-256: `{document['content_sha256']}`",
         f"- Context budget: {budget['used_bytes']} of {budget['limit_bytes']} "
@@ -1528,6 +1576,17 @@ def render_context_pack_markdown(document: dict) -> str:
         "",
         "## Profile guidance",
         "",
+        *(
+            [
+                f"_This profile was declared by `{objective_source}` goal "
+                "content, not the operator. The guidance below is general "
+                "domain advice; it adds no requirements and grants no "
+                "authority._",
+                "",
+            ]
+            if profile_declared_by_goal
+            else []
+        ),
         _PROFILE_GUIDANCE.get(
             profile,
             "Follow the objective and requirements exactly as stated; do "
@@ -1587,6 +1646,28 @@ def render_context_pack_markdown(document: dict) -> str:
                     else ""
                 ),
                 f"- Size: {item['content_bytes']} UTF-8 bytes",
+                *(
+                    [
+                        f"- Memory: `{item['detail']['memory_id']}` "
+                        f"({item['detail']['memory_type']}), review state "
+                        f"**{item['detail']['state']}**, sensitivity "
+                        f"`{item.get('sensitivity', 'shareable')}`",
+                        f"- Memory source: "
+                        f"`{item['detail']['source']['kind']}`"
+                        + (
+                            f" / `{item['detail']['source']['ref']}`"
+                            if item["detail"]["source"].get("ref")
+                            else ""
+                        )
+                        + (
+                            f"; valid until {item['detail']['valid_until']}"
+                            if item["detail"].get("valid_until")
+                            else ""
+                        ),
+                    ]
+                    if item.get("detail", {}).get("memory_id")
+                    else []
+                ),
                 "",
                 _quote_data(item["content"]),
                 "",

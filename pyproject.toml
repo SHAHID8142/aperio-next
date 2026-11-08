@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aperio-next"
-version = "0.9.2"
+version = "0.10.0"
 description = "Universal, agent-agnostic context, memory, and reliability tooling with an optional software-development workflow."
 readme = "README.md"
 requires-python = ">=3.11"

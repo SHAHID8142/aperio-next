@@ -113,6 +113,19 @@
 - Never commit secrets, credentials, tokens, private client information, or
   machine-specific configuration to this repository.
 
+## Memory stores
+
+A memory store is an operator-named file, never a discovered location: do not
+create global stores, scan directories, or guess paths. Records and review
+transitions are append-only; current state is derived by replay, so no command
+may rewrite, compact, or "fix" history — damaged lines are reported and
+skipped. Every record starts `proposed`; acceptance means authoritative for a
+scope, verification requires recorded evidence, and no import, repetition, or
+re-export may raise trust. Imported content keeps its content-derived identity
+but always enters as `proposed`. Memory is quoted context in a pack, never an
+operator instruction, and it is appended after operator context so it cannot
+displace it.
+
 ## Output publication
 
 Any command that writes an operator-visible file (not project state) uses

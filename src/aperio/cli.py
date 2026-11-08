@@ -8,6 +8,14 @@ Commands:
     aperio context-pack [dir] ...     build a read-only universal context pack
     aperio profiles [--json]          list built-in task profiles
     aperio goal-check <goal.json>     validate a goal and report completeness
+    aperio mem-propose --store F ...  propose a universal memory record
+    aperio mem-review STORE MEMORY_ID accept, verify, retract, supersede
+    aperio mem-list STORE [--json]    list stored memories and review states
+    aperio mem-show STORE MEMORY_ID   inspect one memory and its history
+    aperio mem-recall STORE ...        retrieve memories for an objective
+    aperio mem-export STORE [--output F]
+                                      export selected memories portably
+    aperio mem-import STORE FILE      import memories as proposals
     aperio goal-pack <goal.json> ...  build a context pack from a goal
     aperio decision-add <dir> ...     append a decision (append-only)
     aperio handoff-write <dir> --file <handoff.json>
@@ -85,6 +93,28 @@ from aperio.profiles import (
 )
 from aperio.integrity import check_integrity
 from aperio.memory import load_context
+from aperio.memstore import (
+    DEFAULT_SENSITIVITY as MEMORY_DEFAULT_SENSITIVITY,
+    MAX_CONTENT_BYTES as MEMORY_MAX_CONTENT_BYTES,
+    MEMORY_STATES,
+    MEMORY_TYPES,
+    SENSITIVITY_LEVELS as MEMORY_SENSITIVITY_LEVELS,
+    SENSITIVITY_RANK as MEMORY_SENSITIVITY_RANK,
+    SOURCE_KINDS as MEMORY_SOURCE_KINDS,
+    MemoryStore,
+)
+from aperio.memrecall import (
+    RECALL_LIMITATION,
+    memory_context_items,
+    recall_memories,
+)
+from aperio.memportable import (
+    export_memories,
+    import_memories,
+    load_exchange_file,
+    render_export,
+    summarize_import,
+)
 from aperio.paths import resolve_target
 from aperio.runtime import (
     cancel_run,
@@ -137,6 +167,28 @@ from aperio.project import (
 )
 
 _PROG = "aperio"
+
+
+def _add_memory_store_options(parser) -> None:
+    parser.add_argument(
+        "--memory-store", metavar="FILE",
+        help="optional universal memory store to retrieve relevant memories "
+             "from (read-only)",
+    )
+    parser.add_argument(
+        "--memory-tag", action="append", default=[], metavar="TAG",
+        help="only retrieve memories carrying this tag; repeatable",
+    )
+    parser.add_argument(
+        "--memory-max-sensitivity",
+        choices=MEMORY_SENSITIVITY_LEVELS,
+        default=MEMORY_DEFAULT_SENSITIVITY,
+        help="highest memory sensitivity to include (default: internal)",
+    )
+    parser.add_argument(
+        "--memory-as-of", metavar="YYYY-MM-DD",
+        help="evaluate memory expiry as of this date",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -263,6 +315,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--proposed-context", action="append", default=[], metavar="FILE",
         help="operator-selected agent claim, labeled proposed; repeatable",
     )
+    _add_memory_store_options(context_parser)
     context_parser.add_argument(
         "--json", dest="as_json", action="store_true",
         help="emit the validated JSON context pack instead of Markdown",
@@ -330,6 +383,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--proposed-context", action="append", default=[], metavar="FILE",
         help="operator-selected agent claim, labeled proposed; repeatable",
     )
+    _add_memory_store_options(goal_pack_parser)
     goal_pack_parser.add_argument(
         "--json", dest="as_json", action="store_true",
         help="emit the validated JSON context pack instead of Markdown",
@@ -341,6 +395,277 @@ def build_parser() -> argparse.ArgumentParser:
     goal_pack_parser.add_argument(
         "--force", action="store_true",
         help="overwrite an existing --output file",
+    )
+
+    # --- universal memory (M3) -------------------------------------------
+    mem_propose_parser = subparsers.add_parser(
+        "mem-propose",
+        help="propose a memory record in an explicit memory store",
+        description=(
+            "Add one memory to an operator-chosen memory store. The record "
+            "starts as 'proposed': nothing is trusted, verified, or promoted "
+            "by being stored. Works with no Aperio project."
+        ),
+    )
+    mem_propose_parser.add_argument(
+        "--store", required=True, metavar="FILE",
+        help="explicit memory store file (created if absent)",
+    )
+    mem_propose_parser.add_argument(
+        "--type", required=True, choices=MEMORY_TYPES, dest="memory_type",
+        help="memory type",
+    )
+    mem_propose_parser.add_argument(
+        "--title", required=True, help="short single-line title",
+    )
+    content_group = mem_propose_parser.add_mutually_exclusive_group(required=True)
+    content_group.add_argument("--content", help="memory content text")
+    content_group.add_argument(
+        "--content-file", metavar="FILE",
+        help=f"read memory content from a UTF-8 file (max {MEMORY_MAX_CONTENT_BYTES} bytes)",
+    )
+    mem_propose_parser.add_argument(
+        "--scope", choices=("global", "profile", "objective", "workspace"),
+        default="global",
+        help="scope kind the memory applies to (default: global)",
+    )
+    mem_propose_parser.add_argument(
+        "--scope-value", metavar="TEXT",
+        help="objective text or workspace label for objective/workspace scope",
+    )
+    mem_propose_parser.add_argument(
+        "--scope-profile", metavar="PROFILE",
+        help="profile id for profile scope",
+    )
+    mem_propose_parser.add_argument(
+        "--tag", action="append", default=[], metavar="TAG",
+        help="tag for retrieval; repeatable",
+    )
+    mem_propose_parser.add_argument(
+        "--sensitivity", choices=MEMORY_SENSITIVITY_LEVELS,
+        default=MEMORY_DEFAULT_SENSITIVITY,
+        help="sensitivity classification (default: internal)",
+    )
+    mem_propose_parser.add_argument(
+        "--evidence", action="append", default=[], metavar="TEXT",
+        help="supporting evidence reference; repeatable",
+    )
+    mem_propose_parser.add_argument(
+        "--source", choices=MEMORY_SOURCE_KINDS, default="operator",
+        help="declared source kind (default: operator)",
+    )
+    mem_propose_parser.add_argument(
+        "--source-ref", metavar="TEXT", help="declared source reference",
+    )
+    mem_propose_parser.add_argument(
+        "--valid-until", metavar="YYYY-MM-DD",
+        help="date after which the memory is no longer current",
+    )
+    mem_propose_parser.add_argument(
+        "--supersedes", metavar="MEMORY_ID",
+        help="memory this record is meant to replace (reviewed separately)",
+    )
+    mem_propose_parser.add_argument(
+        "--actor", metavar="ID", help="declared actor id (not authentication)",
+    )
+    mem_propose_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit machine-readable JSON",
+    )
+
+    mem_review_parser = subparsers.add_parser(
+        "mem-review",
+        help="accept, verify, retract, supersede, or reinstate a memory",
+        description=(
+            "Record an explicit review decision. Acceptance makes a memory "
+            "authoritative for its scope; it does not prove the claim. "
+            "Verification is for claims genuinely supported by evidence."
+        ),
+    )
+    mem_review_parser.add_argument("store", metavar="STORE")
+    mem_review_parser.add_argument("memory_id", metavar="MEMORY_ID")
+    review_action = mem_review_parser.add_mutually_exclusive_group(required=True)
+    review_action.add_argument(
+        "--accept", dest="action", action="store_const", const="accept",
+        help="accept as authoritative for its scope (attested)",
+    )
+    review_action.add_argument(
+        "--verify", dest="action", action="store_const", const="verify",
+        help="record independent evidence (verified)",
+    )
+    review_action.add_argument(
+        "--retract", dest="action", action="store_const", const="retract",
+        help="retract a memory that is wrong or no longer applicable",
+    )
+    review_action.add_argument(
+        "--supersede", dest="action", action="store_const", const="supersede",
+        help="mark superseded by a newer memory",
+    )
+    review_action.add_argument(
+        "--reinstate", dest="action", action="store_const", const="reinstate",
+        help="return a retracted/superseded memory to proposed for re-review",
+    )
+    mem_review_parser.add_argument(
+        "--note", help="review note recorded with the transition",
+    )
+    mem_review_parser.add_argument(
+        "--evidence", action="append", default=[], metavar="TEXT",
+        help="evidence supporting this decision; repeatable",
+    )
+    mem_review_parser.add_argument(
+        "--reason", help="reason for retraction or supersession",
+    )
+    mem_review_parser.add_argument(
+        "--actor", metavar="ID", help="declared actor id (not authentication)",
+    )
+    mem_review_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit machine-readable JSON",
+    )
+
+    mem_list_parser = subparsers.add_parser(
+        "mem-list",
+        help="list memories in a store with their review state",
+    )
+    mem_list_parser.add_argument("store", metavar="STORE")
+    mem_list_parser.add_argument(
+        "--state", action="append", default=[], choices=MEMORY_STATES,
+        help="only show these states; repeatable",
+    )
+    mem_list_parser.add_argument(
+        "--include-inactive", action="store_true",
+        help="also list retracted, superseded, and expired memories",
+    )
+    mem_list_parser.add_argument(
+        "--max-sensitivity", choices=MEMORY_SENSITIVITY_LEVELS,
+        default="private",
+        help="highest sensitivity to display (default: private)",
+    )
+    mem_list_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit machine-readable JSON",
+    )
+
+    mem_show_parser = subparsers.add_parser(
+        "mem-show",
+        help="show one memory, its provenance, and its review history",
+    )
+    mem_show_parser.add_argument("store", metavar="STORE")
+    mem_show_parser.add_argument("memory_id", metavar="MEMORY_ID")
+    mem_show_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit machine-readable JSON",
+    )
+
+    mem_recall_parser = subparsers.add_parser(
+        "mem-recall",
+        help="retrieve memories relevant to an objective (read-only)",
+    )
+    mem_recall_parser.add_argument("store", metavar="STORE")
+    recall_group = mem_recall_parser.add_mutually_exclusive_group()
+    recall_group.add_argument("--objective", help="current objective text")
+    recall_group.add_argument(
+        "--goal", metavar="GOAL_FILE",
+        help="read the objective and profile from a goal document",
+    )
+    mem_recall_parser.add_argument(
+        "--profile", default=CONTEXT_DEFAULT_PROFILE,
+        choices=tuple(PROFILE_VERSIONS),
+        help="current profile (default: general)",
+    )
+    mem_recall_parser.add_argument(
+        "--tag", action="append", default=[], metavar="TAG",
+        help="require at least one of these tags; repeatable",
+    )
+    mem_recall_parser.add_argument(
+        "--budget", type=int, default=CONTEXT_DEFAULT_BUDGET_BYTES,
+        metavar="BYTES",
+        help="memory content budget in UTF-8 bytes",
+    )
+    mem_recall_parser.add_argument(
+        "--max-sensitivity", choices=MEMORY_SENSITIVITY_LEVELS,
+        default=MEMORY_DEFAULT_SENSITIVITY,
+        help="highest sensitivity to retrieve (default: internal)",
+    )
+    mem_recall_parser.add_argument(
+        "--as-of", metavar="YYYY-MM-DD",
+        help="evaluate expiry as of this date",
+    )
+    mem_recall_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit machine-readable JSON",
+    )
+
+    mem_export_parser = subparsers.add_parser(
+        "mem-export",
+        help="export selected memories as a portable exchange file",
+        description=(
+            "Write a versioned, reviewable exchange file for manual transfer "
+            "to another agent or machine. Private memories are excluded "
+            "unless --include-private is given."
+        ),
+    )
+    mem_export_parser.add_argument("store", metavar="STORE")
+    mem_export_parser.add_argument(
+        "--id", action="append", default=[], metavar="MEMORY_ID",
+        help="export only this memory; repeatable",
+    )
+    mem_export_parser.add_argument(
+        "--tag", action="append", default=[], metavar="TAG",
+        help="export memories carrying this tag; repeatable",
+    )
+    mem_export_parser.add_argument(
+        "--max-sensitivity", choices=MEMORY_SENSITIVITY_LEVELS,
+        default=MEMORY_DEFAULT_SENSITIVITY,
+        help="highest sensitivity to export (default: internal)",
+    )
+    mem_export_parser.add_argument(
+        "--include-private", action="store_true",
+        help="include memories classified private (explicit opt-in)",
+    )
+    mem_export_parser.add_argument(
+        "--include-inactive", action="store_true",
+        help="include retracted, superseded, and expired memories",
+    )
+    mem_export_parser.add_argument(
+        "--as-of", metavar="YYYY-MM-DD",
+        help="evaluate expiry as of this date",
+    )
+    mem_export_parser.add_argument(
+        "--output", metavar="FILE",
+        help="write the exchange file here instead of stdout",
+    )
+    mem_export_parser.add_argument(
+        "--force", action="store_true",
+        help="overwrite an existing --output file",
+    )
+
+    mem_import_parser = subparsers.add_parser(
+        "mem-import",
+        help="import a portable memory exchange file (untrusted by default)",
+        description=(
+            "Validate and import memories from an exchange file. Imported "
+            "records are always stored as proposed: a file can transfer "
+            "content and provenance, never trust."
+        ),
+    )
+    mem_import_parser.add_argument("store", metavar="STORE")
+    mem_import_parser.add_argument("exchange_file", metavar="FILE")
+    mem_import_parser.add_argument(
+        "--dry-run", action="store_true",
+        help="validate and report without writing anything",
+    )
+    mem_import_parser.add_argument(
+        "--max-sensitivity", choices=MEMORY_SENSITIVITY_LEVELS,
+        default=MEMORY_DEFAULT_SENSITIVITY,
+        help="highest sensitivity to import (default: internal)",
+    )
+    mem_import_parser.add_argument(
+        "--actor", metavar="ID", help="declared actor id (not authentication)",
+    )
+    mem_import_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit machine-readable JSON",
     )
 
     decision_parser = subparsers.add_parser(
@@ -994,6 +1319,12 @@ def _cmd_context_pack(args) -> None:
                 ordinal=index,
             )
         )
+    memory_items, memory_report = _memory_selection(
+        args,
+        objective=objective or "",
+        profile=args.profile,
+        budget_bytes=args.budget,
+    )
     document = build_context_pack(
         objective,
         workspace=args.workspace,
@@ -1010,6 +1341,8 @@ def _cmd_context_pack(args) -> None:
         missing_information=args.missing_information,
         imported_items=imported_items,
         proposed_items=proposed_items,
+        memory_items=memory_items,
+        memory_report=memory_report,
     )
     if args.as_json:
         sys.stdout.write(
@@ -1082,7 +1415,13 @@ def _cmd_goal_check(args) -> None:
     print("Build a pack: aperio goal-pack " + str(args.goal_file))
 
 
-def _check_output_destination(raw: str, *, goal_path: str) -> Path:
+def _check_output_destination(
+    raw: str,
+    *,
+    goal_path: str,
+    source_label: str = "the goal file",
+    artifact_label: str = "its own context pack",
+) -> Path:
     """Validate a goal-pack output path before anything is written.
 
     Refuses: a missing/non-directory parent, any path that resolves into
@@ -1106,7 +1445,7 @@ def _check_output_destination(raw: str, *, goal_path: str) -> Path:
         )
     if os.path.realpath(target) == os.path.realpath(goal_path):
         raise ValidationError(
-            "refusing to overwrite the goal file with its own context pack; "
+            f"refusing to overwrite {source_label} with {artifact_label}; "
             "choose a different --output path"
         )
     return target
@@ -1118,6 +1457,401 @@ def _write_pack_output(
     target = _check_output_destination(path, goal_path=goal_path)
     publish_text_atomic(target, text, force=force, what="context pack")
 
+
+def _memory_selection(args, *, objective: str, profile: str, budget_bytes: int):
+    """Recall memories for a pack; returns (context items, report or None)."""
+
+    store_path = getattr(args, "memory_store", None)
+    if not store_path:
+        return [], None
+    store = MemoryStore(store_path)
+    state = store.snapshots(as_of=getattr(args, "memory_as_of", None))
+    selection = recall_memories(
+        state["memories"],
+        objective=objective,
+        profile=profile,
+        tags=getattr(args, "memory_tag", []) or [],
+        budget_bytes=budget_bytes,
+        max_sensitivity=getattr(
+            args, "memory_max_sensitivity", MEMORY_DEFAULT_SENSITIVITY
+        ),
+        as_of=getattr(args, "memory_as_of", None),
+    )
+    warnings = list(selection["warnings"])
+    if state["damaged"]:
+        warnings.append(
+            {
+                "code": "memory_store_damaged",
+                "detail": (
+                    f"{len(state['damaged'])} damaged line(s) in the memory "
+                    "store were skipped; run 'aperio mem-list' to review them"
+                ),
+            }
+        )
+    report = {
+        "store": "operator-selected memory store",
+        "memory_ids": [memory["memory_id"] for memory in selection["selected"]],
+        "counts": {
+            "considered": selection["budget"]["items_considered"],
+            "included": selection["budget"]["items_included"],
+            "excluded": selection["excluded"]["total"],
+        },
+        "excluded": selection["excluded"]["by_reason"],
+        "conflicts": selection["conflicts"],
+        "limitation": RECALL_LIMITATION,
+        "warnings": warnings,
+    }
+    return memory_context_items(selection["selected"]), report
+
+
+def _cmd_mem_propose(args) -> None:
+    content = args.content
+    if args.content_file:
+        content = read_utf8_text_file(
+            args.content_file,
+            label="memory content file",
+            max_bytes=MEMORY_MAX_CONTENT_BYTES,
+        )
+    scope = {"kind": args.scope, "profile": args.scope_profile, "value": args.scope_value}
+    store = MemoryStore(args.store)
+    result = store.propose(
+        {
+            "type": args.memory_type,
+            "title": args.title,
+            "content": content,
+            "scope": scope,
+            "source": {"kind": args.source, "ref": args.source_ref},
+            "tags": args.tag,
+            "sensitivity": args.sensitivity,
+            "evidence": args.evidence,
+            "valid_until": args.valid_until,
+            "supersedes": args.supersedes,
+            "actor": args.actor,
+        }
+    )
+    memory = result["memory"]
+    if args.as_json:
+        sys.stdout.write(
+            json.dumps(
+                {
+                    "created": result["created"],
+                    "duplicate": result["duplicate"],
+                    "memory": memory,
+                    "store_created": result["created"],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n"
+        )
+        return
+    if result["duplicate"]:
+        print(
+            f"Memory {memory['memory_id']} already holds this exact content; "
+            "nothing was written."
+        )
+    else:
+        print(f"Proposed memory {memory['memory_id']} in {args.store}")
+    _print_memory_summary(memory)
+    print()
+    print(
+        "State: proposed - stored, not trusted. Review it with "
+        f"'aperio mem-review {args.store} {memory['memory_id']} --accept' "
+        "or --retract."
+    )
+
+
+def _print_memory_summary(memory: dict) -> None:
+    scope = memory["scope"]
+    scope_text = scope["kind"]
+    if scope.get("profile"):
+        scope_text += f":{scope['profile']}"
+    if scope.get("value"):
+        scope_text += f":{scope['value']}"
+    print(f"Title:       {memory['title']}")
+    print(f"Type:        {memory['type']}")
+    print(f"Scope:       {scope_text}")
+    print(f"State:       {memory['state']} (trust: {memory['trust']})")
+    print(f"Sensitivity: {memory['sensitivity']}")
+    print(
+        "Source:      "
+        f"{memory['source']['kind']}"
+        + (f" / {memory['source']['ref']}" if memory["source"].get("ref") else "")
+    )
+    if memory.get("tags"):
+        print("Tags:        " + ", ".join(memory["tags"]))
+    if memory.get("evidence"):
+        print("Evidence:    " + "; ".join(memory["evidence"]))
+    if memory.get("valid_until"):
+        print(f"Valid until: {memory['valid_until']}")
+    print(f"Identity:    {memory['memory_id']} (content-derived)")
+    print(f"Content SHA-256: {memory['content_sha256']}")
+
+
+def _cmd_mem_review(args) -> None:
+    store = MemoryStore(args.store)
+    memory = store.review(
+        args.memory_id,
+        args.action,
+        actor=args.actor,
+        note=args.note,
+        evidence=args.evidence,
+        reason=args.reason,
+    )
+    if args.as_json:
+        sys.stdout.write(
+            json.dumps(memory, ensure_ascii=False, indent=2) + "\n"
+        )
+        return
+    print(f"Memory {memory['memory_id']} is now {memory['state']} "
+          f"(trust: {memory['trust']}, revision {memory['revision']})")
+    if memory["state"] == "attested":
+        print(
+            "Accepted for its declared scope. Acceptance is not factual "
+            "verification: the claim itself was not independently checked."
+        )
+    elif memory["state"] == "verified":
+        print(
+            "Recorded as verified. Aperio stores the claim; it does not "
+            "re-check your evidence."
+        )
+    elif memory["state"] == "retracted":
+        print(
+            "Retracted. It stays in the store and the review history, and "
+            "is excluded from normal recall."
+        )
+
+
+def _cmd_mem_list(args) -> None:
+    store = MemoryStore(args.store)
+    state = store.snapshots()
+    memories = []
+    for memory_id in sorted(state["memories"]):
+        memory = state["memories"][memory_id]
+        if args.state and memory["state"] not in args.state:
+            continue
+        if (
+            MEMORY_SENSITIVITY_RANK[memory["sensitivity"]]
+            > MEMORY_SENSITIVITY_RANK[args.max_sensitivity]
+        ):
+            continue
+        if not args.include_inactive and memory["state"] in (
+            "superseded", "retracted", "expired",
+        ):
+            continue
+        memories.append(memory)
+    if args.as_json:
+        sys.stdout.write(
+            json.dumps(
+                {"memories": memories, "damaged": state["damaged"]},
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n"
+        )
+        return
+    if not memories:
+        print(f"No memories in {args.store} matched these filters.")
+    for memory in memories:
+        print(
+            f"{memory['memory_id']}  {memory['state']:<10} "
+            f"{memory['trust']:<10} {memory['type']:<16} {memory['title']}"
+        )
+    if state["damaged"]:
+        print()
+        print(
+            f"Damaged: {len(state['damaged'])} line(s) could not be read and "
+            "were skipped (reported, never silently repaired):"
+        )
+        for problem in state["damaged"][:5]:
+            print(f"  line {problem['line']}: {problem['reason']}")
+    print()
+    print("Inspect one memory: aperio mem-show <store> <memory_id>")
+
+
+def _cmd_mem_show(args) -> None:
+    store = MemoryStore(args.store)
+    state = store.snapshots()
+    memory = state["memories"].get(args.memory_id)
+    if memory is None:
+        raise StateError(f"no memory {args.memory_id} in {args.store}")
+    if args.as_json:
+        sys.stdout.write(
+            json.dumps(memory, ensure_ascii=False, indent=2) + "\n"
+        )
+        return
+    _print_memory_summary(memory)
+    print()
+    if memory["history"]:
+        print("Review history (append-only):")
+        for event in memory["history"]:
+            print(
+                f"  rev {event['revision']}: {event['action']} "
+                f"{event['from_state']} -> {event['to_state']} "
+                f"at {event['at']}"
+                + (f" by {event['actor']}" if event.get("actor") else "")
+            )
+            if event.get("note"):
+                print(f"    note: {event['note']}")
+            if event.get("reason"):
+                print(f"    reason: {event['reason']}")
+            if event.get("evidence"):
+                print(f"    evidence: {'; '.join(event['evidence'])}")
+    else:
+        print("Review history: none yet (proposed only).")
+    print()
+    print(_quote_text_block(memory["content"]))
+
+
+def _quote_text_block(text: str) -> str:
+    return "\n".join("> " + line if line else ">" for line in text.split("\n"))
+
+
+def _cmd_mem_recall(args) -> None:
+    objective = args.objective or ""
+    profile = args.profile
+    if args.goal:
+        goal = load_goal_file(args.goal)
+        objective = goal["objective"]
+        profile = goal["profile"]
+    store = MemoryStore(args.store)
+    state = store.snapshots(as_of=args.as_of)
+    selection = recall_memories(
+        state["memories"],
+        objective=objective,
+        profile=profile,
+        tags=args.tag,
+        budget_bytes=args.budget,
+        max_sensitivity=args.max_sensitivity,
+        as_of=args.as_of,
+    )
+    if args.as_json:
+        sys.stdout.write(
+            json.dumps(
+                {
+                    "objective": objective,
+                    "profile": profile,
+                    "selection": selection,
+                    "damaged": state["damaged"],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n"
+        )
+        return
+    print(f"Objective: {objective or '(none)'}")
+    print(f"Profile:   {profile}")
+    print(
+        f"Selected:  {selection['budget']['items_included']} of "
+        f"{selection['budget']['items_considered']} memories "
+        f"({selection['budget']['used_bytes']} of "
+        f"{selection['budget']['limit_bytes']} bytes)"
+    )
+    print()
+    if not selection["selected"]:
+        print("No memory matched this objective and filter set.")
+    for memory in selection["selected"]:
+        print(
+            f"{memory['memory_id']}  {memory['state']:<10} "
+            f"{memory['trust']:<10} {memory['title']}"
+        )
+        print(f"  scope: {memory['scope']['kind']}, "
+              f"relevance {memory['relevance']}, score {memory['score']}")
+        print("  " + _quote_text_block(memory["content"]).replace("\n", "\n  "))
+        print()
+    if selection["excluded"]["by_reason"]:
+        print("Excluded: " + ", ".join(
+            f"{reason}={count}"
+            for reason, count in selection["excluded"]["by_reason"].items()
+        ))
+    for warning in selection["warnings"]:
+        print(f"Warning ({warning['code']}): {warning['detail']}")
+    print()
+    print(f"Note: {RECALL_LIMITATION}")
+
+
+def _cmd_mem_export(args) -> None:
+    store = MemoryStore(args.store)
+    document = export_memories(
+        store,
+        memory_ids=args.id,
+        tags=args.tag,
+        max_sensitivity=args.max_sensitivity,
+        include_inactive=args.include_inactive,
+        include_private=args.include_private,
+        as_of=args.as_of,
+    )
+    text = render_export(document)
+    if args.output:
+        target = _check_output_destination(
+            args.output,
+            goal_path=args.store,
+            source_label="the memory store",
+            artifact_label="its own export",
+        )
+        publish_text_atomic(
+            target, text, force=args.force,
+            what="memory exchange file",
+        )
+        print(
+            f"Exported {document['counts']['memories']} memories to "
+            f"{args.output}"
+        )
+        print(
+            "The file contains only selected memory content, scope, "
+            "provenance, review state, and content hashes. It contains no "
+            "paths, credentials, or project state."
+        )
+        return
+    sys.stdout.write(text)
+
+
+def _cmd_mem_import(args) -> None:
+    document = load_exchange_file(args.exchange_file)
+    store = MemoryStore(args.store)
+    report = import_memories(
+        store,
+        document,
+        actor=args.actor,
+        dry_run=args.dry_run,
+        max_sensitivity=args.max_sensitivity,
+    )
+    if args.as_json:
+        sys.stdout.write(
+            json.dumps(report, ensure_ascii=False, indent=2) + "\n"
+        )
+        return
+    prefix = "Would import" if args.dry_run else "Imported"
+    print(f"{prefix}: {summarize_import(report)}")
+    for memory_id in report["imported"]:
+        print(
+            f"  {memory_id}  declared state in file: "
+            f"{report['declared_states'].get(memory_id, 'proposed')}"
+        )
+    if report["duplicates"]:
+        print(
+            "  duplicates (same content identity already present): "
+            + ", ".join(report["duplicates"])
+        )
+    if report["excluded_sensitivity"]:
+        print(
+            "  excluded by the sensitivity filter: "
+            + ", ".join(report["excluded_sensitivity"])
+        )
+    for conflict in report["conflicts"]:
+        print(
+            f"  conflict: {conflict['incoming_memory_id']} and "
+            f"{conflict['existing_memory_id']} describe "
+            f"'{conflict['title']}' differently; both are kept"
+        )
+    if report["imported"] and not args.dry_run:
+        print()
+        print(
+            "Every imported memory is stored as 'proposed'. A file can "
+            "transfer content and provenance, never trust: review each one "
+            "with 'aperio mem-review' before relying on it."
+        )
 
 def _cmd_goal_pack(args) -> None:
     goal = load_goal_file(args.goal_file)
@@ -1139,12 +1873,20 @@ def _cmd_goal_pack(args) -> None:
                 ordinal=index,
             )
         )
+    memory_items, memory_report = _memory_selection(
+        args,
+        objective=goal["objective"],
+        profile=goal["profile"],
+        budget_bytes=args.budget,
+    )
     document = build_goal_context_pack(
         goal,
         workspace=args.workspace,
         budget_bytes=args.budget,
         imported_items=imported_items,
         proposed_items=proposed_items,
+        memory_items=memory_items,
+        memory_report=memory_report,
     )
     text = (
         json.dumps(document, ensure_ascii=False, indent=2) + "\n"
@@ -2125,6 +2867,20 @@ def main(argv: list[str] | None = None) -> int:
             _cmd_goal_check(args)
         elif args.command == "goal-pack":
             _cmd_goal_pack(args)
+        elif args.command == "mem-propose":
+            _cmd_mem_propose(args)
+        elif args.command == "mem-review":
+            _cmd_mem_review(args)
+        elif args.command == "mem-list":
+            _cmd_mem_list(args)
+        elif args.command == "mem-show":
+            _cmd_mem_show(args)
+        elif args.command == "mem-recall":
+            _cmd_mem_recall(args)
+        elif args.command == "mem-export":
+            _cmd_mem_export(args)
+        elif args.command == "mem-import":
+            _cmd_mem_import(args)
         elif args.command == "decision-add":
             _cmd_decision_add(args)
         elif args.command == "handoff-write":

@@ -33,7 +33,8 @@ Anything not listed below is **planned, not implemented**. See
 - Implemented (Feature 07): `codex-cli` and `claude-cli` through `aperio agent-list`, `agent-doctor`, `run-preview`, and `run-start --authorize-exec [--authorize-write]` (documented non-interactive CLIs; read-only by default; no GUI-app automation)
 - Implemented (M1): `aperio context-pack [workspace]` with `general` (default) and optional `software` profiles, Markdown/JSON output, deterministic byte budgeting, trust/provenance labels, imported/proposed context labels, and strict read-only operation
 - Implemented (M2): `aperio profiles`, `aperio goal-check`, and `aperio goal-pack` — a versioned universal goal contract (goal-schema v1), six data-only task profiles, optional work decomposition, and goal→context-pack conversion that works with no project, provider, or model API
-- Not implemented (by design, yet): autonomous loops, sandboxed execution, Cursor/ZCode GUI integrations, cloud sync
+- Implemented (M3): `aperio mem-propose`, `mem-review`, `mem-list`, `mem-show`, `mem-recall`, `mem-export`, `mem-import` — a standalone universal memory store (memory-schema v1) with explicit review states, deterministic retrieval, optional context-pack integration (`--memory-store`), and a versioned portable exchange format
+- Not implemented (by design, yet): autonomous loops, sandboxed execution, Cursor/ZCode GUI integrations, cloud sync, automatic learning
 
 ## Requirements
 
@@ -67,6 +68,18 @@ aperio memory ./my-project --json    # machine-readable, stable schema
 aperio goal-check goal.json
 aperio profiles
 aperio goal-pack goal.json > pack.md
+
+# Universal memory — works with no project at all.
+# The store file is always an explicit path you choose.
+aperio mem-propose --store ~/notes/work.mem --type requirement \
+  --title "Primary brand colour" \
+  --content "Primary brand colour is deep green #0B5D3B." \
+  --scope objective --scope-value "spring campaign poster" --tag brand
+aperio mem-review ~/notes/work.mem MEM-1a2b3c4d5e6f --accept
+aperio mem-recall ~/notes/work.mem --objective "spring campaign poster"
+aperio goal-pack goal.json --memory-store ~/notes/work.mem > pack.md
+aperio mem-export ~/notes/work.mem --output handoff.json
+aperio mem-import ~/other/work.mem handoff.json
 
 # Universal context pack — works with no Aperio project at all.
 # The default profile is domain-neutral.
@@ -453,6 +466,27 @@ aperio profiles --json
   complete anything.
 
 See [docs/goal-contract.md](docs/goal-contract.md) for the full contract.
+
+### Universal memory (M3)
+
+A memory store is a single operator-named file that keeps knowledge worth
+reusing across sessions and agents: preferences, confirmed requirements,
+decisions, observations, limitations, lessons, conventions, proposals, and
+outcomes. It needs no project, plan, git repository, provider, or API key.
+
+Every record starts `proposed`. Only an explicit review makes it `attested`
+(accepted as authoritative *for its scope*) or `verified` (evidence recorded).
+Acceptance is not factual proof, imports never raise trust, and nothing is
+promoted automatically. Retrieval is deterministic keyword + scope + review
+state ranking with explicit exclusion reasons and whole-item budgeting — no
+embeddings, no model scores, no network.
+
+`--memory-store` adds retrieved memory to a context pack as quoted data after
+operator context, with its trust label, review state, and identity. Without
+it, packs are byte-identical to the previous release.
+
+See [docs/universal-memory.md](docs/universal-memory.md) for the contract,
+trust model, retrieval rules, portability format, and limitations.
 
 ### `aperio memory` (Feature 02)
 

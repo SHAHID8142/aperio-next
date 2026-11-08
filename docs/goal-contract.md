@@ -283,6 +283,22 @@ Consequences of this mapping:
 - No provider adapter, runtime, or model-specific field is imported by the
   goal layer (asserted by a test).
 
+## Memory integration (M3)
+
+`goal-pack` accepts `--memory-store FILE` (and `context-pack` accepts the same
+option) to add relevant universal memory to the pack. Memory is optional:
+without the flag, output is byte-identical to the previous release.
+
+When supplied, retrieved memories become context items with `source: memory`,
+their own trust label, review state, memory id, evidence, and content hash.
+They are appended **after** operator briefs and operator-selected files, so
+memory cannot displace operator context when the budget is tight, and they are
+quoted data: no memory overrides the objective, constraints, or requirements.
+`content.memory` records retrieval counts, exclusion reasons, conflicts, and
+the relevance limitation, and never the store path.
+
+See [docs/universal-memory.md](universal-memory.md).
+
 ## Trust, safety, privacy
 
 - Trust labels are the M1 set: `authoritative`, `verified`, `attested`,

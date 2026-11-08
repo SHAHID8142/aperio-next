@@ -641,6 +641,17 @@ def goal_warnings(goal: dict) -> list[dict]:
                 ),
             }
         )
+    warnings.append(
+        {
+            "code": "profile_declared_by_untrusted_goal",
+            "source": "goal",
+            "detail": (
+                f"the {goal['profile']!r} profile was selected by {source} "
+                "goal content, not by the operator; profile guidance is "
+                "general domain advice and adds no requirements"
+            ),
+        }
+    )
     return warnings
 
 
@@ -651,6 +662,8 @@ def build_goal_context_pack(
     budget_bytes: int | None = None,
     imported_items: Sequence[object] = (),
     proposed_items: Sequence[object] = (),
+    memory_items: Sequence[object] = (),
+    memory_report: dict | None = None,
 ) -> dict:
     """Turn a validated goal into a provider-neutral context pack.
 
@@ -691,6 +704,10 @@ def build_goal_context_pack(
         ),
         **instructions,
         declared_objective_source=provenance_source,
+        imported_items=imported_items,
+        proposed_items=proposed_items,
+        memory_items=memory_items,
+        memory_report=memory_report,
         goal_context={
             "goal": goal_block(normalized),
             "profile_suggestions": goal_suggestions(normalized),

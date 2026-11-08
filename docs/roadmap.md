@@ -114,12 +114,33 @@ Everything below is future work. Nothing in this list works today; do not
 claim otherwise in code, docs, or demos. Each item lands as its own
 assignment ("one feature per assignment").
 
+## M3 — universal portable memory (implemented in 0.10.0)
+
+M3 was originally framed as reviewed goal hardening. That hardening landed in
+0.9.1/0.9.2 (output publication, list bounds, profile types, instruction
+authority, attachment forwarding). The portable-memory foundation authorized
+afterwards is what 0.10.0 delivers:
+
+- memory-schema v1 records with content-derived identity and bounded fields;
+- append-only JSONL stores with chain-hash corruption detection, advisory
+  locking, atomic creation, and damaged-line reporting;
+- explicit trust states (`proposed`, `attested`, `verified`, `superseded`,
+  `retracted`, derived `expired`) with append-only review transitions and no
+  automatic promotion;
+- deterministic retrieval (scope, keyword overlap, review state, freshness,
+  budget) with explicit exclusion reasons and conflict reporting;
+- optional context-pack integration through `--memory-store`, placed after
+  operator context and never able to override it;
+- versioned portable exchange (`aperio-memory-export` v1) that preserves
+  identity and provenance while importing everything as `proposed`;
+- standalone operation with no project, provider, or model API.
+
 ## Next (requires independent review and explicit instruction)
 
-- **M3 — reviewed universal goal hardening:** whatever the M2 review
-  confirms (for example goal persistence/provenance review, or importing a
-  validated goal into an existing plan with an explicit, non-destructive
-  adoption path). Do not start before M2 is independently reviewed.
+- Remaining M3 hardening whatever the review confirms (for example goal
+  persistence/provenance review, or importing a validated goal into an
+  existing plan with an explicit, non-destructive adoption path). Do not start
+  M4 before M3 is independently reviewed.
 
 ## Later / exploratory
 
