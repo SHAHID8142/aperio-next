@@ -24,7 +24,7 @@ Anything not listed below is **planned, not implemented**. See
 - Implemented (Feature 04): `aperio agent-list`, `aperio run-preview`, `aperio run-start [--authorize-exec]`, `aperio run-status`, `aperio runs-list`, `aperio run-cancel`, `aperio runs-reconcile`, `aperio run-report`, `aperio run-handoff`
 - Implemented (Feature 05): `aperio export [--dry-run] [--json]`, `aperio import [--replace] [--dry-run]`, `aperio integrity [--archive] [--json]`, `aperio upgrade [--apply] [--json]`
 - Implemented (Feature 06): `aperio roles`, `aperio policy-init`, `aperio policy-show`, `aperio policy-assign`, `aperio policy-permissions`, `aperio review-submit`, `aperio review-decide`, `aperio review-list`, `aperio review-status`
-- Implemented (Feature 07): `codex-cli` and `claude-cli` through `aperio agent-list`, `run-preview`, and `run-start --authorize-exec` (documented non-interactive CLIs; no GUI-app automation)
+- Implemented (Feature 07): `codex-cli` and `claude-cli` through `aperio agent-list`, `agent-doctor`, `run-preview`, and `run-start --authorize-exec [--authorize-write]` (documented non-interactive CLIs; read-only by default; no GUI-app automation)
 - Not implemented (by design, yet): autonomous coding loops, sandboxed execution, Cursor/ZCode GUI integrations, Cloud sync
 
 ## Requirements
@@ -107,10 +107,13 @@ aperio run-start ./my-project TASK-001 --agent local-process \
   --config .aperio/local/adapter.json                    # read-only preview (no process)
 
 # Real AI CLI providers (Feature 07; installed CLI + explicit consent)
+aperio agent-doctor ./my-project --agent codex-cli \
+  --config .aperio/local/codex.json --json                # passive flags/version, no model call
 aperio run-start ./my-project TASK-001 --agent codex-cli \
-  --config .aperio/local/codex.json --authorize-exec
-aperio run-start ./my-project TASK-001 --agent claude-cli \
-  --config .aperio/local/claude.json --authorize-exec
+  --config .aperio/local/codex.json --authorize-exec      # read-only
+aperio run-start ./my-project TASK-001 --agent codex-cli \
+  --config .aperio/local/codex.json \
+  --authorize-exec --authorize-write                      # workspace-write consent
 aperio run-preview ./my-project TASK-001 --agent claude-cli \
   --config .aperio/local/claude.json                      # command + prompt digest only
 
@@ -241,15 +244,19 @@ provider-neutral subprocess boundary:
 
 | Adapter | Documented interface | Default executable |
 |---|---|---|
-| `codex-cli` | `codex exec` (prompt on stdin, workspace-write sandbox, approval never) | `codex` |
-| `claude-cli` | `claude -p` (prompt on stdin, print mode, no interactive prompts) | `claude` |
+| `codex-cli` | `codex exec --json` (prompt on stdin, read-only by default) | `codex` |
+| `claude-cli` | `claude -p` (prompt on stdin, plan mode by default) | `claude` |
 
-Both require a machine-local JSON config and explicit `--authorize-exec`.
-Without it, `run-start` writes nothing and starts nothing. The shared
-controls are strict known-key config validation, project-confined working
-directory, stdin-only prompts, no shell, minimal environment by default,
-bounded output, a machine-local log, a hard timeout with process-group
-termination on POSIX, and neutral execution-record metadata.
+Both accept an optional machine-local JSON config (defaults: the CLI on
+`PATH`, the project root, read-only) and require explicit `--authorize-exec`.
+A separate `--authorize-write` is required for any write-capable mode. Both
+providers default to read-only; without write consent a write request fails
+before a run or task claim is created. Without `--authorize-exec`,
+`run-start` writes nothing and starts nothing. The shared controls are
+strict known-key validation with **no arbitrary provider args**,
+project-confined working directory, stdin-only prompts, no shell, minimal
+environment by default, bounded structured output, a machine-local log, a
+bounded process-group timeout, and neutral execution-record metadata.
 
 ```json
 {
@@ -257,19 +264,25 @@ termination on POSIX, and neutral execution-record metadata.
   "working_dir": "/absolute/project/path",
   "timeout_seconds": 1800,
   "env_policy": "minimal",
-  "permission_mode": "acceptEdits",
-  "allowed_tools": ["Read", "Edit", "Write", "Bash"],
+  "allow_shell": false,
   "max_turns": 25,
   "max_budget_usd": 5
 }
 ```
 
-Unsafe provider modes (`codex --sandbox danger-full-access`, Claude
-`bypassPermissions`) are deliberately refused. Exit 0 is not verification
-or completion; the task remains in progress until evidence and (when
-governed) independent review are recorded. These are real local processes,
-not a sandbox. GUI apps such as ZCode and Cursor are not integrated. See
-[docs/feature-07.md](docs/feature-07.md) for every key and limitation.
+Read-only Claude uses plan mode with only `Read,Grep,Glob`; write consent
+uses `acceptEdits` with `Read,Grep,Glob,Edit,Write`; `Bash` requires
+`allow_shell: true` plus write consent. Codex read-only uses its
+`read-only` sandbox; `workspace-write` requires the same second consent.
+Unsafe overrides (`codex --sandbox danger-full-access`, Claude
+`bypassPermissions`, raw `args`) are deliberately refused, and an
+authorized launch first verifies the installed CLI advertises every required
+flag. Codex JSONL and Claude JSON results are parsed into neutral metadata
+only. Exit 0 is not verification or completion; the task remains in progress
+until evidence and (when governed) independent review are recorded. These
+are real local processes, not a sandbox. GUI apps such as ZCode and Cursor
+are not integrated. See [docs/feature-07.md](docs/feature-07.md) for every
+key, the `agent-doctor` diagnostic, cleanup bounds, and limitations.
 
 ### Portable export/import (Feature 05)
 

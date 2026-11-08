@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aperio-next"
-version = "0.7.0"
+version = "0.7.1"
 description = "Model-agnostic, multi-agent software development orchestrator — portable project memory and handoff (Features 01-02)."
 readme = "README.md"
 requires-python = ">=3.11"

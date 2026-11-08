@@ -42,6 +42,7 @@ machine paths, or full argv.
 from __future__ import annotations
 
 import json
+import math
 import os
 import platform
 import re
@@ -199,7 +200,144 @@ def validate_executions_document(data: object, path: Path) -> dict:
                     f"{path} is corrupt: runs[{index}].{key} must be a "
                     "non-empty string"
                 )
+        provider_result = run.get("provider_result")
+        if provider_result is not None:
+            _validate_provider_result(provider_result, path, index)
     return data
+
+
+def _validate_provider_result(value: object, path: Path, index: int) -> None:
+    """Provider events are untrusted input; records carry only neutral metadata."""
+    if not isinstance(value, dict):
+        raise StateError(
+            f"{path} is corrupt: runs[{index}].provider_result must be an "
+            "object"
+        )
+    for key, allowed in (
+        ("provider", {"codex-cli", "claude-cli"}),
+        ("format", {"json", "jsonl"}),
+        ("parse_status", {"ok", "empty", "malformed", "oversized"}),
+        ("model_reported", {"success", "failed", "incomplete", "unknown"}),
+    ):
+        if value.get(key) not in allowed:
+            raise StateError(
+                f"{path} is corrupt: runs[{index}].provider_result.{key} "
+                "is invalid"
+            )
+    for key in ("event_count", "error_events", "unknown_events"):
+        number = value.get(key)
+        if (
+            isinstance(number, bool)
+            or not isinstance(number, int)
+            or not 0 <= number <= 1_000_000
+        ):
+            raise StateError(
+                f"{path} is corrupt: runs[{index}].provider_result.{key} "
+                "must be a bounded non-negative integer"
+            )
+    allowed_keys = {
+        "provider", "format", "parse_status", "model_reported", "detail",
+        "event_count", "error_events", "unknown_events", "subtype",
+        "is_error", "num_turns", "duration_ms", "total_cost_usd", "usage",
+        "permission_denials", "result_text_present", "turn_completed",
+        "turn_failed", "item_counts",
+    }
+    if set(value) - allowed_keys:
+        raise StateError(
+            f"{path} is corrupt: runs[{index}].provider_result has unknown "
+            "fields (provider output must stay neutral metadata)"
+        )
+    detail = value.get("detail")
+    if detail is not None and (
+        not isinstance(detail, str) or len(detail) > 500
+    ):
+        raise StateError(
+            f"{path} is corrupt: runs[{index}].provider_result.detail is "
+            "invalid"
+        )
+    usage = value.get("usage")
+    if usage is not None:
+        usage_keys = {
+            "input_tokens", "output_tokens", "cached_input_tokens",
+            "reasoning_output_tokens", "cache_creation_input_tokens",
+            "cache_read_input_tokens",
+        }
+        if not isinstance(usage, dict) or set(usage) - usage_keys or any(
+            isinstance(v, bool) or not isinstance(v, int)
+            or not 0 <= v <= 1_000_000_000
+            for v in usage.values()
+        ):
+            raise StateError(
+                f"{path} is corrupt: runs[{index}].provider_result.usage is "
+                "invalid"
+            )
+    if value["provider"] == "codex-cli":
+        if not isinstance(value.get("turn_completed"), bool) or not isinstance(
+            value.get("turn_failed"), bool
+        ):
+            raise StateError(
+                f"{path} is corrupt: runs[{index}].provider_result turn "
+                "flags must be booleans"
+            )
+        counts = value.get("item_counts")
+        count_keys = {
+            "agent_message", "reasoning", "command_execution", "file_change",
+            "mcp_tool_call", "collab_tool_call", "web_search", "todo_list",
+            "error",
+        }
+        if not isinstance(counts, dict) or set(counts) - count_keys or any(
+            isinstance(v, bool) or not isinstance(v, int)
+            or not 0 <= v <= 1_000_000
+            for v in counts.values()
+        ):
+            raise StateError(
+                f"{path} is corrupt: runs[{index}].provider_result.item_counts "
+                "must be a bounded known-item object"
+            )
+    else:
+        subtype = value.get("subtype")
+        if subtype is not None and subtype not in {
+            "success", "error_during_execution", "error_max_turns",
+            "error_max_budget_usd", "error_max_structured_output_retries",
+            "other",
+        }:
+            raise StateError(
+                f"{path} is corrupt: runs[{index}].provider_result.subtype "
+                "is invalid"
+            )
+        if value.get("is_error") is not None and not isinstance(
+            value.get("is_error"), bool
+        ):
+            raise StateError(
+                f"{path} is corrupt: runs[{index}].provider_result.is_error "
+                "is invalid"
+            )
+        if value.get("result_text_present") is not None and not isinstance(
+            value.get("result_text_present"), bool
+        ):
+            raise StateError(
+                f"{path} is corrupt: runs[{index}].provider_result."
+                "result_text_present is invalid"
+            )
+        for key in ("num_turns", "duration_ms", "permission_denials"):
+            number = value.get(key)
+            if number is not None and (
+                isinstance(number, bool) or not isinstance(number, int)
+                or not 0 <= number <= 1_000_000_000
+            ):
+                raise StateError(
+                    f"{path} is corrupt: runs[{index}].provider_result.{key} "
+                    "is invalid"
+                )
+        cost = value.get("total_cost_usd")
+        if cost is not None and (
+            isinstance(cost, bool) or not isinstance(cost, (int, float))
+            or not math.isfinite(cost) or not 0 <= cost <= 10**9
+        ):
+            raise StateError(
+                f"{path} is corrupt: runs[{index}].provider_result."
+                "total_cost_usd is invalid"
+            )
 
 
 def parse_executions_snapshot(raw: bytes, path: Path) -> dict | None:
@@ -434,6 +572,7 @@ def _new_run_record(
         "handoff_ref": None,
         "local_log_ref": None,
         "output_truncated": None,
+        "provider_result": None,
         "pid": None,
         "machine": machine_token() if status == "running" else None,
     }
@@ -449,6 +588,8 @@ def dispatch_task(
     adapter_id: str,
     config: dict | None,
     authorize_exec: bool,
+    authorize_workspace_write: bool = False,
+    authorize_write: bool | None = None,
     previous_run_id: str | None = None,
     actor: str | None = None,
     dispatch_lock_timeout: float = 5.0,
@@ -471,6 +612,18 @@ def dispatch_task(
     """
     adapter = get_adapter(adapter_id)
     require_supported_state(aperio_dir)
+    if not isinstance(authorize_workspace_write, bool):
+        raise ValidationError(
+            "authorize_workspace_write must be true or false"
+        )
+    if authorize_write is not None:
+        if not isinstance(authorize_write, bool):
+            raise ValidationError(
+                "authorize_write must be true or false when given"
+            )
+        authorize_workspace_write = (
+            authorize_workspace_write or authorize_write
+        )
     policy_role = None
     if load_policy(aperio_dir) is not None:
         policy_role = require_action(
@@ -479,11 +632,21 @@ def dispatch_task(
 
     # Config validation happens BEFORE any persistent mutation: an
     # invalid config must never leave an orphaned task claim or a
-    # partial record.
+    # partial record. The same boundary enforces the separate write
+    # consent and verifies that the installed CLI advertises every
+    # provider control aperio will rely on.
     validated_config = adapter.validate_config(config, aperio_dir)
     available, reason = adapter.available(validated_config)
     if not available:
         raise StateError(f"adapter {adapter_id!r} is not available: {reason}")
+    if authorize_exec:
+        authorization_error = adapter.authorization_error(
+            validated_config,
+            authorize_workspace_write=authorize_workspace_write,
+        )
+        if authorization_error:
+            raise StateError(authorization_error)
+        adapter.check_capabilities(validated_config)
 
     dispatch_token = acquire_lock(
         dispatch_lock_path(aperio_dir),
@@ -494,6 +657,7 @@ def dispatch_task(
         result = _dispatch_locked(
             aperio_dir, task_id, adapter=adapter, adapter_id=adapter_id,
             config=validated_config, authorize_exec=authorize_exec,
+            authorize_workspace_write=authorize_workspace_write,
             previous_run_id=previous_run_id, actor=actor,
             lock_timeout=lock_timeout,
         )
@@ -502,6 +666,7 @@ def dispatch_task(
         record = _dispatch_execute(
             aperio_dir, result, adapter=adapter, adapter_id=adapter_id,
             config=validated_config, actor=actor,
+            authorize_workspace_write=authorize_workspace_write,
         )
         if policy_role is not None:
             _policy_event(
@@ -527,6 +692,7 @@ def _dispatch_locked(
     adapter_id: str,
     config: dict | None,
     authorize_exec: bool,
+    authorize_workspace_write: bool,
     previous_run_id: str | None,
     actor: str | None = None,
     lock_timeout: float,
@@ -592,6 +758,7 @@ def _dispatch_locked(
                 "command": adapter.command_preview(
                     config, aperio_dir,
                     task=next(t for t in plan["tasks"] if t["id"] == task_id),
+                    workspace_write_authorized=authorize_workspace_write,
                 ),
             }
         record = _new_run_record(
@@ -783,6 +950,7 @@ def _with_note(exc: AperioError, note: str) -> AperioError:
 def _dispatch_execute(
     aperio_dir: Path, dispatch_result: dict, *, adapter, adapter_id: str,
     config: dict | None = None, actor: str | None = None,
+    authorize_workspace_write: bool = False,
 ) -> dict:
     """Claim, execute, and finalize after the record-creation step."""
     run_id = dispatch_result["run_id"]
@@ -861,6 +1029,7 @@ def _dispatch_execute(
             run_id=run_id, aperio_dir=aperio_dir,
             task=_task_from_plan(aperio_dir, task_id), config=config,
             on_running=on_running,
+            workspace_write_authorized=authorize_workspace_write,
         )
     except KeyboardInterrupt:
         if "pid" in pid_holder:
@@ -931,6 +1100,7 @@ def _dispatch_execute(
             "outcome": result.get("outcome"),
             "exit_code": result.get("exit_code"),
             "output_truncated": result.get("output_truncated"),
+            "provider_result": result.get("provider_result"),
             "local_log_ref": result.get("local_log_ref"),
             "finished_at": utc_now_iso(),
         },
@@ -1064,6 +1234,8 @@ def runs_dispatch(
     adapter_id: str,
     config: dict | None,
     authorize_exec: bool,
+    authorize_workspace_write: bool = False,
+    authorize_write: bool | None = None,
     limit: int | None = None,
     actor: str | None = None,
     dispatch_lock_timeout: float = 5.0,
@@ -1083,9 +1255,30 @@ def runs_dispatch(
     """
     require_supported_state(aperio_dir)
     adapter = get_adapter(adapter_id)
-    available, _reason = adapter.available(config)
+    if not isinstance(authorize_workspace_write, bool):
+        raise ValidationError(
+            "authorize_workspace_write must be true or false"
+        )
+    if authorize_write is not None:
+        if not isinstance(authorize_write, bool):
+            raise ValidationError(
+                "authorize_write must be true or false when given"
+            )
+        authorize_workspace_write = (
+            authorize_workspace_write or authorize_write
+        )
+    validated_config = adapter.validate_config(config, aperio_dir)
+    available, _reason = adapter.available(validated_config)
     if not available:
         raise StateError(f"adapter {adapter_id!r} is not available: {_reason}")
+    if authorize_exec:
+        authorization_error = adapter.authorization_error(
+            validated_config,
+            authorize_workspace_write=authorize_workspace_write,
+        )
+        if authorization_error:
+            raise StateError(authorization_error)
+        adapter.check_capabilities(validated_config)
 
     dispatch_token = acquire_lock(
         dispatch_lock_path(aperio_dir),
@@ -1116,11 +1309,12 @@ def runs_dispatch(
                     "execution.dispatch",
                     target=f"task:{task_id}",
                 )
-            validated_config = adapter.validate_config(config, aperio_dir)
             record = _dispatch_locked(
                 aperio_dir, task_id, adapter=adapter, adapter_id=adapter_id,
                 config=validated_config,
-                authorize_exec=authorize_exec, previous_run_id=None,
+                authorize_exec=authorize_exec,
+                authorize_workspace_write=authorize_workspace_write,
+                previous_run_id=None,
                 actor=actor,
                 lock_timeout=LOCK_TIMEOUT_SECONDS,
             )
@@ -1134,6 +1328,7 @@ def runs_dispatch(
                 aperio_dir, record, adapter=adapter,
                 adapter_id=adapter_id, config=validated_config,
                 actor=actor,
+                authorize_workspace_write=authorize_workspace_write,
             )
             if policy_role is not None:
                 _policy_event(
@@ -1657,7 +1852,8 @@ def execution_summary(aperio_dir: Path) -> dict | None:
 
 
 def execution_preview(
-    aperio_dir: Path, task_id: str, *, adapter_id: str, config: dict | None
+    aperio_dir: Path, task_id: str, *, adapter_id: str, config: dict | None,
+    authorize_workspace_write: bool = False,
 ) -> dict:
     """Deterministic, side-effect-free execution preview (JSON-safe)."""
     adapter = get_adapter(adapter_id)
@@ -1683,6 +1879,9 @@ def execution_preview(
         if not available:
             preview["availability_warning"] = reason
         preview.update(
-            adapter.preview(task=task, config=config, aperio_dir=aperio_dir)
+            adapter.preview(
+                task=task, config=config, aperio_dir=aperio_dir,
+                authorize_workspace_write=authorize_workspace_write,
+            )
         )
     return preview

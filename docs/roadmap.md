@@ -50,18 +50,21 @@
   attempt-bound reviews, implementer-based reviewer independence, and a
   narrow startup-recovery path with no public completion bypass.
 
+- **Feature 07 — Real AI agent integrations & provider-neutral CLI
+  bridge:** provider-neutral `CliAgentAdapter` plus documented
+  non-interactive `codex-cli` (`codex exec --json`) and `claude-cli`
+  (`claude -p`) adapters. Prompts travel on stdin, arbitrary provider
+  `args` are refused, capability probes happen before authorized launch,
+  and two independent consents separate process execution from
+  workspace-write. Both providers default to read-only; Claude derives
+  restrictive `--tools`/`--allowedTools` from one mode. Structured
+  JSONL/JSON results are reduced to neutral metadata; bounded pipe cleanup
+  prevents descendant-held-pipe hangs. GUI applications (ZCode, Cursor)
+  remain explicitly out of scope. See `docs/feature-07.md`.
+
 Everything below is future work. Nothing in this list works today; do not
 claim otherwise in code, docs, or demos. Each item lands as its own
 assignment ("one feature per assignment").
-
-- **Feature 07 — Real AI agent integrations & provider-neutral CLI
-  bridge:** provider-neutral `CliAgentAdapter` plus documented
-  non-interactive `codex-cli` (`codex exec`) and `claude-cli`
-  (`claude -p`) adapters. Prompts travel on stdin, provider modes are
-  bounded, execution requires `--authorize-exec`, and the existing
-  supervision/privacy/governance boundaries are reused. GUI applications
-  (ZCode, Cursor) remain explicitly out of scope. See
-  `docs/feature-07.md`.
 
 ## Later / exploratory
 

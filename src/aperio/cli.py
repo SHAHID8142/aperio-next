@@ -14,6 +14,9 @@ Commands:
     aperio integrity <dir> [--archive F]
                                       validate portable context consistency
     aperio upgrade <dir> [--apply]    preview or apply explicit schema upgrades
+    aperio agent-list [dir]           list built-in agent adapters
+    aperio agent-doctor <dir> --agent ID [--config F] [--json]
+                                      passively diagnose a provider CLI
     aperio roles [--json]             list built-in workflow roles and actions
     aperio policy-init <dir> ...      enable governance and assign declared actors
     aperio policy-show <dir>          inspect roles, actors, and rules
@@ -63,7 +66,7 @@ from aperio.runtime import (
     record_external_result,
 )
 from aperio.planmodel import ready_task_ids
-from aperio.adapters import builtin_adapters
+from aperio.adapters import builtin_adapters, provider_doctor
 from aperio.planstore import (
     adopt_plan_author,
     approve_plan,
@@ -364,6 +367,21 @@ def build_parser() -> argparse.ArgumentParser:
         "project_directory", nargs="?", help="unused; accepted for symmetry"
     )
 
+    doctor_parser = subparsers.add_parser(
+        "agent-doctor",
+        help="passively diagnose a provider CLI (no login or model request)",
+    )
+    doctor_parser.add_argument("project_directory")
+    doctor_parser.add_argument(
+        "--agent", required=True,
+        help="provider adapter id: codex-cli or claude-cli",
+    )
+    doctor_parser.add_argument("--config", help="adapter config JSON file")
+    doctor_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit the diagnostic report as machine-readable JSON",
+    )
+
     run_preview_parser = subparsers.add_parser(
         "run-preview",
         help="show a deterministic, side-effect-free execution preview",
@@ -375,6 +393,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="adapter id: manual, local-process, codex-cli, or claude-cli",
     )
     run_preview_parser.add_argument("--config", help="adapter config JSON file")
+    run_preview_parser.add_argument(
+        "--authorize-write",
+        "--authorize-workspace-write",
+        dest="authorize_workspace_write",
+        action="store_true",
+        help="show effective permissions as if workspace-write were authorized "
+        "(preview only; this does not launch anything)",
+    )
 
     run_start_parser = subparsers.add_parser(
         "run-start",
@@ -392,8 +418,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--authorize-exec",
         dest="authorize_exec",
         action="store_true",
-        help="EXPLICIT human authorization for real subprocess execution "
-        "(local-process only; without it the run is preparation only)",
+        help="EXPLICIT human authorization for launching a real subprocess; "
+        "without it the run is preparation only",
+    )
+    run_start_parser.add_argument(
+        "--authorize-write",
+        "--authorize-workspace-write",
+        dest="authorize_workspace_write",
+        action="store_true",
+        help="SEPARATE explicit authorization for provider workspace-write "
+        "or shell-capable modes; read-only launches do not need it",
     )
     run_start_parser.add_argument(
         "--previous-run", help="link a retry to the run it replaces"
@@ -983,11 +1017,47 @@ def _cmd_agent_list(args) -> None:
         print(f"  {adapter.id:<14} {adapter.display_name} [{status}]")
     print()
     print(
-        "local-process, codex-cli, and claude-cli require a config file "
-        "(run-start --config) and --authorize-exec for real subprocess "
-        "execution; manual prepares a handoff and never executes. Provider "
-        "executable paths are validated when the run starts."
+        "local-process, codex-cli, and claude-cli require --authorize-exec "
+        "for real subprocess execution; provider write-capable modes also "
+        "require the separate --authorize-write. Providers default to "
+        "read-only. manual prepares a handoff and never executes."
     )
+
+
+def _cmd_agent_doctor(args) -> None:
+    target = resolve_target(args.project_directory, for_writing=False)
+    report = provider_doctor(
+        args.agent,
+        config=_read_adapter_config(args.config),
+        aperio_dir=aperio_dir_for(target),
+    )
+    if args.as_json:
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        return
+    print(f"adapter:          {report['adapter_id']}")
+    print(f"installed:        {report['installed']}")
+    if report.get("executable"):
+        print(f"executable:       {report['executable']}")
+    print(f"version:          {report.get('version') or 'unknown'}")
+    if report.get("version_error"):
+        print(f"version error:    {report['version_error']}")
+    if report.get("installation_error"):
+        print(f"installation:     {report['installation_error']}")
+    print(f"config valid:     {report['configuration']['valid']}")
+    if report["configuration"].get("error"):
+        print(f"config error:     {report['configuration']['error']}")
+    print("required flags:   " + ", ".join(report.get("required_flags") or []))
+    if report.get("missing_controls"):
+        print("missing controls: " + ", ".join(report["missing_controls"]))
+    print(f"read-only:        "
+          f"{report['read_only_execution']['supported']}")
+    print(f"workspace-write:  "
+          f"{report['workspace_write_execution']['supported']} "
+          f"({report['workspace_write_execution']['requires']})")
+    print("authentication:   not checked (passive diagnostics)")
+    print("live integration: unverified (no model request made)")
+    if report.get("capability_error"):
+        print(f"capability:       {report['capability_error']}")
 
 
 def _read_adapter_config(path: str | None) -> dict | None:
@@ -1019,6 +1089,7 @@ def _cmd_run_preview(args) -> None:
     preview = execution_preview(
         aperio_dir_for(target), args.task_id,
         adapter_id=args.agent, config=_read_adapter_config(args.config),
+        authorize_workspace_write=args.authorize_workspace_write,
     )
     print(json.dumps(preview, indent=2, ensure_ascii=False))
 
@@ -1032,6 +1103,7 @@ def _cmd_run_start(args) -> None:
         adapter_id=args.agent,
         config=config,
         authorize_exec=args.authorize_exec,
+        authorize_workspace_write=args.authorize_workspace_write,
         previous_run_id=args.previous_run,
         actor=args.actor,
     )
@@ -1049,7 +1121,20 @@ def _cmd_run_start(args) -> None:
         print(f"  working_dir: {command.get('working_dir')}")
         print(f"  timeout: {command.get('timeout_seconds')}s; "
               f"env: {command.get('env_policy')}")
-        print("  re-run with --authorize-exec to execute")
+        permissions = command.get("effective_permissions")
+        if permissions:
+            print("  effective permissions: "
+                  + json.dumps(permissions, sort_keys=True))
+        if command.get("requested_workspace_write"):
+            if args.authorize_workspace_write:
+                print("  workspace-write is authorized for this preview")
+            else:
+                print("  requested workspace-write is NOT authorized; this "
+                      "launch is read-only")
+        for note in command.get("risk_notes") or []:
+            print(f"  risk: {note}")
+        print("  re-run with --authorize-exec to execute "
+              "(add --authorize-write only for a write-capable provider mode)")
         return
     print(
         f"run {record['run_id']}: {record['status']} "
@@ -1669,6 +1754,8 @@ def main(argv: list[str] | None = None) -> int:
             _cmd_task_status(args)
         elif args.command == "agent-list":
             _cmd_agent_list(args)
+        elif args.command == "agent-doctor":
+            _cmd_agent_doctor(args)
         elif args.command == "run-preview":
             _cmd_run_preview(args)
         elif args.command == "run-start":
@@ -1716,5 +1803,12 @@ def main(argv: list[str] | None = None) -> int:
     except AperioError as exc:
         print(f"{_PROG}: error: {exc}", file=sys.stderr)
         return exc.exit_code
+    except KeyboardInterrupt:
+        print(
+            f"{_PROG}: error: interrupted; owned child processes were "
+            "terminated and the run can be reconciled",
+            file=sys.stderr,
+        )
+        return 130
 
     return 0

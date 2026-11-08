@@ -88,9 +88,17 @@
 - Subprocess adapters never use a shell. `local-process` and the AI CLI
   providers require `--authorize-exec`; without it dispatch is read-only.
   Provider prompts travel on stdin, not argv, provider configs are
-  known-key validated, working directories stay inside the project, and
-  unsafe Codex/Claude bypass modes are refused. Raw child output and
-  provider prompts never enter shareable records, and exit 0 is never
+  known-key validated with no arbitrary provider `args`, working
+  directories stay inside the project, and unsafe Codex/Claude bypass
+  modes are refused. `--authorize-write` is a second, independent consent
+  for workspace-write modes; providers default to read-only and a write
+  request without that consent fails before any run record or claim.
+  Authorized launches must verify the installed CLI advertises the flags
+  Aperio relies on. Claude's `--tools` (available tools) and
+  `--allowedTools` (auto-approved tools) are derived together from the
+  selected mode; Bash is never granted by default. Raw child output,
+  provider prompts, and model text never enter shareable records; only
+  bounded neutral structured metadata may travel. Exit 0 is never
   verification or completion. These processes are not sandboxed.
 - Never commit secrets, credentials, tokens, private client information, or
   machine-specific configuration to this repository.

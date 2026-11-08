@@ -405,15 +405,27 @@ Built-in adapters:
 - **codex-cli** / **claude-cli** (Feature 07) — documented non-interactive
   AI coding CLIs through the provider-neutral `CliAgentAdapter`. The task
   prompt is rendered deterministically and sent on stdin; argv carries only
-  static provider flags. Codex uses `codex exec` with workspace-write,
+  flags derived by Aperio, never a generic operator `args` prefix. Two
+  separate runtime consents apply: `--authorize-exec` launches a process,
+  and `--authorize-write` permits a write-capable provider mode. Both
+  providers default to read-only. A write request without its consent
+  fails before a run record or task claim. Codex uses `codex exec --json`
+  with sandbox `read-only` (or explicitly authorized `workspace-write`),
   approval never, ephemeral sessions, and optional model. Claude uses
-  `claude -p` with a non-bypass permission mode, explicit allowed tools,
-  `--permission-prompts none`, bounded turns, optional budget/model, and no
-  persisted session by default. Both share the local-process supervision,
-  authorization, output/privacy boundary, timeout, and read-only preview.
-  Provider executable/config is validated before any claim; the executable
-  must be installed or explicitly configured. These are real local
-  processes, not sandboxes. See `docs/feature-07.md`.
+  `claude -p` in `plan` mode (or authorized `acceptEdits`) and derives both
+  `--tools` and `--allowedTools` from one restrictive set: `Read,Grep,Glob`
+  read-only, plus `Edit,Write` only with write consent; `Bash` requires
+  `allow_shell` plus write consent. `--permission-prompts none` denies
+  prompted tools; it is not a sandbox. Authorized launches first probe
+  `--version`/`--help` and refuse missing controls before any mutation.
+  Codex JSONL and Claude JSON are parsed into bounded, neutral metadata
+  only (raw model text stays in the machine-local log). Pipe draining is
+  hard-bounded at 2 seconds; a descendant holding inherited pipes triggers
+  an owned process-group kill, never an unbounded join. Both share the
+  local-process supervision, privacy boundary, timeout, and read-only
+  preview. Provider executable/config is validated before any claim; the
+  executable must be installed or explicitly configured. These are real
+  local processes, not sandboxes. See `docs/feature-07.md`.
 
 ### Execution records (`.aperio/executions.json`, exec-schema v1)
 
@@ -424,6 +436,7 @@ Single file, dict-based, unknown keys preserved; every mutation under
 `completed` / `failed` / `cancelled` / `interrupted`), timestamps,
 `exit_code`, neutral metadata (`diagnostics_note`, `external_reported`),
 `handoff_ref` (`runs/<run-id>.handoff.md`, the current reference schema),
+`provider_result` (neutral structured provider metadata, never model text),
 `local_log_ref` (`local/runs/<run-id>.log`), `pid` + `machine` (recorded
 atomically with the running flip; pids are only interpreted on the
 recording machine), `previous_run_id` (retries), `outcome_note`
