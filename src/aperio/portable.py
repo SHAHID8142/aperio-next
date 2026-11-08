@@ -28,6 +28,13 @@ preserved. Archives that contain an active (prepared/running) run are
 exported without execution metadata instead, because a live process cannot
 be handed off.
 
+An imported archive may not carry active runs or any machine-local process
+identity. The importer **rejects** a ``pid``, ``machine``, or
+``local_log_ref`` in any execution record instead of warning: cancelling a
+run signals the recorded pid, so an imported identity could otherwise
+target an unrelated local process. Only a locally recorded run whose
+machine matches this host can ever be signalled.
+
 Honesty limits (documented, not implied away):
 
 - SHA-256 in the manifest detects corruption and accidental modification.
@@ -41,6 +48,14 @@ Honesty limits (documented, not implied away):
   never leaves a project that merely *claims* to be imported; rerun the
   import after inspecting the destination (identical bytes are accepted as
   unchanged), or remove the partial ``.aperio/`` directory.
+- Import never deletes existing files: the effective post-import context
+  (archive plus retained artifacts) is validated before any write, so an
+  incompatible combination is refused with every existing byte preserved.
+- Whole-project operations coordinate through the writer locks in the
+  fixed order documented in ``LOCK_ORDER``. Export reads under those locks
+  (one consistent snapshot); import validates and applies under them and
+  rejects a destination that changed while it was preparing. A crashed or
+  non-cooperating external writer is still outside this contract.
 - No ``fsync``: crash consistency is best-effort, matching the rest of
   aperio.
 
@@ -62,6 +77,7 @@ import re
 import stat
 import time
 import zipfile
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -71,21 +87,26 @@ from aperio.artifacts import (
     discard_created_file,
     open_exclusive_binary,
 )
-from aperio.decisions import decisions_path, parse_decisions_text
+from aperio.decisions import (
+    DECISIONS_LOCK_NAME,
+    decisions_path,
+    parse_decisions_text,
+)
 from aperio.errors import (
     AperioError,
     PathError,
     StateError,
     ValidationError,
 )
-from aperio.handoff import handoff_path, parse_handoff_text
+from aperio.handoff import HANDOFF_LOCK_NAME, handoff_path, parse_handoff_text
 from aperio.locks import acquire_lock, release_lock
 from aperio.paths import resolve_target
 from aperio.planmodel import (
     PLAN_SCHEMA_VERSION,
     validate_plan_document,
 )
-from aperio.planstore import plan_path
+from aperio.planstore import PLAN_LOCK_NAME, plan_path
+from aperio.progress import STATE_LOCK_NAME
 from aperio.project import (
     aperio_dir_for,
     ensure_local_scaffolding,
@@ -93,6 +114,8 @@ from aperio.project import (
 )
 from aperio.runtime import (
     EXECUTIONS_SCHEMA_VERSION,
+    dispatch_lock_path,
+    executions_lock_path,
     read_executions,
     read_run_handoff,
     validate_executions_document,
@@ -116,6 +139,20 @@ MAX_ARCHIVE_BYTES = 24 * 1024 * 1024
 MAX_ARCHIVE_FILE_BYTES = 32 * 1024 * 1024
 IMPORT_LOCK_TIMEOUT = 5.0
 
+#: Global lock order for whole-project operations (export/import). Every
+#: other Aperio writer takes exactly one of these locks, so acquiring them
+#: in this fixed order cannot deadlock: a caller never holds a later lock
+#: while waiting for an earlier one.
+LOCK_ORDER: tuple[str, ...] = (
+    "import",
+    "dispatch",
+    "plan",
+    "executions",
+    "state",
+    "handoff",
+    "decisions",
+)
+
 TOP_LEVEL_FILES: tuple[str, ...] = (
     "state.json",
     "brief.md",
@@ -137,6 +174,274 @@ EXCLUDED_PATHS: tuple[str, ...] = (
     "atomic-write temporary files",
     ".gitignore (generated project scaffolding)",
 )
+
+
+def _lock_targets(aperio_dir: Path) -> dict[str, Path]:
+    return {
+        "import": aperio_dir / "import.lock",
+        "dispatch": dispatch_lock_path(aperio_dir),
+        "plan": aperio_dir / PLAN_LOCK_NAME,
+        "executions": executions_lock_path(aperio_dir),
+        "state": aperio_dir / STATE_LOCK_NAME,
+        "handoff": aperio_dir / HANDOFF_LOCK_NAME,
+        "decisions": aperio_dir / DECISIONS_LOCK_NAME,
+    }
+
+
+@contextmanager
+def coordination_locks(aperio_dir: Path, *, include_import: bool):
+    """Hold every Aperio writer lock in the global order.
+
+    Cooperative writers (task-status, plan-revise, phase-set, handoff-write,
+    decision-add, dispatch, run-report, another import) are serialized for
+    the duration, so a read produces one consistent snapshot and a write
+    cannot interleave with a conflicting mutation. Bounded wait: if a
+    writer holds a lock past the timeout, the operation fails with the
+    writer-friendly lock error instead of hanging or forcing the lock.
+    """
+    targets = _lock_targets(aperio_dir)
+    names = LOCK_ORDER if include_import else LOCK_ORDER[1:]
+    held: list[tuple[str, str]] = []
+    try:
+        for name in names:
+            try:
+                held.append(
+                    (
+                        name,
+                        acquire_lock(
+                            targets[name],
+                            timeout=IMPORT_LOCK_TIMEOUT,
+                            artifact=name,
+                        ),
+                    )
+                )
+            except AperioError as exc:
+                raise StateError(
+                    f"cannot take a consistent project snapshot: another "
+                    f"aperio writer holds the {name} lock ({exc}). Nothing "
+                    "was modified."
+                ) from None
+        yield
+    finally:
+        for name, token in reversed(held):
+            release_lock(targets[name], token)
+
+
+def _destination_snapshot(aperio_dir: Path) -> dict[str, tuple[int, int, int]]:
+    """Cheap identity snapshot of the portable destination context."""
+    snapshot: dict[str, tuple[int, int, int]] = {}
+    for rel in TOP_LEVEL_FILES:
+        path = aperio_dir / rel
+        if path.is_symlink():
+            continue
+        try:
+            info = path.stat()
+        except OSError:
+            continue
+        if path.is_file():
+            snapshot[rel] = (info.st_size, info.st_mtime_ns, info.st_ino)
+    runs = aperio_dir / "runs"
+    if runs.is_dir() and not runs.is_symlink():
+        try:
+            children = sorted(runs.iterdir())
+        except OSError:
+            children = []
+        for child in children:
+            rel = f"runs/{child.name}"
+            if not RUN_HANDOFF_PATTERN.match(rel):
+                continue
+            try:
+                info = child.stat()
+            except OSError:
+                continue
+            if child.is_file() and not child.is_symlink():
+                snapshot[rel] = (info.st_size, info.st_mtime_ns, info.st_ino)
+    return snapshot
+
+
+def _read_destination_file(aperio_dir: Path, rel: str) -> bytes | None:
+    path = aperio_dir / rel
+    if path.is_symlink():
+        raise PathError(
+            f"refusing to read {rel!r} through symlink at {path}; remove the "
+            "link and re-run the command"
+        )
+    try:
+        if not path.is_file():
+            return None
+        return path.read_bytes()
+    except OSError as exc:
+        raise StateError(
+            f"cannot read existing {path}: {exc.strerror or exc}"
+        ) from None
+
+
+def _destination_handoff_exists(aperio_dir: Path, rel: str) -> bool:
+    if rel not in TOP_LEVEL_FILES and not RUN_HANDOFF_PATTERN.match(rel):
+        return False
+    path = aperio_dir / rel
+    if os.path.islink(path):
+        return False
+    return path.is_file()
+
+
+def _effective_context(
+    aperio_dir: Path, archive_files: dict[str, bytes]
+) -> dict[str, bytes]:
+    """Imported files plus destination artifacts that will remain.
+
+    Import never deletes: every existing shareable artifact not replaced by
+    the archive stays part of the project, so it must be validated together
+    with the imported content.
+    """
+    effective = dict(archive_files)
+    for rel in ("plan.json", "executions.json"):
+        if rel in effective:
+            continue
+        current = _read_destination_file(aperio_dir, rel)
+        if current is not None:
+            effective[rel] = current
+    return effective
+
+
+def _validate_merged_context(
+    aperio_dir: Path,
+    archive_files: dict[str, bytes],
+    archive_run_ids: set[str],
+) -> None:
+    """Validate the effective post-import context before writing anything.
+
+    The merged view is the archive overlaid on the files that remain in the
+    destination. It must not pair a plan with execution records or handoffs
+    that contradict it, and it must never leave an active run pointing at a
+    task the effective plan does not define.
+    """
+    effective = _effective_context(aperio_dir, archive_files)
+    plan = None
+    if "plan.json" in effective:
+        plan = _decode_json(effective["plan.json"], "effective:plan.json")
+        version = plan.get("schema_version")
+        if version != PLAN_SCHEMA_VERSION:
+            raise StateError(
+                "the effective post-import plan.json (archive or retained) "
+                f"uses schema version {version}, but this aperio supports "
+                f"{PLAN_SCHEMA_VERSION}; importing would combine incompatible "
+                "artifacts. Nothing was modified."
+            )
+        validate_plan_document(plan, Path("effective:plan.json"))
+
+    runs = None
+    if "executions.json" in effective:
+        runs = _decode_json(effective["executions.json"], "effective:executions.json")
+        version = runs.get("schema_version")
+        if version != EXECUTIONS_SCHEMA_VERSION:
+            raise StateError(
+                "the effective post-import executions.json (archive or "
+                f"retained) uses schema version {version}, but this aperio "
+                f"supports {EXECUTIONS_SCHEMA_VERSION}; importing would "
+                "combine incompatible artifacts. Nothing was modified."
+            )
+        validate_executions_document(runs, Path("effective:executions.json"))
+
+    if not runs or not runs["runs"]:
+        return
+    if plan is None:
+        raise StateError(
+            "the effective post-import context would contain execution "
+            "records but no plan.json (the archive omits it and the "
+            "destination has none). Importing would break the task/run "
+            "relationship. Nothing was modified."
+        )
+
+    tasks = {task["id"] for task in plan["tasks"]}
+    plan_replaced = "plan.json" in archive_files
+    for run in runs["runs"]:
+        run_id = run["run_id"]
+        if run["task_id"] not in tasks:
+            raise StateError(
+                f"run {run_id} references task {run['task_id']}, which the "
+                "effective post-import plan does not define. Importing would "
+                "leave an execution record pointing at a removed or renamed "
+                "task (existing context is never deleted to hide this). "
+                "Nothing was modified."
+            )
+        if run["plan_version"] > plan["plan_version"]:
+            raise StateError(
+                f"run {run_id} was recorded against plan revision "
+                f"{run['plan_version']}, newer than the effective post-import "
+                f"plan revision {plan['plan_version']}. Importing would make "
+                "the run appear stale. Nothing was modified."
+            )
+        ref = run.get("handoff_ref")
+        if run["status"] == "awaiting-external":
+            if not ref:
+                raise StateError(
+                    f"awaiting-external run {run_id} has no handoff_ref; "
+                    "importing would leave it undeliverable. Nothing was "
+                    "modified."
+                )
+            if ref not in archive_files and not _destination_handoff_exists(
+                aperio_dir, ref
+            ):
+                raise StateError(
+                    f"awaiting-external run {run_id} references handoff "
+                    f"{ref!r}, which neither the archive nor the destination "
+                    "provides. Importing would leave the run waiting for a "
+                    "missing handoff. Nothing was modified."
+                )
+        if (
+            plan_replaced
+            and run_id not in archive_run_ids
+            and run["status"] in ("prepared", "running", "awaiting-external")
+            and run["plan_version"] != plan["plan_version"]
+        ):
+            raise StateError(
+                f"retained active run {run_id} ({run['status']}) was recorded "
+                f"against plan revision {run['plan_version']}, but the import "
+                f"replaces the plan at revision {plan['plan_version']}. "
+                "Importing would pair a live handoff with a different plan. "
+                "Finish or cancel the run, or import a plan at the same "
+                "revision. Nothing was modified."
+            )
+
+
+def _validate_export_relationships(files: dict[str, bytes]) -> None:
+    """Refuse to package a self-inconsistent exported snapshot."""
+    if "executions.json" not in files:
+        return
+    runs = _decode_json(files["executions.json"], "export:executions.json")
+    plan = (
+        _decode_json(files["plan.json"], "export:plan.json")
+        if "plan.json" in files
+        else None
+    )
+    if plan is None and runs["runs"]:
+        raise StateError(
+            "cannot export: execution records exist but plan.json is absent; "
+            "the archive would contain an unusable task/run combination"
+        )
+    tasks = {task["id"] for task in (plan["tasks"] if plan else [])}
+    for run in runs["runs"]:
+        if plan is not None and run["task_id"] not in tasks:
+            raise StateError(
+                f"cannot export: run {run['run_id']} references task "
+                f"{run['task_id']}, which the current plan does not define. "
+                "Run 'aperio integrity' and resolve this before exporting."
+            )
+        if plan is not None and run["plan_version"] > plan["plan_version"]:
+            raise StateError(
+                f"cannot export: run {run['run_id']} is recorded against plan "
+                f"revision {run['plan_version']}, newer than plan.json "
+                f"({plan['plan_version']}). Run 'aperio integrity' before "
+                "exporting."
+            )
+        ref = run.get("handoff_ref")
+        if run["status"] == "awaiting-external" and ref not in files:
+            raise StateError(
+                f"cannot export: awaiting-external run {run['run_id']} "
+                f"references handoff {ref!r}, which is not part of the "
+                "snapshot"
+            )
 
 
 def _is_exportable(rel: str) -> bool:
@@ -413,111 +718,117 @@ def export_project(
     """
     target = resolve_target(str(project_path), for_writing=False)
     aperio_dir = aperio_dir_for(target)
-    state = require_supported_state(aperio_dir)
-    warnings: list[str] = []
-    files: dict[str, bytes] = {}
+    # Hold every cooperative writer lock so plan/executions/handoff
+    # cannot be read across a concurrent mutation.
+    with coordination_locks(aperio_dir, include_import=False):
+        state = require_supported_state(aperio_dir)
+        warnings: list[str] = []
+        files: dict[str, bytes] = {}
 
-    files["state.json"] = _read_export_file(aperio_dir, "state.json")
+        files["state.json"] = _read_export_file(aperio_dir, "state.json")
 
-    schemas: dict = {"state": state.schema_version}
-    for rel in ("brief.md", "decisions.md"):
-        if os.path.lexists(aperio_dir / rel):
-            files[rel] = _read_export_file(aperio_dir, rel)
+        schemas: dict = {"state": state.schema_version}
+        for rel in ("brief.md", "decisions.md"):
+            if os.path.lexists(aperio_dir / rel):
+                files[rel] = _read_export_file(aperio_dir, rel)
 
-    if os.path.lexists(decisions_path(aperio_dir)):
-        parsed = parse_decisions_text(files["decisions.md"].decode("utf-8"))
-        if parsed.malformed_entries:
-            warnings.append(
-                f"{len(parsed.malformed_entries)} malformed decision entr(y/ies) "
-                "exported verbatim (aperio never rewrites history)"
-            )
-        if parsed.duplicate_ids:
-            warnings.append(
-                "duplicate decision ids exported verbatim: "
-                + ", ".join(parsed.duplicate_ids)
-            )
-
-    if os.path.lexists(handoff_path(aperio_dir)):
-        files["handoff.md"] = _read_export_file(aperio_dir, "handoff.md")
-        handoff = parse_handoff_text(files["handoff.md"].decode("utf-8"))
-        if handoff.structured is None:
-            warnings.append(
-                f"handoff.md uses newer format v{handoff.version}; exported "
-                "verbatim (this aperio cannot fully validate it)"
-            )
-        schemas["handoff"] = (
-            "legacy" if handoff.structured is False
-            else f"v{handoff.version}"
-        )
-
-    if os.path.lexists(plan_path(aperio_dir)):
-        data = _read_export_file(aperio_dir, "plan.json")
-        parsed = _decode_json(data, "plan.json")
-        validate_plan_document(parsed, Path("archive:plan.json"))
-        files["plan.json"] = data
-        schemas["plan"] = parsed["schema_version"]
-
-    document = read_executions(aperio_dir)
-    if document is not None:
-        # prepared/running runs have a live local process (or a crash
-        # residue) that cannot travel; awaiting-external is exactly the
-        # hand-off case this archive format exists for.
-        active = [
-            run["run_id"]
-            for run in document["runs"]
-            if run["status"] in ("prepared", "running")
-        ]
-        if active:
-            warnings.append(
-                "execution metadata and run handoffs were not exported: "
-                f"active run(s) {', '.join(active)} cannot be handed off"
-            )
-        else:
-            projection, projection_warnings = _portable_execution_projection(
-                document
-            )
-            warnings.extend(projection_warnings)
-            files["executions.json"] = (
-                json.dumps(projection, indent=2, ensure_ascii=False) + "\n"
-            ).encode("utf-8")
-            schemas["executions"] = projection["schema_version"]
-            exported_handoffs = 0
-            for run in document["runs"]:
-                ref = run.get("handoff_ref")
-                if not ref:
-                    continue
-                if run["status"] != "awaiting-external":
-                    warnings.append(
-                        f"historical run handoff for {run['run_id']} not "
-                        "exported (only awaiting-external handoffs travel)"
-                    )
-                    continue
-                text = read_run_handoff(aperio_dir, run["run_id"])
-                files[ref] = text.encode("utf-8")
-                exported_handoffs += 1
-            if exported_handoffs:
+        if os.path.lexists(decisions_path(aperio_dir)):
+            parsed = parse_decisions_text(files["decisions.md"].decode("utf-8"))
+            if parsed.malformed_entries:
                 warnings.append(
-                    f"{exported_handoffs} awaiting-external run handoff(s) "
-                    "included"
+                    f"{len(parsed.malformed_entries)} malformed decision entr(y/ies) "
+                    "exported verbatim (aperio never rewrites history)"
+                )
+            if parsed.duplicate_ids:
+                warnings.append(
+                    "duplicate decision ids exported verbatim: "
+                    + ", ".join(parsed.duplicate_ids)
                 )
 
-    if ".gitignore" not in files:
-        warnings.append(
-            ".gitignore is generated scaffolding and is not exported "
-            "(import repairs it)"
-        )
+        if os.path.lexists(handoff_path(aperio_dir)):
+            files["handoff.md"] = _read_export_file(aperio_dir, "handoff.md")
+            handoff = parse_handoff_text(files["handoff.md"].decode("utf-8"))
+            if handoff.structured is None:
+                warnings.append(
+                    f"handoff.md uses newer format v{handoff.version}; exported "
+                    "verbatim (this aperio cannot fully validate it)"
+                )
+            schemas["handoff"] = (
+                "legacy" if handoff.structured is False
+                else f"v{handoff.version}"
+            )
 
-    total = sum(len(data) for data in files.values())
-    if len(files) > MAX_ENTRIES:
-        raise StateError(
-            f"cannot export: {len(files)} files exceeds the limit of "
-            f"{MAX_ENTRIES}"
-        )
-    if total > MAX_TOTAL_BYTES:
-        raise StateError(
-            f"cannot export: {total} bytes exceeds the total portable-context "
-            f"limit of {MAX_TOTAL_BYTES} bytes"
-        )
+        if os.path.lexists(plan_path(aperio_dir)):
+            data = _read_export_file(aperio_dir, "plan.json")
+            parsed = _decode_json(data, "plan.json")
+            validate_plan_document(parsed, Path("archive:plan.json"))
+            files["plan.json"] = data
+            schemas["plan"] = parsed["schema_version"]
+
+        document = read_executions(aperio_dir)
+        if document is not None:
+            # prepared/running runs have a live local process (or a crash
+            # residue) that cannot travel; awaiting-external is exactly the
+            # hand-off case this archive format exists for.
+            active = [
+                run["run_id"]
+                for run in document["runs"]
+                if run["status"] in ("prepared", "running")
+            ]
+            if active:
+                warnings.append(
+                    "execution metadata and run handoffs were not exported: "
+                    f"active run(s) {', '.join(active)} cannot be handed off"
+                )
+            else:
+                projection, projection_warnings = _portable_execution_projection(
+                    document
+                )
+                warnings.extend(projection_warnings)
+                files["executions.json"] = (
+                    json.dumps(projection, indent=2, ensure_ascii=False) + "\n"
+                ).encode("utf-8")
+                schemas["executions"] = projection["schema_version"]
+                exported_handoffs = 0
+                for run in document["runs"]:
+                    ref = run.get("handoff_ref")
+                    if not ref:
+                        continue
+                    if run["status"] != "awaiting-external":
+                        warnings.append(
+                            f"historical run handoff for {run['run_id']} not "
+                            "exported (only awaiting-external handoffs travel)"
+                        )
+                        continue
+                    text = read_run_handoff(aperio_dir, run["run_id"])
+                    files[ref] = text.encode("utf-8")
+                    exported_handoffs += 1
+                if exported_handoffs:
+                    warnings.append(
+                        f"{exported_handoffs} awaiting-external run handoff(s) "
+                        "included"
+                    )
+
+        if ".gitignore" not in files:
+            warnings.append(
+                ".gitignore is generated scaffolding and is not exported "
+                "(import repairs it)"
+            )
+
+        total = sum(len(data) for data in files.values())
+        if len(files) > MAX_ENTRIES:
+            raise StateError(
+                f"cannot export: {len(files)} files exceeds the limit of "
+                f"{MAX_ENTRIES}"
+            )
+        if total > MAX_TOTAL_BYTES:
+            raise StateError(
+                f"cannot export: {total} bytes exceeds the total portable-context "
+                f"limit of {MAX_TOTAL_BYTES} bytes"
+            )
+
+
+        _validate_export_relationships(files)
 
     manifest = _build_manifest(files, schemas)
     if output is None:
@@ -918,19 +1229,28 @@ def _validate_payload(archive: PortableArchive) -> None:
                 raise _manifest_error(
                     f"run {run_id} references unknown task {run['task_id']}"
                 )
+            if run["status"] in ("prepared", "running"):
+                raise StateError(
+                    f"run {run_id} is {run['status']!r}: an active local "
+                    "execution record belongs to the exporting machine and "
+                    "cannot be imported. Finish, cancel, or reconcile the run "
+                    "before exporting. Nothing was modified."
+                )
             if run.get("pid") is not None or run.get("machine") is not None:
-                warnings.append(
-                    f"run {run_id} carries machine-specific fields; this "
-                    "import cannot verify them"
+                raise StateError(
+                    f"run {run_id} carries machine-local process identity "
+                    "(pid/machine). Portable archives must not contain it: "
+                    "trusting an imported pid could signal an unrelated "
+                    "process on this machine. Re-export with a current aperio "
+                    "(which nulls those fields). Nothing was modified."
                 )
             local_ref = run.get("local_log_ref")
-            if local_ref is not None and (
-                not isinstance(local_ref, str)
-                or not local_ref.startswith("local/")
-            ):
-                raise _manifest_error(
-                    f"run {run_id} has a local_log_ref outside .aperio/local/; "
-                    "portable records must never reference other paths"
+            if local_ref is not None:
+                raise StateError(
+                    f"run {run_id} references a machine-local log "
+                    f"({local_ref!r}). Local logs never travel, so an imported "
+                    "record must not claim one. Re-export with a current "
+                    "aperio. Nothing was modified."
                 )
             ref = run.get("handoff_ref")
             if run["status"] == "awaiting-external":
@@ -1231,10 +1551,14 @@ def import_archive(
 ) -> dict:
     """Validate and import a portable archive into a destination project.
 
-    The whole archive is validated before any filesystem effect. Existing
-    files are never overwritten unless ``replace`` is requested; identical
-    bytes are accepted as unchanged. The apply step runs under
-    ``.aperio/import.lock`` and rolls back its own writes on error.
+    The whole archive is validated before any filesystem effect, including
+    the merged result of the archive plus the destination files that remain.
+    Execution records with machine-local identity (pid/machine/local log) or
+    an active status are refused. Existing files are never overwritten
+    unless ``replace`` is requested; identical bytes are accepted as
+    unchanged. The apply step holds every writer lock in the fixed global
+    order, re-validates under lock, aborts if the destination changed while
+    preparing, and rolls back its own writes on error.
     """
     archive = read_portable_archive(archive_path)
     target = resolve_target(str(project_path), for_writing=True)
@@ -1246,6 +1570,15 @@ def import_archive(
     create, replace_list, unchanged = _inspect_existing(
         aperio_dir, archive.files, replace=replace
     )
+    archive_run_ids: set[str] = set()
+    if "executions.json" in archive.files:
+        archive_run_ids = {
+            run["run_id"]
+            for run in _decode_json(
+                archive.files["executions.json"], "archive:executions.json"
+            )["runs"]
+        }
+    _validate_merged_context(aperio_dir, archive.files, archive_run_ids)
     if os.path.lexists(aperio_dir / "state.json") and "state.json" in unchanged:
         warnings = list(archive.warnings) + [
             "state.json already matches the archive; the destination keeps "
@@ -1274,14 +1607,22 @@ def import_archive(
             "Validation completed before any write.",
             "state.json is written last; an interrupted import never leaves "
             "a project that claims to be imported.",
+            "The apply step holds every Aperio writer lock in a fixed "
+            "global order and aborts if the destination changed while the "
+            "import was preparing.",
             "Multi-file imports are not a filesystem transaction; a crash "
             "can leave a partial context (diagnose with 'aperio integrity', "
             "finish by re-running the import).",
         ],
     }
     if dry_run:
+        report["notes"].append(
+            "Dry-run: the destination was not locked and may still change. "
+            "The apply step re-validates under lock."
+        )
         return report
 
+    pre_snapshot = _destination_snapshot(aperio_dir)
     created_project_dir = False
     if not target.exists():
         try:
@@ -1312,39 +1653,52 @@ def import_archive(
                 "was imported"
             )
 
-    lock = aperio_dir / "import.lock"
-    token = acquire_lock(lock, timeout=IMPORT_LOCK_TIMEOUT, artifact="portable import")
     try:
-        # Re-read the destination under the lock: a concurrent writer may
-        # have changed it between preview and now.
-        create, replace_list, unchanged = _inspect_existing(
-            aperio_dir, archive.files, replace=replace
-        )
-        try:
+        with coordination_locks(aperio_dir, include_import=True):
+            # Re-check the destination now that every cooperative writer is
+            # excluded: if it changed while this import was preparing, the
+            # preview/validation the operator saw is stale.
+            post_snapshot = _destination_snapshot(aperio_dir)
+            changed = sorted(
+                rel
+                for rel in set(pre_snapshot) | set(post_snapshot)
+                if pre_snapshot.get(rel) != post_snapshot.get(rel)
+            )
+            if changed:
+                raise StateError(
+                    "the destination changed while the import was preparing "
+                    f"({', '.join(changed)}); nothing was modified. Re-run "
+                    "the import to review the current state."
+                )
+            create, replace_list, unchanged = _inspect_existing(
+                aperio_dir, archive.files, replace=replace
+            )
+            _validate_merged_context(
+                aperio_dir, archive.files, archive_run_ids
+            )
             _write_import(aperio_dir, archive.files, create, replace_list)
-        except BaseException:
-            if created_aperio_dir:
-                try:
-                    aperio_dir.rmdir()  # only succeeds when truly empty
-                except OSError:
-                    pass
-            if created_project_dir:
-                try:
-                    target.rmdir()
-                except OSError:
-                    pass
-            raise
-        try:
-            scaffolding = ensure_local_scaffolding(aperio_dir)
-        except AperioError as exc:
-            raise StateError(
-                "the archive was imported, but the machine-local scaffolding "
-                f"(local/, .gitignore) could not be repaired: {exc}. Fix the "
-                "reported path, then run 'aperio init' on the destination to "
-                "finish setup without overwriting imported context."
-            ) from None
-    finally:
-        release_lock(lock, token)
+    except BaseException:
+        if created_aperio_dir:
+            try:
+                aperio_dir.rmdir()  # only succeeds when truly empty
+            except OSError:
+                pass
+        if created_project_dir:
+            try:
+                target.rmdir()
+            except OSError:
+                pass
+        raise
+
+    try:
+        scaffolding = ensure_local_scaffolding(aperio_dir)
+    except AperioError as exc:
+        raise StateError(
+            "the archive was imported, but the machine-local scaffolding "
+            f"(local/, .gitignore) could not be repaired: {exc}. Fix the "
+            "reported path, then run 'aperio init' on the destination to "
+            "finish setup without overwriting imported context."
+        ) from None
 
     report["created"] = sorted(create)
     report["replaced"] = sorted(replace_list)

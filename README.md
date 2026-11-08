@@ -156,11 +156,18 @@ interpreted locally.
 `import` validates the complete archive before touching the destination:
 manifest schema, path whitelist (no absolute paths, `..`, duplicates,
 hidden names, `local/`), member types (no directories, symlinks, or
-encryption), bounded decompressed sizes, and SHA-256 per file. Existing
-files are preserved byte-for-byte; identical bytes are accepted as
+encryption), bounded decompressed sizes, and SHA-256 per file. Execution
+records may not be `prepared`/`running` and may not carry a `pid`,
+`machine`, or `local_log_ref`: cancelling a run signals its recorded pid,
+so imported identity is refused rather than trusted. The importer then
+validates the **merged** result (archive plus destination files that
+remain), refusing plans that orphan retained runs, stale active runs across
+a plan replacement, and awaiting-external runs whose handoff is missing.
+Existing files are preserved byte-for-byte; identical bytes are accepted as
 unchanged, and replacing differing context requires explicit `--replace`
-after review. `state.json` is written last, and in-process failures roll
-back their own writes.
+after review. The apply step takes every writer lock in a fixed order,
+aborts if the destination changed while preparing, writes `state.json`
+last, and rolls its own writes back on failure.
 
 **Honesty note:** manifest hashes detect corruption, not authorship. They
 do not authenticate an archive and cannot prove that hand-written briefs,

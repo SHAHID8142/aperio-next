@@ -1165,12 +1165,24 @@ def cancel_run(aperio_dir: Path, run_id: str, reason: str | None = None) -> dict
             machine = run.get("machine")
             cancelled_process = False
             if run["status"] == "running" and isinstance(pid, int):
+                # A recorded pid is only a claim. Signal it only when the
+                # record is genuinely local: an imported record never gets
+                # this far (portable archives may not carry pid/machine),
+                # and a forged/absurd pid is refused rather than trusted.
                 if machine != machine_token():
                     raise StateError(
                         f"run {run_id} was recorded on another machine "
                         f"({machine!r}); its process cannot be signalled "
                         "from here. Resolve it on that machine, then "
                         "re-run reconciliation."
+                    )
+                if isinstance(pid, bool) or pid <= 1 or pid == os.getpid():
+                    raise StateError(
+                        f"run {run_id} records pid {pid!r}, which does not "
+                        "identify a process aperio may signal from here. "
+                        "Refusing to signal it; the run was left unchanged. "
+                        "Verify the record and resolve it on the machine "
+                        "that ran it."
                     )
                 cancelled_process = _terminate_process(pid)
             run["status"] = "cancelled"

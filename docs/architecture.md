@@ -511,6 +511,23 @@ schemas, and payload relationships (run→task references exist, included
 plan revision is not older than any run, awaiting-external runs have their
 exact `runs/<run>.handoff.md`, `local_log_ref` stays under `local/`).
 
+**Imported identity is never trusted.** Portable execution records must
+carry no `pid`, `machine`, or `local_log_ref`, and no record may be
+`prepared` or `running`; the importer rejects those archives instead of
+warning. Cancelling a run signals its recorded pid, so an imported
+identity could aim at an unrelated local process. Cancellation additionally
+refuses absurd/self pids and any machine that is not this host, and only a
+locally recorded running run can ever be signalled.
+
+**Merged-context validation.** Import never deletes, so the effective
+post-import context is the archive overlaid on every retained artifact.
+Before any write (including with `--replace`) it must be coherent: the
+effective plan defines every referenced task, no run claims a newer plan
+revision, every awaiting-external run has its handoff on one side or the
+other, and a retained active run cannot survive a plan replacement that
+changes its revision. Any violation refuses the whole import and leaves
+every existing byte untouched.
+
 **Destination policy.** Existing files are never overwritten by default:
 identical bytes are "unchanged"; differing bytes abort with the conflicting
 paths, and `--replace` is the explicit approval to substitute them.
@@ -523,6 +540,19 @@ a project that merely claims to be imported. Apply runs under
 replaced files. Multi-file import is not a filesystem transaction and no
 `fsync` is issued: a hard crash can leave a subset, which `integrity`
 diagnoses and a re-run finishes (matching bytes are accepted).
+
+**Concurrency contract.** Whole-project operations (`export` for its read
+snapshot, `import` for validation and apply) acquire the writer locks in
+one fixed global order — `import`, `dispatch`, `plan`, `executions`,
+`state`, `handoff`, `decisions` — and release them in reverse. Single
+writers take exactly one of those locks, so no cycle is possible. Import
+re-checks the destination snapshot under all locks and aborts with a
+re-run instruction if anything changed while it was preparing; it never
+silently overwrites a newer task, plan, or run update. Export holds the
+same writer locks while it reads, so plan, executions, and handoffs come
+from one consistent snapshot, and it re-validates run/task relationships
+before packaging. Non-cooperating external edits remain outside this
+contract (integrity reports them; hashes detect archive corruption).
 
 **Integrity.** `aperio integrity` is diagnostic only. It checks supported
 schema versions, full plan graph/lifecycle validity, decision-log

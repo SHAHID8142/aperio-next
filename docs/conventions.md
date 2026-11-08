@@ -49,6 +49,12 @@
 - No secrets, tokens, or environment contents are ever persisted into
   `.aperio/` except `.aperio/local/`; templates must remain free of
   credential-shaped placeholders (see `tests/test_no_secrets.py`).
+- Whole-project operations acquire writer locks in the fixed global order
+  `import`, `dispatch`, `plan`, `executions`, `state`, `handoff`,
+  `decisions`, and single-writer commands take exactly one of those locks.
+  Never hold a later lock while waiting for an earlier one; import rejects a
+  destination that changed while it was preparing rather than overwriting a
+  newer update.
 - Portable archives contain only the explicit shareable whitelist:
   `.aperio/local/`, locks, temporary files, and generated scaffolding are
   excluded by construction (not by filtering a directory walk). Imports
@@ -56,6 +62,9 @@
   existing bytes without `--replace`, and keep `state.json` last so a
   crash cannot leave a project that claims to be imported. Manifest
   hashes detect corruption only — never describe them as authentication.
+- Imported execution records never carry `pid`, `machine`, or
+  `local_log_ref`, and no active run may be imported: process identity is
+  machine-local evidence that a cancellation could otherwise misuse.
 - Never commit secrets, credentials, tokens, private client information, or
   machine-specific configuration to this repository.
 
