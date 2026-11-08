@@ -89,10 +89,10 @@ def _claim(run_cli, project_dir, actor="i"):
     assert code == 0, err
 
 
-def _submit(run_cli, project_dir, actor="i"):
+def _submit(run_cli, project_dir, actor="i", evidence="pytest"):
     code, out, err = run_cli(
         "review-submit", str(project_dir), "--task", "TASK-001",
-        "--actor", actor, "--scope", "criteria", "--evidence", "pytest",
+        "--actor", actor, "--scope", "criteria", "--evidence", evidence,
     )
     assert code == 0, err
     return out
@@ -314,7 +314,7 @@ def test_reopen_invalidates_prior_approval_but_keeps_history(
     assert code == 0, err
     code, _, err = _complete(run_cli, project_dir, evidence="reverified")
     assert code == 1 and "current attempt is 2" in err
-    _submit(run_cli, project_dir)
+    _submit(run_cli, project_dir, evidence="reverified")
     assert _decide(run_cli, project_dir, "REV-0002")[0] == 0
     assert _complete(run_cli, project_dir, evidence="reverified")[0] == 0
     # The old decision remains in immutable history.
@@ -351,7 +351,7 @@ def test_revised_evidence_invalidates_approved_review(
     assert code == 0, err
     code, _, err = _complete(run_cli, project_dir, evidence="new evidence")
     assert code == 1 and "work or evidence changed" in err
-    _submit(run_cli, project_dir)
+    _submit(run_cli, project_dir, evidence="new evidence")
     assert _decide(run_cli, project_dir, "REV-0002")[0] == 0
     assert _complete(run_cli, project_dir, evidence="new evidence")[0] == 0
 

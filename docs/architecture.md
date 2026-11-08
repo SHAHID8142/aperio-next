@@ -539,9 +539,13 @@ review; a reviewer must differ from both the submitter and the recorded
 implementer. Role changes never rewrite those historical fields. Approval
 refuses the declared author of the revision. A reviewer may not
 decide their own submission (re-checked at decision time, so later role
-changes cannot launder it). Completion requires recorded verification
-evidence *and* an approved review for the task at the current material
-revision (``approval.approved_revision``). A material revision resets
+changes cannot launder it). Completion must repeat exactly one of the
+evidence strings and the limitations statement recorded on the latest
+approved review; substituted evidence or a different limitation is refused
+and needs a new submission and independent decision. A review cannot be
+submitted over a recorded failed verification. Completion requires recorded
+verification evidence *and* an approved review for the task at the current
+material revision (``approval.approved_revision``). A material revision resets
 approval and invalidates prior reviews; a review decision is re-checked
 against the current approved revision and refused as stale otherwise.
 Decided reviews are immutable; new work gets a new ``REV-NNNN`` record.

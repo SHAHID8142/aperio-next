@@ -429,6 +429,12 @@ def submit_review(
             "from the recorded implementer (no implicit reassignment "
             "workflow exists). Nothing was modified."
         )
+    if (task.get("verification") or {}).get("result") == "failed":
+        raise StateError(
+            f"task {task_id} has a recorded failed verification; a failed "
+            "result cannot be submitted for approval as passing work. Record "
+            "passing evidence or reopen the task first. Nothing was modified."
+        )
     attempt = int(task.get("attempt", 0))
     task_revision = int(task.get("revision", 0))
     _run_for_task(aperio_dir, run_id, task_id)
@@ -701,6 +707,11 @@ def approved_review(
     return latest
 
 
+def _canonical_limitations(value: str | None) -> str:
+    text = (value or "").strip()
+    return "" if not text or text.lower() == "none" else text
+
+
 def review_requirement(
     aperio_dir: Path,
     task_id: str,
@@ -709,6 +720,8 @@ def review_requirement(
     attempt: int,
     task_revision: int,
     implemented_by: str | None = None,
+    evidence: str | None = None,
+    limitations: str | None = None,
     lock: bool = False,
 ) -> dict:
     """Serialize the completion decision against concurrent review writes.
@@ -722,6 +735,7 @@ def review_requirement(
             aperio_dir, task_id, material_revision,
             attempt=attempt, task_revision=task_revision,
             implemented_by=implemented_by,
+            evidence=evidence, limitations=limitations,
         )
     token = acquire_lock(
         reviews_lock_path(aperio_dir), timeout=5.0, artifact="review records"
@@ -731,6 +745,7 @@ def review_requirement(
             aperio_dir, task_id, material_revision,
             attempt=attempt, task_revision=task_revision,
             implemented_by=implemented_by,
+            evidence=evidence, limitations=limitations,
         )
     finally:
         release_lock(reviews_lock_path(aperio_dir), token)
@@ -744,6 +759,8 @@ def _review_requirement(
     attempt: int,
     task_revision: int,
     implemented_by: str | None = None,
+    evidence: str | None = None,
+    limitations: str | None = None,
 ) -> dict:
     """Return the review that satisfies verified completion, or fail closed.
 
@@ -822,6 +839,30 @@ def _review_requirement(
             "refused; submit a new review from the recorded implementer. "
             "Nothing was modified."
         )
+    if evidence is not None:
+        approved_evidence = [
+            str(item).strip() for item in latest.get("evidence") or []
+        ]
+        submitted_evidence = evidence.strip()
+        if submitted_evidence not in approved_evidence:
+            raise StateError(
+                f"task {task_id} cannot be completed: the completion evidence "
+                f"is not part of the approved review {latest['review_id']}. "
+                "Completion may only repeat evidence that the independent "
+                "reviewer approved; if the evidence changed, submit a new "
+                "review and have it independently decided. Nothing was "
+                "modified."
+            )
+    if limitations is not None:
+        approved_limitations = _canonical_limitations(latest.get("limitations"))
+        submitted_limitations = _canonical_limitations(limitations)
+        if submitted_limitations != approved_limitations:
+            raise StateError(
+                f"task {task_id} cannot be completed: the limitations differ "
+                f"from the approved review {latest['review_id']}. The "
+                "reviewer approved a specific limitation statement; submit a "
+                "new review if it changed. Nothing was modified."
+            )
     return latest
 
 

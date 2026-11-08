@@ -1114,6 +1114,8 @@ def update_task(
                     attempt=int(task.get("attempt", 0)),
                     task_revision=int(task.get("revision", 0)),
                     implemented_by=task.get("implementer") or task.get("owner"),
+                    evidence=evidence,
+                    limitations=limitations,
                 )
         updated = dict(task)
         if policy is not None:

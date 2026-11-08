@@ -65,7 +65,9 @@
   revision, and recorded implementer; a decided review is never edited,
   a new attempt gets a new `REV-NNNN`, and completion requires recorded
   evidence plus an approved independent review at the current material
-  revision.
+  revision. Completion repeats exactly the approved review's evidence and
+  limitations; substituted evidence or changed limitations need a new
+  review, and work with a recorded failed verification cannot be submitted.
 - Whole-project operations acquire writer locks in the fixed global order
   `import`, `dispatch`, `plan`, `executions`, `state`, `handoff`,
   `decisions`, `reviews`, `policy`, and single-writer commands take exactly

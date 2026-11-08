@@ -202,7 +202,10 @@ implementer may submit. A decided review is never edited; further work needs
 a new record. Reopening a task, changing its evidence, or submitting a newer
 review invalidates an older approval for completion without deleting it: the
 latest review for the current material revision must itself be approved and
-match the current attempt and evidence revision. Task completion under governance requires *both* recorded
+match the current attempt and evidence revision. Completion must also repeat
+exactly the evidence and limitations recorded in that approved review;
+changing either after approval requires a fresh submission and independent
+decision. Task completion under governance requires *both* recorded
 verification evidence and an approved review at the current material
 revision — a successful subprocess or external report is never treated as
 independent verification.
