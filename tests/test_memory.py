@@ -166,12 +166,14 @@ def test_to_dict_schema_is_stable(run_cli, project_dir):
         "decisions",
         "handoff",
         "plan",
+        "execution",
         "missing",
         "skipped_headings",
         "malformed_entries",
         "duplicate_decision_ids",
     }
     assert dumped["plan"] is None  # no plan created yet: normal state
+    assert dumped["execution"] is None  # no runs recorded yet: normal state
     assert set(dumped["state"].keys()) == {
         "schema_version",
         "name",
@@ -208,6 +210,7 @@ def test_cli_memory_json_machine_readable(run_cli, project_dir):
         "decisions",
         "handoff",
         "plan",
+        "execution",
         "missing",
         "skipped_headings",
         "malformed_entries",
@@ -215,6 +218,7 @@ def test_cli_memory_json_machine_readable(run_cli, project_dir):
     }
     assert data["state"]["name"] == project_dir.name
     assert data["plan"] is None  # freshly initialized: no plan yet
+    assert data["execution"] is None  # no execution records yet
 
 
 def test_cli_memory_json_via_subprocess(run_cli, project_dir):

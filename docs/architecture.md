@@ -1,4 +1,4 @@
-# Aperio Architecture — Features 01–03 (implemented)
+# Aperio Architecture — Features 01–04 (implemented)
 
 This document describes what Aperio **is today**. Planned capabilities are in
 [roadmap.md](roadmap.md) and are never described here as working.
@@ -18,8 +18,14 @@ memory.
   the previous agent's conversation history.
 - Feature 03 delivers planning and execution tracking: a versioned plan
   document, a dependency-validated task graph with an approval gate, and a
-  rigorous evidence-based task lifecycle. It manages plans and tasks; it
-  does NOT execute agents or implement autonomous coding.
+  rigorous evidence-based task lifecycle.
+- Feature 04 delivers the first agent-execution runtime: a documented
+  adapter contract with two real adapters (manual handoff, configured
+  local-process), versioned execution records, an authorization gate, a
+  sequential dispatch scheduler with a dispatch-scope lock, and crash
+  reconciliation. Aperio manages and records execution — it does not
+  implement model integrations, and ``--authorize-exec`` is a procedural
+  human-in-the-loop checkpoint, not a sandbox.
 
 ## Explicit non-goals (for the whole project)
 
@@ -52,6 +58,8 @@ src/aperio/
 ├── planmodel.py   plan/task validation, dependency graph, lifecycle (pure)
 ├── planstore.py   plan persistence: create/revise/approve/task-status under
 │                  plan.lock with single-snapshot byte-CAS
+├── adapters.py    agent adapter contract + manual / local-process adapters
+├── runtime.py     execution records, eligibility, dispatch, reconciliation
 ├── progress.py    phase updates (compare-and-swap state updates)
 ├── project.py     init/status operations, file templates, boundary checks
 └── schema.py      versioned state schema: validate, read, atomic write,
@@ -366,6 +374,66 @@ File-level corruption is fatal (consistent with other shareable files); a
 newer plan-schema version degrades gracefully (an `unsupported_schema`
 marker, never fatal); live-symlinked plan files are refused; dangling
 links read as absent.
+
+## Feature 04: agent execution runtime (implemented)
+
+### Adapter contract (`adapters.py`)
+
+Plain-class `AgentAdapter` with `id`, `display_name`, `available()`
+(environment-level capability only), `preview()` (deterministic,
+side-effect-free), and `start()` (called by the runtime only in execute
+mode — authorization is a runtime concern, never an adapter flag).
+Built-in adapters:
+
+- **manual** — for agents aperio cannot invoke. Writes a portable
+  run-handoff document (`<!-- aperio:run-handoff:v1 -->` marker,
+  continuation-indent rendering so plan content cannot forge column-0
+  structure) to `.aperio/runs/<run-id>.handoff.md`; the run stays
+  `awaiting-external` until `run-report` records the external outcome.
+- **local-process** — runs an explicitly configured executable:
+  argv array (no shell), working directory resolved inside the project
+  boundary (must exist; never created), minimal environment by default
+  (`inherit` documented as user-acknowledged risk), bounded 64 KiB/stream
+  capture drained by reader threads with a full machine-local mirror
+  under `.aperio/local/runs/`, hard timeout (SIGTERM → 5 s → SIGKILL;
+  Windows: TerminateProcess), stdin DEVNULL, child always reaped, argv
+  NUL-rejected at validation.
+
+### Execution records (`.aperio/executions.json`, exec-schema v1)
+
+Single file, dict-based, unknown keys preserved; every mutation under
+`executions.lock` with single-snapshot byte-CAS. Run record: `run_id`
+(`RUN-NNNN`, sequential under the lock), `task_id`, `plan_version`,
+`adapter_id`, `status` (`prepared` / `awaiting-external` / `running` /
+`completed` / `failed` / `cancelled` / `interrupted`), timestamps,
+`exit_code`, bounded sanitized `diagnostics`, `handoff_path`, `pid` +
+`machine` (recorded atomically with the running flip; pids are only
+interpreted on the recording machine), `previous_run_id` (retries),
+`outcome_note` (cancellation precedence). Cancel-vs-finalize precedence:
+a cancelled run is never resurrected; cancel of a finalized run is
+refused. `plan_changed_since_start` is DERIVED at read time (never
+stored). Future exec-schema versions: refused on writes, degraded
+summary in memory; corrupt → fatal StateError.
+
+### Dispatch, authorization and reconciliation
+
+`run-start`/`runs-dispatch` hold `dispatch.lock` for the whole dispatch
+(short bounded wait — concurrent dispatch fails fast; same-workspace
+parallelism is refused because non-overlapping scopes cannot be
+enforced, so 0.4.0 is sequential by design). Eligibility is
+re-evaluated against a fresh plan read inside the lock: approved plan,
+task pending/in-progress, dependencies completed, no active run,
+adapter available. Real subprocess execution additionally requires
+`--authorize-exec` — a procedural human-in-the-loop checkpoint, not a
+sandbox; preparation mode (no flag) never spawns a process. Claiming
+goes through the Feature-03 lifecycle API with a run-scoped owner
+(`adapter:RUN-NNNN`); a claim lost to a competing writer finalizes the
+record as failed. Retry = new run with `previous_run_id`; a delayed
+claim can never silently reopen a completed task (explicit `--reopen`
+required). Reconciliation marks dead-pid runs `interrupted`, cancels
+never-started prepared records, reports orphans and plan-version drift,
+and refuses to interpret pids recorded on other machines — it never
+invents success and never deletes evidence.
 
 ## Cross-agent portability principles (implemented)
 

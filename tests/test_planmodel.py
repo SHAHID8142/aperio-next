@@ -646,3 +646,39 @@ def test_stored_in_progress_task_keeps_failed_record():
         )]
     )
     validate_plan_document(doc, "plan.json")
+
+
+def test_stored_verified_at_must_be_calendar_valid_utc():
+    """P2 fix: format-only regex accepted impossible dates and
+    non-padded/Unicode-digit variants; the shape+calendar check rejects
+    them all."""
+    for bad in (
+        "2026-13-01T25:00:00Z",       # impossible calendar values
+        "2026-02-30T00:00:00Z",       # impossible day
+        "2026-1-1T00:00:00Z",         # non-padded
+        "٢٠٢٦-٠١-٠١T٠٠:٠٠:٠٠Z",       # Unicode digits
+        "2026-01-01T00:00:00.5Z",     # fractional seconds
+        "2026-01-01T00:00:00+00:00",  # offset instead of Z
+    ):
+        doc = stored_plan(
+            tasks=[
+                stored_task(
+                    "TASK-001", status="completed",
+                    verification={"evidence": "e", "limitations": "l",
+                                  "result": "passed", "verified_at": bad},
+                )
+            ]
+        )
+        with pytest.raises(StateError, match="verified_at"):
+            validate_plan_document(doc, "plan.json")
+    good = stored_plan(
+        tasks=[
+            stored_task(
+                "TASK-001", status="completed",
+                verification={"evidence": "e", "limitations": "l",
+                              "result": "passed",
+                              "verified_at": "2026-01-01T00:00:00Z"},
+            )
+        ]
+    )
+    validate_plan_document(good, "plan.json")

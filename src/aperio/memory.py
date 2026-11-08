@@ -46,6 +46,7 @@ from aperio.handoff import (
     read_handoff,
 )
 from aperio.paths import resolve_target
+from aperio.runtime import execution_summary
 from aperio.planstore import plan_summary
 from aperio.project import APERIO_DIR_NAME, aperio_dir_for, require_supported_state
 from aperio.schema import ProjectState
@@ -70,6 +71,7 @@ class ProjectContext:
     decisions: list[DecisionEntry] | None
     handoff: HandoffRead | None
     plan: dict | None
+    execution: dict | None
     missing: list[str] = field(default_factory=list)
     skipped_headings: int = 0
     malformed_entries: list[str] = field(default_factory=list)
@@ -110,6 +112,7 @@ class ProjectContext:
                 else None
             ),
             "plan": self.plan,
+            "execution": self.execution,
             "missing": list(self.missing),
             "skipped_headings": self.skipped_headings,
             "malformed_entries": list(self.malformed_entries),
@@ -134,6 +137,7 @@ def load_context(project_path: str | Path) -> ProjectContext:
         decisions=None,
         handoff=None,
         plan=plan_summary(aperio_dir),
+        execution=execution_summary(aperio_dir),
     )
 
     brief_path = aperio_dir / BRIEF_FILE_NAME

@@ -16,7 +16,8 @@ Anything not listed below is **planned, not implemented**. See
 - Implemented (Feature 01): `aperio --version`, `aperio init <project-directory>`, `aperio status <project-directory>`
 - Implemented (Feature 02): `aperio memory [--json]`, `aperio decision-add`, `aperio handoff-write`, `aperio phase-set`
 - Implemented (Feature 03): `aperio plan-create`, `aperio plan-show [--json]`, `aperio plan-approve`, `aperio plan-revise`, `aperio task-list [--json]`, `aperio task-status`
-- Not implemented (by design, yet): agent execution/orchestration, autonomous coding, project interviews, agent integrations
+- Implemented (Feature 04): `aperio agent-list`, `aperio run-preview`, `aperio run-start [--authorize-exec]`, `aperio run-status`, `aperio runs-list`, `aperio run-cancel`, `aperio runs-reconcile`, `aperio run-report`, `aperio run-handoff`
+- Not implemented (by design, yet): model-provider integrations (Claude/Codex/Cursor/ZCode adapters), autonomous coding, sandboxed execution
 
 ## Requirements
 
@@ -87,6 +88,18 @@ aperio task-list ./my-project                       # tasks with derived readine
 aperio task-status ./my-project TASK-001 --status in-progress --owner agent-a
 aperio task-status ./my-project TASK-001 --status completed \
   --evidence "all tests green" --limitations "none noted" --result passed
+
+# Agent execution (Feature 04)
+aperio agent-list                                   # list built-in adapters
+aperio run-preview ./my-project TASK-001 --agent manual   # deterministic preview
+aperio run-start ./my-project TASK-001 --agent manual     # prepare handoff (never executes)
+aperio run-start ./my-project TASK-001 --agent local-process \
+  --config .aperio/local/adapter.json --authorize-exec    # REAL subprocess (explicit consent)
+aperio run-status ./my-project RUN-0001 --json      # inspect one run
+aperio runs-list ./my-project --json                # execution history
+aperio run-cancel ./my-project RUN-0001 --reason "changed plan"
+aperio runs-reconcile ./my-project                  # detect interrupted runs
+aperio run-report ./my-project RUN-0001 --file report.json  # consume external result
 ```
 
 ### `aperio init`

@@ -43,6 +43,22 @@ from aperio.schema import (
 )
 
 APERIO_DIR_NAME = ".aperio"
+
+# Every reserved transient/lock name aperio may create inside .aperio/.
+# init appends any of these that are missing from an existing
+# .aperio/.gitignore (additive, never destructive).
+RESERVED_GITIGNORE_LINES = (
+    "state.json.tmp",
+    "handoff.md.tmp",
+    "plan.json.tmp",
+    "executions.json.tmp",
+    "state.lock",
+    "decisions.lock",
+    "handoff.lock",
+    "plan.lock",
+    "executions.lock",
+    "dispatch.lock",
+)
 LOCAL_DIR_NAME = "local"
 
 # Shareable context files, in documentation/report order.
@@ -151,10 +167,13 @@ local/
 state.json.tmp
 handoff.md.tmp
 plan.json.tmp
+executions.json.tmp
 state.lock
 decisions.lock
 handoff.lock
 plan.lock
+executions.lock
+dispatch.lock
 """
 
 LOCAL_README_TEMPLATE = """\
@@ -211,6 +230,43 @@ def require_supported_state(aperio_dir: Path) -> ProjectState:
             "remove it and re-run 'aperio init' to repair"
         )
     return read_state(aperio_dir)
+
+
+def _maintain_gitignore(aperio_dir: Path, result: "InitResult") -> None:
+    """Additively append missing reserved ignore lines to .aperio/.gitignore.
+
+    init never rewrites user content, so projects initialized by older
+    aperio versions keep their original .gitignore; this maintenance only
+    APPENDS reserved lines that are missing entirely, never removes or
+    reorders anything, and reports what it added.
+    """
+    gitignore = aperio_dir / _GITIGNORE
+    if not gitignore.is_file():
+        return  # created (or refused) by the normal _ensure_file path
+    try:
+        current = gitignore.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return  # unreadable: leave it alone rather than guess
+    existing_lines = {line.strip() for line in current.splitlines()}
+    missing = [
+        line
+        for line in RESERVED_GITIGNORE_LINES
+        if line not in existing_lines
+    ]
+    if not missing:
+        return
+    try:
+        with gitignore.open("a", encoding="utf-8") as fh:
+            fh.write("\n# Added by aperio init (reserved names)\n")
+            for line in missing:
+                fh.write(f"{line}\n")
+    except OSError as exc:
+        raise PathError(
+            f"cannot append reserved ignore lines to {gitignore}: "
+            f"{exc.strerror or exc}"
+        ) from None
+    for line in missing:
+        result.created.append(f"{APERIO_DIR_NAME}/{_GITIGNORE}: {line}")
 
 
 def _reject_symlink(path: Path) -> None:
@@ -393,6 +449,8 @@ def init_project(raw_path: str) -> InitResult:
             result.created.append(f"{APERIO_DIR_NAME}/{rel}")
         else:
             result.present.append(f"{APERIO_DIR_NAME}/{rel}")
+
+    _maintain_gitignore(aperio_dir, result)
 
     if state_path(aperio_dir).exists():
         # Present and already validated above; never rewritten.

@@ -19,18 +19,20 @@
   lifecycle via `aperio task-list`/`aperio task-status`. Plans and tasks
   are managed — agents are not executed by aperio.
 
-## Planned — NOT implemented
+- **Feature 04 — Model-agnostic agent execution & orchestration runtime:**
+  adapter contract with two real adapters (manual handoff, configured
+  local-process), versioned execution records under coordination locks,
+  approval/eligibility gates, sequential deterministic dispatch with a
+  dispatch-scope lock, bounded-output subprocess execution with explicit
+  ``--authorize-exec`` authorization, crash reconciliation, retry with
+  new run IDs, and additive memory integration. Aperio manages and
+  records execution — it does not implement model integrations, and
+  ``--authorize-exec`` is a procedural human-in-the-loop checkpoint, not
+  a sandbox.
 
 Everything below is future work. Nothing in this list works today; do not
 claim otherwise in code, docs, or demos. Each item lands as its own
 assignment ("one feature per assignment").
-
-## Feature 04 — Multi-agent orchestration runtime
-
-Assignment of tasks to agent runtimes (model-agnostic), result collection,
-and conflict rules (one writer per file, sequential handoffs). Feature 03
-provides the tracking substrate (ownership claims, revision-aware
-updates); Feature 04 would add the runtime that acts on it.
 
 ## Feature 05 — Cross-machine portability tooling
 

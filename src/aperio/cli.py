@@ -34,7 +34,17 @@ from aperio.handoff import (
 from aperio.inputs import read_json_fields
 from aperio.memory import load_context
 from aperio.paths import resolve_target
+from aperio.runtime import (
+    cancel_run,
+    dispatch_task,
+    execution_preview,
+    read_executions,
+    read_executions_or_fail,
+    reconcile_runs,
+    record_external_result,
+)
 from aperio.planmodel import ready_task_ids
+from aperio.adapters import ManualHandoffAdapter, LocalProcessAdapter
 from aperio.planstore import (
     approve_plan,
     create_plan,
@@ -259,6 +269,104 @@ def build_parser() -> argparse.ArgumentParser:
     task_status_parser.add_argument(
         "--result", help="verification result: passed or failed (completion requires passed)"
     )
+
+    agent_list_parser = subparsers.add_parser(
+        "agent-list",
+        help="list the built-in agent adapters and their availability",
+    )
+    agent_list_parser.add_argument(
+        "project_directory", nargs="?", help="unused; accepted for symmetry"
+    )
+
+    run_preview_parser = subparsers.add_parser(
+        "run-preview",
+        help="show a deterministic, side-effect-free execution preview",
+    )
+    run_preview_parser.add_argument("project_directory")
+    run_preview_parser.add_argument("task_id", help="task id, e.g. TASK-001")
+    run_preview_parser.add_argument(
+        "--agent", required=True, help="adapter id: manual or local-process"
+    )
+    run_preview_parser.add_argument("--config", help="adapter config JSON file")
+
+    run_start_parser = subparsers.add_parser(
+        "run-start",
+        help="dispatch a task run (local-process requires --authorize-exec "
+        "to actually execute; otherwise preparation only)",
+    )
+    run_start_parser.add_argument("project_directory")
+    run_start_parser.add_argument("task_id")
+    run_start_parser.add_argument(
+        "--agent", required=True, help="adapter id: manual or local-process"
+    )
+    run_start_parser.add_argument("--config", help="adapter config JSON file")
+    run_start_parser.add_argument(
+        "--authorize-exec",
+        dest="authorize_exec",
+        action="store_true",
+        help="EXPLICIT human authorization for real subprocess execution "
+        "(local-process only; without it the run is preparation only)",
+    )
+    run_start_parser.add_argument(
+        "--previous-run", help="link a retry to the run it replaces"
+    )
+    run_start_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit the run record as machine-readable JSON",
+    )
+
+    run_status_parser = subparsers.add_parser(
+        "run-status", help="show one execution run (JSON with --json)"
+    )
+    run_status_parser.add_argument("project_directory")
+    run_status_parser.add_argument("run_id")
+    run_status_parser.add_argument(
+        "--json", dest="as_json", action="store_true"
+    )
+
+    runs_list_parser = subparsers.add_parser(
+        "runs-list", help="list all execution runs, newest first"
+    )
+    runs_list_parser.add_argument("project_directory")
+    runs_list_parser.add_argument(
+        "--json", dest="as_json", action="store_true"
+    )
+
+    run_cancel_parser = subparsers.add_parser(
+        "run-cancel", help="cancel an active run (never steals locks; "
+        "never resurrects finalized runs)"
+    )
+    run_cancel_parser.add_argument("project_directory")
+    run_cancel_parser.add_argument("run_id")
+    run_cancel_parser.add_argument("--reason", help="why the run is cancelled")
+
+    runs_reconcile_parser = subparsers.add_parser(
+        "runs-reconcile",
+        help="detect interrupted/stale runs without inventing success",
+    )
+    runs_reconcile_parser.add_argument("project_directory")
+    runs_reconcile_parser.add_argument(
+        "--json", dest="as_json", action="store_true"
+    )
+
+    run_report_parser = subparsers.add_parser(
+        "run-report",
+        help="record an external agent's result on an awaiting-external run",
+    )
+    run_report_parser.add_argument("project_directory")
+    run_report_parser.add_argument("run_id")
+    run_report_parser.add_argument(
+        "--file", required=True,
+        help="JSON file: outcome_reported (string), success_reported "
+        "(boolean), optional diagnostics (string)",
+    )
+
+    run_handoff_parser = subparsers.add_parser(
+        "run-handoff",
+        help="re-emit the prepared run-handoff document for a manual run",
+    )
+    run_handoff_parser.add_argument("project_directory")
+    run_handoff_parser.add_argument("run_id")
     task_status_parser.add_argument(
         "--reopen",
         action="store_true",
@@ -542,6 +650,203 @@ def _read_plan_input(path: str) -> dict:
         ) from None
 
 
+def _cmd_agent_list(args) -> None:
+    for adapter in (ManualHandoffAdapter(), LocalProcessAdapter()):
+        available, reason = adapter.available()
+        status = "available" if available else f"unavailable: {reason}"
+        print(f"  {adapter.id:<14} {adapter.display_name} [{status}]")
+    print()
+    print(
+        "local-process requires a config file (run-start --config) and "
+        "--authorize-exec for real subprocess execution; manual prepares "
+        "a handoff and never executes."
+    )
+
+
+def _read_adapter_config(path: str | None) -> dict | None:
+    if path is None:
+        return None
+    try:
+        raw = Path(path).read_bytes()
+    except OSError as exc:
+        raise ValidationError(
+            f"cannot read adapter config {path}: {exc.strerror or exc}"
+        ) from None
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise ValidationError(
+            f"adapter config {path} is not valid UTF-8"
+        ) from None
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValidationError(
+            f"adapter config {path} is not valid JSON "
+            f"(line {exc.lineno}: {exc.msg})"
+        ) from None
+
+
+def _cmd_run_preview(args) -> None:
+    target = resolve_target(args.project_directory, for_writing=False)
+    preview = execution_preview(
+        aperio_dir_for(target), args.task_id,
+        adapter_id=args.agent, config=_read_adapter_config(args.config),
+    )
+    print(json.dumps(preview, indent=2, ensure_ascii=False))
+
+
+def _cmd_run_start(args) -> None:
+    config = _read_adapter_config(args.config)
+    target = resolve_target(args.project_directory, for_writing=True)
+    record = dispatch_task(
+        aperio_dir_for(target),
+        args.task_id,
+        adapter_id=args.agent,
+        config=config,
+        authorize_exec=args.authorize_exec,
+        previous_run_id=args.previous_run,
+    )
+    if args.as_json:
+        print(json.dumps(record, indent=2, ensure_ascii=False))
+        return
+    print(
+        f"run {record['run_id']}: {record['status']} "
+        f"(task {record['task_id']}, adapter {record['adapter_id']})"
+    )
+    if record.get("outcome"):
+        print(f"  outcome: {record['outcome']}")
+    if record.get("handoff_path"):
+        print(f"  handoff: {record['handoff_path']}")
+    if record.get("local_log"):
+        print(f"  local log: {record['local_log']}")
+
+
+def _cmd_run_status(args) -> None:
+    aperio = aperio_dir_for(
+        resolve_target(args.project_directory, for_writing=False)
+    )
+    document = read_executions_or_fail(aperio)
+    for run in document["runs"]:
+        if run["run_id"] == args.run_id:
+            if args.as_json:
+                print(json.dumps(run, indent=2, ensure_ascii=False))
+            else:
+                _print_run(run)
+            return
+    raise StateError(f"no run {args.run_id} in this project")
+
+
+def _print_run(run: dict) -> None:
+    print(f"Run:         {run['run_id']}")
+    print(f"Status:      {run['status']}")
+    print(f"Task:        {run['task_id']}")
+    print(f"Adapter:     {run['adapter_id']}")
+    print(f"Plan rev:    {run['plan_version']}")
+    print(f"Started:     {run['started_at']}")
+    print(f"Finished:    {run.get('finished_at') or '(not finished)'}")
+    if run.get("outcome"):
+        print(f"Outcome:     {run['outcome']}")
+    if run.get("exit_code") is not None:
+        print(f"Exit code:   {run['exit_code']}")
+    if run.get("diagnostics"):
+        print(f"Diagnostics: {run['diagnostics']}")
+    if run.get("handoff_path"):
+        print(f"Handoff:     {run['handoff_path']}")
+    if run.get("previous_run_id"):
+        print(f"Retry of:    {run['previous_run_id']}")
+
+
+def _cmd_runs_list(args) -> None:
+    aperio = aperio_dir_for(
+        resolve_target(args.project_directory, for_writing=False)
+    )
+    document = read_executions_or_fail(aperio)
+    runs = list(reversed(document["runs"]))  # newest first
+    if args.as_json:
+        print(json.dumps(runs, indent=2, ensure_ascii=False))
+        return
+    if not runs:
+        print("No execution runs recorded.")
+        return
+    for run in runs:
+        print(
+            f"  {run['run_id']}  {run['status']:<17} {run['task_id']}  "
+            f"{run['adapter_id']}"
+        )
+
+
+def _cmd_run_cancel(args) -> None:
+    target = resolve_target(args.project_directory, for_writing=True)
+    run = cancel_run(
+        aperio_dir_for(target), args.run_id, reason=args.reason
+    )
+    print(f"run {run['run_id']} cancelled: {run['outcome']}")
+
+
+def _cmd_runs_reconcile(args) -> None:
+    target = resolve_target(args.project_directory, for_writing=True)
+    report = reconcile_runs(aperio_dir_for(target))
+    if args.as_json:
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        return
+    for key in ("interrupted", "cancelled_stale", "awaiting_external_stale",
+                "orphaned_tasks", "left_running", "foreign_machine",
+                "plan_version_drift"):
+        if report[key]:
+            print(f"{key}: {report[key]}")
+    if report["recovery_required"]:
+        print("Recovery required: resolve interrupted runs/orphaned claims "
+              "via task-status or run-report; no success was invented.")
+    if not any(report[k] for k in report if k != "no_records"):
+        print("No incomplete runs found.")
+
+
+def _cmd_run_report(args) -> None:
+    try:
+        raw = Path(args.file).read_bytes()
+    except OSError as exc:
+        raise ValidationError(
+            f"cannot read run-report file {args.file}: {exc.strerror or exc}"
+        ) from None
+    try:
+        result = json.loads(raw.decode("utf-8"))
+    except UnicodeDecodeError:
+        raise ValidationError(
+            f"run-report file {args.file} is not valid UTF-8"
+        ) from None
+    except json.JSONDecodeError as exc:
+        raise ValidationError(
+            f"run-report file {args.file} is not valid JSON "
+            f"(line {exc.lineno}: {exc.msg})"
+        ) from None
+    target = resolve_target(args.project_directory, for_writing=True)
+    run = record_external_result(aperio_dir_for(target), args.run_id, result)
+    print(
+        f"run {run['run_id']}: external result recorded "
+        f"({run['status']}). Task verification is still a separate, "
+        "manual Feature-03 step."
+    )
+
+
+def _cmd_run_handoff(args) -> None:
+    aperio = aperio_dir_for(
+        resolve_target(args.project_directory, for_writing=False)
+    )
+    document = read_executions_or_fail(aperio)
+    for run in document["runs"]:
+        if run["run_id"] == args.run_id:
+            handoff = run.get("handoff_path")
+            if not handoff:
+                raise StateError(
+                    f"run {args.run_id} has no prepared run-handoff "
+                    "document (only manual runs prepare one)"
+                )
+            print(Path(handoff).read_text(encoding="utf-8"), end="")
+            return
+    raise StateError(f"no run {args.run_id} in this project")
+
+
 def _cmd_task_status(args) -> None:
     if args.file is not None:
         payload = read_json_fields(
@@ -658,6 +963,24 @@ def main(argv: list[str] | None = None) -> int:
             _cmd_task_list(args)
         elif args.command == "task-status":
             _cmd_task_status(args)
+        elif args.command == "agent-list":
+            _cmd_agent_list(args)
+        elif args.command == "run-preview":
+            _cmd_run_preview(args)
+        elif args.command == "run-start":
+            _cmd_run_start(args)
+        elif args.command == "run-status":
+            _cmd_run_status(args)
+        elif args.command == "runs-list":
+            _cmd_runs_list(args)
+        elif args.command == "run-cancel":
+            _cmd_run_cancel(args)
+        elif args.command == "runs-reconcile":
+            _cmd_runs_reconcile(args)
+        elif args.command == "run-report":
+            _cmd_run_report(args)
+        elif args.command == "run-handoff":
+            _cmd_run_handoff(args)
         else:  # pragma: no cover - argparse enforces required subcommand
             parser.error(f"unknown command: {args.command!r}")
     except AperioError as exc:

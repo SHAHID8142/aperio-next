@@ -64,6 +64,7 @@ belongs in the append-only decision log.
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 
 from aperio.errors import StateError, ValidationError
 from aperio.inputs import check_no_foreign_line_separators
@@ -117,6 +118,25 @@ _PLAN_STR_FIELDS = (
 )
 _TASK_LIST_FIELDS = ("deliverables", "acceptance_criteria", "depends_on")
 _TASK_STR_FIELDS = ("objective",)
+
+
+_ISO_UTC_Z_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
+
+
+def _is_iso_utc_z(value: str) -> bool:
+    """Calendar-valid ISO-8601 UTC timestamp with a 'Z' suffix.
+
+    Two-stage check: an exact-shape ASCII regex (zero-padded fields, 'Z'
+    suffix, nothing before or after) followed by a calendar check, so
+    "2026-13-01T25:00:00Z" and non-padded variants are both rejected.
+    """
+    if not isinstance(value, str) or not _ISO_UTC_Z_RE.match(value):
+        return False
+    try:
+        datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        return False
+    return True
 
 
 def _check_text(artifact: str, field: str, value: object, *, single_line: bool = False) -> str:
@@ -490,12 +510,10 @@ def _validate_stored_task(task: object, where: str, path) -> None:
             if not isinstance(value, str) or not value.strip():
                 missing_or_invalid.append(f"{key} must be a non-empty string")
         verified_at = verification.get("verified_at")
-        if not isinstance(verified_at, str) or not re.fullmatch(
-            r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", verified_at
-        ):
+        if not isinstance(verified_at, str) or not _is_iso_utc_z(verified_at):
             missing_or_invalid.append(
-                "verified_at must be ISO-8601 UTC with a 'Z' suffix "
-                f"(got {verified_at!r})"
+                "verified_at must be a calendar-valid ISO-8601 UTC "
+                f"timestamp with a 'Z' suffix (got {verified_at!r})"
             )
         if missing_or_invalid:
             raise StateError(
