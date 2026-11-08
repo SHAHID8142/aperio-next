@@ -634,3 +634,18 @@ def test_dispatch_is_governed_and_success_is_not_verification(
     ]
     assert "execution.dispatch" in actions
     assert "task.claim" not in actions  # dispatch claims under task.status
+
+
+def test_mandatory_separation_rules_cannot_be_disabled(
+    run_cli, project_dir, tmp_path
+):
+    aperio_dir = _governed_project(run_cli, project_dir, tmp_path)
+    policy_file = aperio_dir / "policies.json"
+    policy = json.loads(policy_file.read_text())
+    policy["separation"]["review_requires_independent_reviewer"] = False
+    policy_file.write_text(json.dumps(policy))
+    code, _, err = run_cli("policy-show", str(project_dir))
+    assert code == 1 and "mandatory safety floor" in err
+    report = check_integrity(str(project_dir))
+    assert report["ok"] is False
+    assert any(item["code"] == "policy-invalid" for item in report["errors"])

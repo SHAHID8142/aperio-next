@@ -264,6 +264,17 @@ def validate_policy_document(data: object, path: Path | str) -> dict:
             raise StateError(
                 f"{path} is corrupt: separation.{key} must be a boolean"
             )
+    for key in (
+        "plan_approval_requires_independent_actor",
+        "review_requires_independent_reviewer",
+    ):
+        if separation.get(key) is False:
+            raise StateError(
+                f"{path} disables separation.{key}, but independent approval "
+                "and review are a mandatory safety floor for governed "
+                "projects and cannot be disabled; set it to true or remove "
+                "the key"
+            )
 
     review = data.get("review", {})
     if not isinstance(review, dict):
@@ -273,6 +284,13 @@ def validate_policy_document(data: object, path: Path | str) -> dict:
             raise StateError(
                 f"{path} is corrupt: review.{key} must be a boolean"
             )
+    if review.get("require_independent_review_for_completion") is False:
+        raise StateError(
+            f"{path} disables review.require_independent_review_for_completion, "
+            "but the independent review gate is a mandatory safety floor for "
+            "governed projects and cannot be disabled; set it to true or "
+            "remove the key"
+        )
     return data
 
 

@@ -491,8 +491,11 @@ is no implicit migration or silent policy adoption.
 **Schema (v1).** ``policies.json`` records ``policy_version``, the three
 built-in roles with their permitted action subsets, the actor→role
 mapping, append-only ``actor_history`` entries for role changes, and
-declarative separation/review flags. Unknown top-level keys are preserved
-on rewrite; a newer schema is refused rather than interpreted.
+and recorded separation/review settings. Unknown top-level keys are
+preserved on rewrite; a newer schema is refused rather than interpreted.
+The independent-approval and independent-review settings are a mandatory
+safety floor: a policy that sets them to ``false`` is rejected as corrupt
+rather than silently weakening the gates.
 
 **Roles are responsibilities.** ``planner`` creates/revises plans and may
 approve revisions they did not author; ``implementer`` claims tasks,
