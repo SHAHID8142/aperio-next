@@ -63,7 +63,7 @@ from aperio.runtime import (
     record_external_result,
 )
 from aperio.planmodel import ready_task_ids
-from aperio.adapters import ManualHandoffAdapter, LocalProcessAdapter
+from aperio.adapters import builtin_adapters
 from aperio.planstore import (
     adopt_plan_author,
     approve_plan,
@@ -371,19 +371,21 @@ def build_parser() -> argparse.ArgumentParser:
     run_preview_parser.add_argument("project_directory")
     run_preview_parser.add_argument("task_id", help="task id, e.g. TASK-001")
     run_preview_parser.add_argument(
-        "--agent", required=True, help="adapter id: manual or local-process"
+        "--agent", required=True,
+        help="adapter id: manual, local-process, codex-cli, or claude-cli",
     )
     run_preview_parser.add_argument("--config", help="adapter config JSON file")
 
     run_start_parser = subparsers.add_parser(
         "run-start",
-        help="dispatch a task run (local-process requires --authorize-exec "
-        "to actually execute; otherwise preparation only)",
+        help="dispatch a task run (subprocess adapters require "
+        "--authorize-exec to actually execute; otherwise preparation only)",
     )
     run_start_parser.add_argument("project_directory")
     run_start_parser.add_argument("task_id")
     run_start_parser.add_argument(
-        "--agent", required=True, help="adapter id: manual or local-process"
+        "--agent", required=True,
+        help="adapter id: manual, local-process, codex-cli, or claude-cli",
     )
     run_start_parser.add_argument("--config", help="adapter config JSON file")
     run_start_parser.add_argument(
@@ -975,15 +977,16 @@ def _read_plan_input(path: str) -> dict:
 
 
 def _cmd_agent_list(args) -> None:
-    for adapter in (ManualHandoffAdapter(), LocalProcessAdapter()):
+    for adapter in builtin_adapters():
         available, reason = adapter.available()
         status = "available" if available else f"unavailable: {reason}"
         print(f"  {adapter.id:<14} {adapter.display_name} [{status}]")
     print()
     print(
-        "local-process requires a config file (run-start --config) and "
-        "--authorize-exec for real subprocess execution; manual prepares "
-        "a handoff and never executes."
+        "local-process, codex-cli, and claude-cli require a config file "
+        "(run-start --config) and --authorize-exec for real subprocess "
+        "execution; manual prepares a handoff and never executes. Provider "
+        "executable paths are validated when the run starts."
     )
 
 

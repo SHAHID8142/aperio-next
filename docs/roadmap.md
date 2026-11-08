@@ -25,10 +25,10 @@
   approval/eligibility gates, sequential deterministic dispatch with a
   dispatch-scope lock, bounded-output subprocess execution with explicit
   ``--authorize-exec`` authorization, crash reconciliation, retry with
-  new run IDs, and additive memory integration. Aperio manages and
-  records execution — it does not implement model integrations, and
-  ``--authorize-exec`` is a procedural human-in-the-loop checkpoint, not
-  a sandbox.
+  new run IDs, and additive memory integration. At this stage Aperio
+  manages and records execution without invoking a model provider;
+  Feature 07 adds documented CLI integrations. ``--authorize-exec`` is a
+  procedural human-in-the-loop checkpoint, not a sandbox.
 
 - **Feature 05 — Cross-machine portability, integrity & schema-upgrade
   foundation:** `aperio export` (validated, whitelisted ZIP archive with a
@@ -54,16 +54,21 @@ Everything below is future work. Nothing in this list works today; do not
 claim otherwise in code, docs, or demos. Each item lands as its own
 assignment ("one feature per assignment").
 
-## Feature 07 — (to be scoped)
-
-No Feature 07 work has started. The next assignment is defined by the
-project owner after independent review of Feature 06.
+- **Feature 07 — Real AI agent integrations & provider-neutral CLI
+  bridge:** provider-neutral `CliAgentAdapter` plus documented
+  non-interactive `codex-cli` (`codex exec`) and `claude-cli`
+  (`claude -p`) adapters. Prompts travel on stdin, provider modes are
+  bounded, execution requires `--authorize-exec`, and the existing
+  supervision/privacy/governance boundaries are reused. GUI applications
+  (ZCode, Cursor) remain explicitly out of scope. See
+  `docs/feature-07.md`.
 
 ## Later / exploratory
 
 - Role specializations (planner, implementer, reviewer) as pluggable
   policies — no model/vendor coupling
-- Integration adapters for external agent runtimes
+- Additional provider CLIs behind the same contract (only after official
+  documented non-interactive interfaces are verified)
 - Project archival and history summaries derived from the append-only log
 
 Stability rule: each feature must keep every prior safety invariant from

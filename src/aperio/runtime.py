@@ -49,7 +49,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from aperio.adapters import (
-    LOCAL_PROCESS_ADAPTER_ID,
     MANUAL_ADAPTER_ID,
     get_adapter,
     runs_dir,
@@ -465,17 +464,12 @@ def dispatch_task(
     claim lost to a competing writer finalizes the record as failed;
     nothing is left dangling.
 
-    Local-process WITHOUT ``--authorize-exec`` is a read-only preview:
-    no run record is created, the task is never claimed, and no process
-    is started — a delayed preparation must not block a later authorized
-    execution.
+    Subprocess-capable adapters WITHOUT ``--authorize-exec`` are a
+    read-only preview: no run record is created, the task is never claimed,
+    and no process is started — a delayed preparation must not block a
+    later authorized execution.
     """
-    if adapter_id not in (MANUAL_ADAPTER_ID, LOCAL_PROCESS_ADAPTER_ID):
-        raise ValidationError(f"unknown agent adapter {adapter_id!r}")
     adapter = get_adapter(adapter_id)
-    available, reason = adapter.available()
-    if not available:
-        raise StateError(f"adapter {adapter_id!r} is not available: {reason}")
     require_supported_state(aperio_dir)
     policy_role = None
     if load_policy(aperio_dir) is not None:
@@ -487,6 +481,9 @@ def dispatch_task(
     # invalid config must never leave an orphaned task claim or a
     # partial record.
     validated_config = adapter.validate_config(config, aperio_dir)
+    available, reason = adapter.available(validated_config)
+    if not available:
+        raise StateError(f"adapter {adapter_id!r} is not available: {reason}")
 
     dispatch_token = acquire_lock(
         dispatch_lock_path(aperio_dir),
@@ -577,30 +574,26 @@ def _dispatch_locked(
         run_id = _next_run_id(runs)
         claim_owner = f"{adapter_id}:{run_id}"
 
-        # Local-process without authorization: entirely read-only
-        # preview — no record, no claim, no process.
-        if adapter_id == LOCAL_PROCESS_ADAPTER_ID:
+        # Real subprocess adapters without authorization: entirely
+        # read-only preview — no record, no claim, no process.
+        if getattr(adapter, "requires_authorization", False) and not authorize_exec:
             assert config is not None  # validated before the lock
-            if not authorize_exec:
-                return {
-                    "status": "preview",
-                    "task_id": task_id,
-                    "adapter_id": adapter_id,
-                    "plan_version": plan["plan_version"],
-                    "already_claimed": already_claimed,
-                    "note": (
-                        "read-only preparation: no run record was created "
-                        "and no process was started; re-run with "
-                        "--authorize-exec to execute"
-                    ),
-                    "command": {
-                        "executable": config["executable"],
-                        "args": config["args"],
-                        "working_dir": config.get("working_dir"),
-                        "timeout_seconds": config["timeout_seconds"],
-                        "env_policy": config["env_policy"],
-                    },
-                }
+            return {
+                "status": "preview",
+                "task_id": task_id,
+                "adapter_id": adapter_id,
+                "plan_version": plan["plan_version"],
+                "already_claimed": already_claimed,
+                "note": (
+                    "read-only preparation: no run record was created "
+                    "and no process was started; re-run with "
+                    "--authorize-exec to execute"
+                ),
+                "command": adapter.command_preview(
+                    config, aperio_dir,
+                    task=next(t for t in plan["tasks"] if t["id"] == task_id),
+                ),
+            }
         record = _new_run_record(
             run_id=run_id,
             task_id=task_id,
@@ -1083,14 +1076,14 @@ def runs_dispatch(
     scopes cannot be enforced, so parallelism is not offered in 0.4.0).
     Eligibility is re-evaluated per task inside the loop.
 
-    Without ``authorize_exec`` a local-process run returns one read-only
-    preview dict per eligible task (``status: "preview"``): no records,
-    no task claims, and no processes are created, so a later authorized
-    dispatch works normally.
+    Without ``authorize_exec`` a subprocess-capable adapter returns one
+    read-only preview dict per eligible task (``status: "preview"``): no
+    records, no task claims, and no processes are created, so a later
+    authorized dispatch works normally.
     """
     require_supported_state(aperio_dir)
     adapter = get_adapter(adapter_id)
-    available, _reason = adapter.available()
+    available, _reason = adapter.available(config)
     if not available:
         raise StateError(f"adapter {adapter_id!r} is not available: {_reason}")
 
@@ -1246,9 +1239,31 @@ def _terminate_process(pid: int) -> bool:
     import time
 
     delivered = False
+
+    def signal_process(*, force: bool) -> None:
+        nonlocal delivered
+        if force:
+            sig = getattr(signal, "SIGKILL", signal.SIGTERM)
+        else:
+            sig = signal.SIGTERM
+        if os.name == "posix":
+            try:
+                if os.getpgid(pid) == pid:
+                    os.killpg(pid, sig)
+                    delivered = True
+                    return
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
+        try:
+            os.kill(pid, sig)
+            delivered = True
+        except (ProcessLookupError, PermissionError):
+            pass
+
     try:
-        os.kill(pid, signal.SIGTERM)
-        delivered = True
+        signal_process(force=False)
+        if not delivered:
+            return False
     except (ProcessLookupError, PermissionError):
         return False
     for _ in range(50):  # 5 s grace for POSIX
@@ -1257,11 +1272,7 @@ def _terminate_process(pid: int) -> bool:
         except ProcessLookupError:
             return delivered
         time.sleep(0.1)
-    try:
-        os.kill(pid, signal.SIGKILL)
-        delivered = True
-    except (ProcessLookupError, PermissionError):
-        pass
+    signal_process(force=True)
     return delivered
 
 
@@ -1667,6 +1678,10 @@ def execution_preview(
     }
     if eligibility.eligible:
         task = next(t for t in plan["tasks"] if t["id"] == task_id)
+        available, reason = adapter.available(config)
+        preview["adapter_available"] = available
+        if not available:
+            preview["availability_warning"] = reason
         preview.update(
             adapter.preview(task=task, config=config, aperio_dir=aperio_dir)
         )

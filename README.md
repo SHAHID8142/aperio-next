@@ -1,14 +1,16 @@
 # aperio-next
 
 **Aperio** is a model-agnostic, multi-agent software development orchestrator.
-This repository contains **Features 01–06**: the project foundation
+This repository contains **Features 01–07**: the project foundation
 (bootstrap and inspect portable project state), portable agent memory
 (read shared context, record decisions, hand off work), project planning
 with a dependency-validated task graph and evidence-based execution
-tracking, a model-agnostic execution runtime, and cross-machine
-portability (validated export/import, integrity checks, and a versioned
-schema-upgrade foundation), and optional workflow governance (declared agent
-roles, separation of duties, and immutable independent review records).
+tracking, a model-agnostic execution runtime, cross-machine portability
+(validated export/import, integrity checks, and a versioned schema-upgrade
+foundation), optional workflow governance (declared agent roles, separation
+of duties, and immutable independent review records), and provider-neutral
+non-interactive CLI integrations for OpenAI Codex CLI and Anthropic Claude
+Code.
 
 Anything not listed below is **planned, not implemented**. See
 [docs/roadmap.md](docs/roadmap.md) for what is coming and
@@ -22,7 +24,8 @@ Anything not listed below is **planned, not implemented**. See
 - Implemented (Feature 04): `aperio agent-list`, `aperio run-preview`, `aperio run-start [--authorize-exec]`, `aperio run-status`, `aperio runs-list`, `aperio run-cancel`, `aperio runs-reconcile`, `aperio run-report`, `aperio run-handoff`
 - Implemented (Feature 05): `aperio export [--dry-run] [--json]`, `aperio import [--replace] [--dry-run]`, `aperio integrity [--archive] [--json]`, `aperio upgrade [--apply] [--json]`
 - Implemented (Feature 06): `aperio roles`, `aperio policy-init`, `aperio policy-show`, `aperio policy-assign`, `aperio policy-permissions`, `aperio review-submit`, `aperio review-decide`, `aperio review-list`, `aperio review-status`
-- Not implemented (by design, yet): model-provider integrations (Claude/Codex/Cursor/ZCode adapters), autonomous coding, sandboxed execution, Cloud sync
+- Implemented (Feature 07): `codex-cli` and `claude-cli` through `aperio agent-list`, `run-preview`, and `run-start --authorize-exec` (documented non-interactive CLIs; no GUI-app automation)
+- Not implemented (by design, yet): autonomous coding loops, sandboxed execution, Cursor/ZCode GUI integrations, Cloud sync
 
 ## Requirements
 
@@ -102,6 +105,15 @@ aperio run-start ./my-project TASK-001 --agent local-process \
   --config .aperio/local/adapter.json --authorize-exec    # REAL subprocess (explicit consent)
 aperio run-start ./my-project TASK-001 --agent local-process \
   --config .aperio/local/adapter.json                    # read-only preview (no process)
+
+# Real AI CLI providers (Feature 07; installed CLI + explicit consent)
+aperio run-start ./my-project TASK-001 --agent codex-cli \
+  --config .aperio/local/codex.json --authorize-exec
+aperio run-start ./my-project TASK-001 --agent claude-cli \
+  --config .aperio/local/claude.json --authorize-exec
+aperio run-preview ./my-project TASK-001 --agent claude-cli \
+  --config .aperio/local/claude.json                      # command + prompt digest only
+
 aperio run-status ./my-project RUN-0001 --json      # inspect one run
 aperio runs-list ./my-project --json                # execution history
 aperio run-cancel ./my-project RUN-0001 --reason "changed plan"
@@ -221,6 +233,43 @@ orphaned task reviews and future schemas, and keeps attribution intact.
 `aperio memory --json` adds a `governance` block: enabled flag, policy
 revision, actor assignments, pending reviews, latest outcomes, and the
 approval requirements currently blocking completion.
+
+### Real AI CLI providers (Feature 07)
+
+Aperio launches installed, non-interactive coding CLIs through a
+provider-neutral subprocess boundary:
+
+| Adapter | Documented interface | Default executable |
+|---|---|---|
+| `codex-cli` | `codex exec` (prompt on stdin, workspace-write sandbox, approval never) | `codex` |
+| `claude-cli` | `claude -p` (prompt on stdin, print mode, no interactive prompts) | `claude` |
+
+Both require a machine-local JSON config and explicit `--authorize-exec`.
+Without it, `run-start` writes nothing and starts nothing. The shared
+controls are strict known-key config validation, project-confined working
+directory, stdin-only prompts, no shell, minimal environment by default,
+bounded output, a machine-local log, a hard timeout with process-group
+termination on POSIX, and neutral execution-record metadata.
+
+```json
+{
+  "executable": "claude",
+  "working_dir": "/absolute/project/path",
+  "timeout_seconds": 1800,
+  "env_policy": "minimal",
+  "permission_mode": "acceptEdits",
+  "allowed_tools": ["Read", "Edit", "Write", "Bash"],
+  "max_turns": 25,
+  "max_budget_usd": 5
+}
+```
+
+Unsafe provider modes (`codex --sandbox danger-full-access`, Claude
+`bypassPermissions`) are deliberately refused. Exit 0 is not verification
+or completion; the task remains in progress until evidence and (when
+governed) independent review are recorded. These are real local processes,
+not a sandbox. GUI apps such as ZCode and Cursor are not integrated. See
+[docs/feature-07.md](docs/feature-07.md) for every key and limitation.
 
 ### Portable export/import (Feature 05)
 

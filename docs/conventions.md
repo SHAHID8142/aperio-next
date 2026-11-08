@@ -85,6 +85,13 @@
 - Imported execution records never carry `pid`, `machine`, or
   `local_log_ref`, and no active run may be imported: process identity is
   machine-local evidence that a cancellation could otherwise misuse.
+- Subprocess adapters never use a shell. `local-process` and the AI CLI
+  providers require `--authorize-exec`; without it dispatch is read-only.
+  Provider prompts travel on stdin, not argv, provider configs are
+  known-key validated, working directories stay inside the project, and
+  unsafe Codex/Claude bypass modes are refused. Raw child output and
+  provider prompts never enter shareable records, and exit 0 is never
+  verification or completion. These processes are not sandboxed.
 - Never commit secrets, credentials, tokens, private client information, or
   machine-specific configuration to this repository.
 

@@ -1,4 +1,4 @@
-# Aperio Architecture — Features 01–04 (implemented)
+# Aperio Architecture — Features 01–07 (implemented)
 
 This document describes what Aperio **is today**. Planned capabilities are in
 [roadmap.md](roadmap.md) and are never described here as working.
@@ -19,18 +19,20 @@ memory.
 - Feature 03 delivers planning and execution tracking: a versioned plan
   document, a dependency-validated task graph with an approval gate, and a
   rigorous evidence-based task lifecycle.
-- Feature 04 delivers the first agent-execution runtime: a documented
-  adapter contract with two real adapters (manual handoff, configured
-  local-process), versioned execution records, an authorization gate, a
+- Feature 04 delivered the first agent-execution runtime: a documented
+  adapter contract with manual handoff and configured local-process,
+  versioned execution records, an authorization gate, a
   sequential dispatch scheduler with a dispatch-scope lock, and crash
-  reconciliation. Aperio manages and records execution — it does not
-  implement model integrations, and ``--authorize-exec`` is a procedural
-  human-in-the-loop checkpoint, not a sandbox.
+  reconciliation. At Feature 04 Aperio manages and records execution but
+  does not invoke model providers itself; Feature 07 adds documented
+  non-interactive CLI integrations. ``--authorize-exec`` remains a
+  procedural human-in-the-loop checkpoint, not a sandbox.
 
 ## Explicit non-goals (for the whole project)
 
 - Aperio is **not** a model provider, proxy, or key manager. It never talks to
-  model APIs and never handles credentials itself.
+  model APIs or handles credentials itself. Feature 07 launches installed
+  provider CLIs, which own their own authentication and network activity.
 - Aperio does not run inside a vendor's sandbox as a hidden dependency; it is
   a plain, inspectable CLI and library.
 - Aperio does not replace version control. Git remains the source of truth
@@ -58,7 +60,7 @@ src/aperio/
 ├── planmodel.py   plan/task validation, dependency graph, lifecycle (pure)
 ├── planstore.py   plan persistence: create/revise/approve/task-status under
 │                  plan.lock with single-snapshot byte-CAS
-├── adapters.py    agent adapter contract + manual / local-process adapters
+├── adapters.py    agent adapter contract + manual / local-process / codex-cli / claude-cli
 ├── runtime.py     execution records, eligibility, dispatch, reconciliation
 ├── progress.py    phase updates (compare-and-swap state updates)
 ├── project.py     init/status operations, file templates, boundary checks
@@ -400,6 +402,18 @@ Built-in adapters:
   NUL-rejected at validation. Without `--authorize-exec` the dispatch is
   an entirely **read-only preview**: no record is created, the task is
   never claimed, and no process is started.
+- **codex-cli** / **claude-cli** (Feature 07) — documented non-interactive
+  AI coding CLIs through the provider-neutral `CliAgentAdapter`. The task
+  prompt is rendered deterministically and sent on stdin; argv carries only
+  static provider flags. Codex uses `codex exec` with workspace-write,
+  approval never, ephemeral sessions, and optional model. Claude uses
+  `claude -p` with a non-bypass permission mode, explicit allowed tools,
+  `--permission-prompts none`, bounded turns, optional budget/model, and no
+  persisted session by default. Both share the local-process supervision,
+  authorization, output/privacy boundary, timeout, and read-only preview.
+  Provider executable/config is validated before any claim; the executable
+  must be installed or explicitly configured. These are real local
+  processes, not sandboxes. See `docs/feature-07.md`.
 
 ### Execution records (`.aperio/executions.json`, exec-schema v1)
 
@@ -454,7 +468,8 @@ re-evaluated against a fresh plan read inside the lock: approved plan,
 task pending/in-progress, dependencies completed, no active run,
 adapter available. Real subprocess execution additionally requires
 `--authorize-exec` — a procedural human-in-the-loop checkpoint, not a
-sandbox; preparation mode (no flag) never spawns a process. Claiming
+sandbox; preparation mode (no flag) never spawns a process. This applies to
+`local-process`, `codex-cli`, and `claude-cli`. Claiming
 goes through the Feature-03 lifecycle API with a run-scoped owner
 (`adapter:RUN-NNNN`); a claim lost to a competing writer finalizes the
 record as failed. Retry = new run with `previous_run_id`; a delayed
