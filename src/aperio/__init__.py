@@ -1,15 +1,18 @@
-"""Aperio — model-agnostic, multi-agent software development orchestrator.
+"""Aperio — universal, agent-agnostic reliability and context tooling.
 
 Implemented so far:
 
-- Feature 01: project foundation (CLI, portable versioned project state)
-- Feature 02: portable agent memory (context read API, append-only decision
-  recording, structured handoffs, phase updates)
+- Features 01–07: portable project state and memory, planning and execution
+  tracking, validated portability, optional governance and independent
+  review, and provider-neutral non-interactive CLI adapters.
+- M1: a universal, read-only context pack for any knowledge-work task,
+  usable standalone or over an existing Aperio workspace. The software
+  workflow remains an optional domain profile.
 
 Anything beyond that is planned work and must not be described as
 implemented — see docs/roadmap.md.
 """
 
-__version__ = "0.7.1"
+__version__ = "0.8.0"
 
 __all__ = ["__version__"]

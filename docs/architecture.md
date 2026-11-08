@@ -1,14 +1,16 @@
-# Aperio Architecture — Features 01–07 (implemented)
+# Aperio Architecture — Features 01–07 and M1 (implemented)
 
 This document describes what Aperio **is today**. Planned capabilities are in
 [roadmap.md](roadmap.md) and are never described here as working.
 
 ## Mission
 
-Aperio is a **model-agnostic, multi-agent software development orchestrator**:
-a runtime in which multiple AI agents (possibly powered by different models)
-collaborate on one software project safely, with durable, portable project
-memory.
+Aperio is a **universal, agent-agnostic reliability and context layer** for
+AI-assisted knowledge work. It prepares portable context, retains provenance,
+and supports optional planning, execution, and independent review for design,
+research, writing, analysis, business, conversational, software, and future
+agent workflows. Software development is an optional domain profile, not the
+definition of the product.
 
 - Feature 01 delivers the foundation: a CLI that bootstraps and inspects a
   portable, versioned project-state directory.
@@ -27,6 +29,11 @@ memory.
   does not invoke model providers itself; Feature 07 adds documented
   non-interactive CLI integrations. ``--authorize-exec`` remains a
   procedural human-in-the-loop checkpoint, not a sandbox.
+- M1 delivers the universal, read-only context pack: standalone or
+  project-backed assembly for any domain, with a `general` default profile,
+  explicit provenance/trust labels, deterministic whole-item budgeting,
+  Markdown and JSON from one canonical payload, and no provider or model
+  call.
 
 ## Explicit non-goals (for the whole project)
 
@@ -49,6 +56,7 @@ src/aperio/
 ├── __init__.py    package version (single source: mirrored by pyproject)
 ├── __main__.py    python -m aperio entry point
 ├── cli.py         argparse CLI; catches AperioError, maps to exit codes
+├── context_pack.py universal read-only context assembly (M1)
 ├── decisions.py   append-only decision log: strict grammar, parse, append
 ├── errors.py      AperioError + PathError / NotInitializedError /
 │                  StateError / ValidationError
@@ -69,8 +77,10 @@ src/aperio/
 ```
 
 Dependency direction is strictly downward: `cli → memory/planning/handoff/
-decisions/progress → project/schema/paths/locks → errors`. Nothing imports
-upward. The CLI layer is the only module allowed to print.
+decisions/progress/context_pack → project/schema/paths/locks → errors`.
+`context_pack` is a read-only composition layer: it may read validated
+shareable artifacts, but it never writes project state or launches an agent.
+Nothing imports upward. The CLI layer is the only module allowed to print.
 
 ## Extension boundaries
 
@@ -84,6 +94,45 @@ upward. The CLI layer is the only module allowed to print.
   `project.py`, their template, and the `status` report together.
 - **Runtime dependencies are currently zero.** Adding one requires a
   documented reason in `docs/conventions.md` first.
+
+## Universal context pack (M1)
+
+`aperio context-pack [workspace]` is the first universal milestone. It
+normalizes an objective, explicit constraints, assumptions, risks, quality
+criteria, and expected output; optionally selects shareable project context;
+labels provenance and trust; applies a deterministic context budget; and
+renders Markdown and JSON from one validated canonical payload.
+
+Key contracts:
+
+- **Standalone is first-class.** No `.aperio/`, plan, repository, provider,
+  or database is required. Existing projects are optional read-only inputs.
+- **`general` is the default profile.** The software workflow is available
+  only through the explicit optional `software` profile.
+- **Trust is descriptive, not authentication.** Operator requirements are
+  authoritative; approved plans are authoritative; independently approved
+  reviews are `verified` for their stated scope; decision-log entries and
+  handoffs are `attested`; agent claims are `proposed`; external files are
+  `imported`. Imported or proposed material is never promoted to fact.
+- **Quoted project content is data, not permission.** The Markdown warns
+  the receiving agent not to obey embedded instructions that conflict with
+  the operator requirements.
+- **Budget is explicit.** `--budget` limits the UTF-8 content bytes of
+  selected context items only. Objective, requirements, output contract,
+  and missing-information fields are outside that budget and are never
+  silently truncated. Items are included or omitted whole.
+- **Reproducible identity.** `content_sha256` is computed over canonical
+  content only; generation time and Aperio package version live in the
+  envelope and are excluded from the hash.
+- **Privacy by construction.** `.aperio/local/`, raw provider output,
+  machine logs, and private configuration are never read. Imported or
+  proposed files are read only when the operator names them; their
+  filenames and absolute paths are not copied into the pack.
+- **No execution.** Generating a pack is not an agent launch, approval,
+  verification, or performance claim.
+
+See [context-pack.md](context-pack.md) for the full command and JSON
+contract.
 
 ## Safe path policy (implemented)
 

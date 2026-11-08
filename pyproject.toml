@@ -4,14 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aperio-next"
-version = "0.7.1"
-description = "Model-agnostic, multi-agent software development orchestrator — portable project memory and handoff (Features 01-02)."
+version = "0.8.0"
+description = "Universal, agent-agnostic context, memory, and reliability tooling with an optional software-development workflow."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "SHAHID8142" }]
-keywords = ["agents", "orchestration", "cli", "developer-tools"]
+keywords = ["agents", "context", "memory", "reliability", "cli"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",

@@ -5,6 +5,7 @@ Commands:
     aperio init <dir>                 initialize (or safely repair) a project
     aperio status <dir>               report project state (read-only)
     aperio memory <dir> [--json]      read portable project memory (Feature 02)
+    aperio context-pack [dir] ...     build a read-only universal context pack
     aperio decision-add <dir> ...     append a decision (append-only)
     aperio handoff-write <dir> --file <handoff.json>
                                       replace the handoff with a validated one
@@ -45,6 +46,18 @@ import sys
 from pathlib import Path
 
 from aperio import __version__
+from aperio.context_pack import (
+    DEFAULT_BUDGET_BYTES as CONTEXT_DEFAULT_BUDGET_BYTES,
+    DEFAULT_PROFILE as CONTEXT_DEFAULT_PROFILE,
+    MAX_BUDGET_BYTES as CONTEXT_MAX_BUDGET_BYTES,
+    MAX_CONTEXT_ITEM_BYTES,
+    MAX_OBJECTIVE_BYTES,
+    PROFILE_VERSIONS,
+    attached_context_item,
+    build_context_pack,
+    read_utf8_text_file,
+    render_context_pack_markdown,
+)
 from aperio.decisions import append_decision
 from aperio.errors import AperioError, StateError, ValidationError
 from aperio.handoff import (
@@ -113,11 +126,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=_PROG,
         description=(
-            "Aperio: model-agnostic, multi-agent software development "
-            "orchestrator (Features 01-06: project foundation, portable "
-            "agent memory and handoff, planning and execution, cross-machine "
-            "portable export/import with integrity and schema-upgrade "
-            "foundations, workflow roles and independent review gates)."
+            "Aperio: universal, agent-agnostic context, memory, and "
+            "reliability tooling. Prepare portable context for any "
+            "knowledge-work task; the software-development workflow remains "
+            "an optional domain profile."
         ),
     )
     parser.add_argument(
@@ -153,6 +165,90 @@ def build_parser() -> argparse.ArgumentParser:
         dest="as_json",
         action="store_true",
         help="emit the full context as machine-readable JSON",
+    )
+
+    context_parser = subparsers.add_parser(
+        "context-pack",
+        help="build a read-only universal context pack (Markdown or JSON)",
+        description=(
+            "Assemble portable context from an objective and optional "
+            "operator fields or an initialized Aperio workspace. This "
+            "command is read-only and never starts an agent."
+        ),
+    )
+    context_parser.add_argument(
+        "workspace", nargs="?",
+        help="optional initialized Aperio project directory (read-only)",
+    )
+    objective_group = context_parser.add_mutually_exclusive_group()
+    objective_group.add_argument(
+        "--objective", help="task objective as UTF-8 text"
+    )
+    objective_group.add_argument(
+        "--objective-file", metavar="FILE",
+        help=f"read the objective from a UTF-8 file (max {MAX_OBJECTIVE_BYTES} bytes)",
+    )
+    brief_group = context_parser.add_mutually_exclusive_group()
+    brief_group.add_argument(
+        "--brief", help="optional operator brief as UTF-8 text",
+    )
+    brief_group.add_argument(
+        "--brief-file", metavar="FILE",
+        help=f"read the operator brief from a UTF-8 file "
+             f"(max {MAX_CONTEXT_ITEM_BYTES} bytes)",
+    )
+    context_parser.add_argument(
+        "--profile", choices=tuple(PROFILE_VERSIONS),
+        default=CONTEXT_DEFAULT_PROFILE,
+        help="context profile (default: general)",
+    )
+    context_parser.add_argument(
+        "--budget", type=int, default=CONTEXT_DEFAULT_BUDGET_BYTES,
+        metavar="BYTES",
+        help="selected context-content budget in UTF-8 bytes "
+             f"(0..{CONTEXT_MAX_BUDGET_BYTES}; default {CONTEXT_DEFAULT_BUDGET_BYTES})",
+    )
+    context_parser.add_argument(
+        "--constraint", action="append", default=[], metavar="TEXT",
+        help="explicit requirement or constraint; repeatable",
+    )
+    context_parser.add_argument(
+        "--assumption", action="append", default=[], metavar="TEXT",
+        help="explicit assumption; repeatable",
+    )
+    context_parser.add_argument(
+        "--risk", action="append", default=[], metavar="TEXT",
+        help="explicit risk; repeatable",
+    )
+    context_parser.add_argument(
+        "--quality-criterion", action="append", default=[], metavar="TEXT",
+        help="explicit quality criterion; repeatable",
+    )
+    context_parser.add_argument(
+        "--expected-output", help="expected deliverable or result",
+    )
+    context_parser.add_argument(
+        "--output-format", help="expected output format or structure",
+    )
+    context_parser.add_argument(
+        "--audience", help="intended audience",
+    )
+    context_parser.add_argument(
+        "--missing-information", action="append", default=[], metavar="TEXT",
+        help="known missing information; repeatable",
+    )
+    context_parser.add_argument(
+        "--imported-context", action="append", default=[], metavar="FILE",
+        help="operator-selected external context, labeled imported/untrusted; "
+             "repeatable",
+    )
+    context_parser.add_argument(
+        "--proposed-context", action="append", default=[], metavar="FILE",
+        help="operator-selected agent claim, labeled proposed; repeatable",
+    )
+    context_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit the validated JSON context pack instead of Markdown",
     )
 
     decision_parser = subparsers.add_parser(
@@ -771,6 +867,64 @@ def _print_memory(context, as_json: bool) -> None:
         )
     print()
     print("Full machine-readable context: aperio memory <dir> --json")
+
+
+def _cmd_context_pack(args) -> None:
+    objective = args.objective
+    if args.objective_file:
+        objective = read_utf8_text_file(
+            args.objective_file,
+            label="objective file",
+            max_bytes=MAX_OBJECTIVE_BYTES,
+        )
+    brief = args.brief
+    if args.brief_file:
+        brief = read_utf8_text_file(
+            args.brief_file,
+            label="brief file",
+            max_bytes=MAX_CONTEXT_ITEM_BYTES,
+        )
+    imported_items = []
+    for index, path in enumerate(args.imported_context, start=1):
+        imported_items.append(
+            attached_context_item(
+                read_utf8_text_file(path, label="imported context file"),
+                trust="imported",
+                ordinal=index,
+            )
+        )
+    proposed_items = []
+    for index, path in enumerate(args.proposed_context, start=1):
+        proposed_items.append(
+            attached_context_item(
+                read_utf8_text_file(path, label="proposed context file"),
+                trust="proposed",
+                ordinal=index,
+            )
+        )
+    document = build_context_pack(
+        objective,
+        workspace=args.workspace,
+        profile=args.profile,
+        budget_bytes=args.budget,
+        brief=brief,
+        constraints=args.constraint,
+        assumptions=args.assumption,
+        risks=args.risk,
+        quality_criteria=args.quality_criterion,
+        expected_output=args.expected_output,
+        output_format=args.output_format,
+        audience=args.audience,
+        missing_information=args.missing_information,
+        imported_items=imported_items,
+        proposed_items=proposed_items,
+    )
+    if args.as_json:
+        sys.stdout.write(
+            json.dumps(document, ensure_ascii=False, indent=2) + "\n"
+        )
+    else:
+        sys.stdout.write(render_context_pack_markdown(document))
 
 
 def _cmd_decision_add(args) -> None:
@@ -1730,6 +1884,8 @@ def main(argv: list[str] | None = None) -> int:
             _print_status(status_project(args.project_directory))
         elif args.command == "memory":
             _print_memory(load_context(args.project_directory), args.as_json)
+        elif args.command == "context-pack":
+            _cmd_context_pack(args)
         elif args.command == "decision-add":
             _cmd_decision_add(args)
         elif args.command == "handoff-write":

@@ -100,6 +100,16 @@
   provider prompts, and model text never enter shareable records; only
   bounded neutral structured metadata may travel. Exit 0 is never
   verification or completion. These processes are not sandboxed.
+- Context packs are read-only compositions. They may read only the
+  shareable project surface (never `.aperio/local/`), may read external
+  imported/proposed files only when the operator names them, and must not
+  copy filenames, absolute local paths, raw provider output, or machine
+  logs into the pack. Trust labels describe provenance and review status;
+  they are never authentication. Imported/proposed material is never
+  promoted to authoritative memory. The byte budget applies to selected
+  context content only, and an item is omitted whole rather than truncated.
+  Pack generation must never launch an agent or be described as execution,
+  approval, or proof of performance improvement.
 - Never commit secrets, credentials, tokens, private client information, or
   machine-specific configuration to this repository.
 

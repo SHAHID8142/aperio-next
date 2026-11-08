@@ -1,16 +1,22 @@
 # aperio-next
 
-**Aperio** is a model-agnostic, multi-agent software development orchestrator.
-This repository contains **Features 01–07**: the project foundation
-(bootstrap and inspect portable project state), portable agent memory
-(read shared context, record decisions, hand off work), project planning
-with a dependency-validated task graph and evidence-based execution
-tracking, a model-agnostic execution runtime, cross-machine portability
-(validated export/import, integrity checks, and a versioned schema-upgrade
-foundation), optional workflow governance (declared agent roles, separation
-of duties, and immutable independent review records), and provider-neutral
-non-interactive CLI integrations for OpenAI Codex CLI and Anthropic Claude
-Code.
+**Aperio** is a universal, agent-agnostic reliability and context layer for
+AI-assisted knowledge work. It prepares portable context, preserves
+provenance, and supports optional verification and handoff for any agent
+performing design, research, writing, analysis, business, conversational,
+or software work.
+
+This repository contains **Features 01–07** and **M1**:
+
+- portable project state, decision memory, and structured handoffs;
+- dependency-validated planning, execution tracking, and independent review;
+- validated export/import, integrity checks, and schema-upgrade foundations;
+- provider-neutral non-interactive CLI adapters for Codex and Claude;
+- a universal, read-only context pack that works as a one-off task or over
+  an existing project.
+
+Software development is an **optional domain profile**, not the definition
+of the product.
 
 Anything not listed below is **planned, not implemented**. See
 [docs/roadmap.md](docs/roadmap.md) for what is coming and
@@ -25,7 +31,8 @@ Anything not listed below is **planned, not implemented**. See
 - Implemented (Feature 05): `aperio export [--dry-run] [--json]`, `aperio import [--replace] [--dry-run]`, `aperio integrity [--archive] [--json]`, `aperio upgrade [--apply] [--json]`
 - Implemented (Feature 06): `aperio roles`, `aperio policy-init`, `aperio policy-show`, `aperio policy-assign`, `aperio policy-permissions`, `aperio review-submit`, `aperio review-decide`, `aperio review-list`, `aperio review-status`
 - Implemented (Feature 07): `codex-cli` and `claude-cli` through `aperio agent-list`, `agent-doctor`, `run-preview`, and `run-start --authorize-exec [--authorize-write]` (documented non-interactive CLIs; read-only by default; no GUI-app automation)
-- Not implemented (by design, yet): autonomous coding loops, sandboxed execution, Cursor/ZCode GUI integrations, Cloud sync
+- Implemented (M1): `aperio context-pack [workspace]` with `general` (default) and optional `software` profiles, Markdown/JSON output, deterministic byte budgeting, trust/provenance labels, imported/proposed context labels, and strict read-only operation
+- Not implemented (by design, yet): full configurable domain-profile registry (M2), autonomous loops, sandboxed execution, Cursor/ZCode GUI integrations, cloud sync
 
 ## Requirements
 
@@ -53,6 +60,26 @@ aperio status ./my-project
 # Read the full shareable context (state, brief, decisions, handoff)
 aperio memory ./my-project           # human summary
 aperio memory ./my-project --json    # machine-readable, stable schema
+
+# Universal context pack — works with no Aperio project at all.
+# The default profile is domain-neutral.
+aperio context-pack --objective "Design a poster for a community garden" \
+  --constraint "Use accessible contrast" \
+  --quality-criterion "Legible at small sizes" \
+  --expected-output "One visual direction"
+
+# Research, writing, business analysis, and general tasks use the same form:
+aperio context-pack --objective-file research-question.txt \
+  --constraint "Cite every factual claim" --json
+
+# Optional: assemble the same kind of pack from an initialized project.
+# This read-only mode includes only shareable artifacts, never .aperio/local/.
+aperio context-pack ./my-project --objective "Prepare the design review" \
+  --profile general --budget 8192
+
+# The optional software profile keeps the software workflow explicit:
+aperio context-pack ./my-project --profile software \
+  --objective "Review the implementation plan"
 
 # Record a decision (append-only; prints the assigned DEC-NNNN id)
 aperio decision-add ./my-project --title "Use stdlib only" \
@@ -326,6 +353,40 @@ registered migrations, refuses newer versions, and backs up originals
 under `.aperio/local/backups/` before any write. No migrations exist in
 this release, so it is a framework, not a conversion path.
 
+### `aperio context-pack` (M1)
+
+The universal context pack is the first milestone of the approved
+realignment. It prepares a portable snapshot for **any** agent, with no
+software assumption and no project required:
+
+```sh
+aperio context-pack --objective "Write a research summary" \
+  --constraint "Cite every factual claim" \
+  --quality-criterion "Distinguish evidence from interpretation" \
+  --expected-output "A two-page brief" --json
+```
+
+- `general` is the default profile. `software` is opt-in.
+- An optional initialized workspace contributes only shareable artifacts:
+  brief, decisions, structured handoff, plan/execution summaries, and
+  approved review records. `.aperio/local/` is never read.
+- `--imported-context FILE` and `--proposed-context FILE` add
+  operator-selected material with explicit `imported` / `proposed` trust
+  labels. No filename or local path is copied into the pack.
+- The context budget (`--budget BYTES`) applies to selected context-item
+  content only. Essential objective/constraints/quality/output fields are
+  outside it and are never silently truncated; an item that does not fit
+  is omitted whole.
+- JSON and Markdown are rendered from the same canonical payload. The
+  reproducible content hash excludes generation time and package version.
+- Generating a pack never executes the task or controls the receiving
+  agent, and does not by itself prove performance improvement.
+
+The generated Markdown quotes project material as **data**, not
+instructions, and labels trust as `authoritative`, `verified`, `attested`,
+`proposed`, or `imported`. See
+[docs/context-pack.md](docs/context-pack.md) for the full contract.
+
 ### `aperio memory` (Feature 02)
 
 One call returns the shareable context an agent needs to continue without
@@ -381,15 +442,18 @@ create-only via an exclusive hard-link publish). See
 
 ## How agents discover current project state
 
-1. Run `aperio memory <project-directory> --json` (or `aperio status`, or
+1. For portable work, run `aperio context-pack ...` (standalone or with a
+   project) and give the Markdown/JSON to the agent. Do not treat pack
+   generation as execution or approval.
+2. Run `aperio memory <project-directory> --json` (or `aperio status`, or
    read `.aperio/state.json` directly).
-2. Check `schema_version` first; treat unknown versions as "written by a newer Aperio" and stop.
-3. Read the brief, the append-only decision log, the handoff, and the plan
+3. Check `schema_version` first; treat unknown versions as "written by a newer Aperio" and stop.
+4. Read the brief, the append-only decision log, the handoff, and the plan
    summary (all included in `memory --json`): approval state, task counts,
    and which tasks are ready or blocked.
-4. Record progress through the APIs: `decision-add`, `handoff-write`,
+5. Record progress through the APIs: `decision-add`, `handoff-write`,
    `phase-set`, `task-status`.
-5. Never store credentials anywhere under `.aperio/` except `.aperio/local/`, which is
+6. Never store credentials anywhere under `.aperio/` except `.aperio/local/`, which is
    git-ignored and not portable by definition.
 6. To move a project between machines, use `aperio export` / `aperio import`
    and verify the result with `aperio integrity`. The archive carries the

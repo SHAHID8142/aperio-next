@@ -62,9 +62,35 @@
   prevents descendant-held-pipe hangs. GUI applications (ZCode, Cursor)
   remain explicitly out of scope. See `docs/feature-07.md`.
 
+- **M1 — Universal contracts and read-only context pack (implemented):**
+  `aperio context-pack [workspace]` assembles portable context for any
+  knowledge-work task, standalone or from an existing Aperio workspace.
+  The default `general` profile is domain-neutral; `software` is optional.
+  The pack carries provenance/trust labels, explicit completeness,
+  deterministic whole-item byte budgeting, Markdown and JSON from one
+  canonical payload, reproducible content hashes, imported/proposed
+  context labels, and strict read-only/privacy boundaries. No model API,
+  provider launch, schema migration, canonical memory ledger, or automatic
+  performance claim is introduced.
+
+- **Known provider release blocker (unresolved, not part of M1):**
+  Feature 07 has a P1 metadata-bound mismatch. `adapters._bounded_usage()`
+  accepts values up to `10**12`, while
+  `runtime._validate_provider_result()` rejects usage values above
+  `1_000_000_000`; Claude `num_turns`/`duration_ms` share the mismatch. A
+  structurally valid provider result can therefore strand a run after the
+  child exits. Provider execution is not release-ready until this is fixed
+  with boundary tests. M1 does not change or silently resolve it.
+
 Everything below is future work. Nothing in this list works today; do not
 claim otherwise in code, docs, or demos. Each item lands as its own
 assignment ("one feature per assignment").
+
+## Next (requires independent review and explicit instruction)
+
+- **M2 — configurable domain profiles:** declarative profile registry and
+  validation, building on the M1 `general`/`software` IDs. Do not start
+  before M1 is independently reviewed.
 
 ## Later / exploratory
 

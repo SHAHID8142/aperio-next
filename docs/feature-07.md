@@ -296,3 +296,18 @@ It never logs in, installs, or makes a paid model request.
   enforcement, structured success/incomplete/failure/malformed/oversized
   output, timeout, operator interrupt, cancellation, descendant-pipe
   cleanup, governance, doctor, and export/import privacy.
+
+## Unresolved release blocker (P1)
+
+Provider execution is **not release-ready** until the metadata-bound mismatch
+is corrected:
+
+- `adapters._bounded_usage()` accepts numeric values up to `10**12`;
+- `runtime._validate_provider_result()` rejects usage values above
+  `1_000_000_000` (and applies corresponding bounds to Claude
+  `num_turns`/`duration_ms`).
+
+A parser can therefore produce a structurally valid `provider_result` that
+fails record validation after the child exits, leaving an abandoned active
+run. M1 deliberately does not change this path. The fix must unify one
+documented bound and add fail-first boundary tests for every affected field.
