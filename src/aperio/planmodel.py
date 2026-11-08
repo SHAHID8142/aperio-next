@@ -222,7 +222,7 @@ def validate_plan_input(data: object) -> dict:
         validate_task_input(task, where=f"tasks[{index}]")
         for index, task in enumerate(tasks_input)
     ]
-    _validate_task_graph(plan["tasks"])
+    validate_dependency_graph(plan["tasks"])
     return plan
 
 
@@ -261,14 +261,19 @@ def _check_task_id(value: object, where: str) -> str:
     return value.strip()
 
 
-def _validate_task_graph(tasks: list[dict]) -> None:
-    """Uniqueness, dependency existence, self-dependency, and cycles."""
+def validate_dependency_graph(tasks: list[dict], *, artifact: str = "plan") -> None:
+    """Uniqueness, dependency existence, self-dependency, and cycles.
+
+    Pure and read-only. ``artifact`` only prefixes error messages so the
+    same graph rules can serve plan-schema v1 and the universal goal work
+    graph without changing any existing message.
+    """
     seen: dict[str, int] = {}
     for index, task in enumerate(tasks):
         task_id = task["id"]
         if task_id in seen:
             raise ValidationError(
-                f"plan: duplicate task id {task_id} (tasks[{seen[task_id]}] "
+                f"{artifact}: duplicate task id {task_id} (tasks[{seen[task_id]}] "
                 f"and tasks[{index}])"
             )
         seen[task_id] = index
@@ -278,11 +283,11 @@ def _validate_task_graph(tasks: list[dict]) -> None:
         for dep in task["depends_on"]:
             if dep == task["id"]:
                 raise ValidationError(
-                    f"plan: task {task['id']} depends on itself"
+                    f"{artifact}: task {task['id']} depends on itself"
                 )
             if dep not in ids:
                 raise ValidationError(
-                    f"plan: task {task['id']} depends on unknown task {dep}"
+                    f"{artifact}: task {task['id']} depends on unknown task {dep}"
                 )
 
     # Cycle detection with the cycle path in the error (iterative DFS).
@@ -301,7 +306,7 @@ def _validate_task_graph(tasks: list[dict]) -> None:
                 if state.get(dep) == 0:
                     cycle = path[path.index(dep):] + [dep]
                     raise ValidationError(
-                        "plan: dependency cycle detected: "
+                        f"{artifact}: dependency cycle detected: "
                         + " -> ".join(cycle)
                     )
                 if state.get(dep) is None:
@@ -464,7 +469,7 @@ def validate_plan_document(data: object, path) -> dict:
         ]
         for index, content_task in enumerate(content_tasks):
             validate_task_input(content_task, where=f"tasks[{index}]")
-        _validate_task_graph(content_tasks)
+        validate_dependency_graph(content_tasks)
     except ValidationError as exc:
         raise StateError(f"{path} is corrupt: {exc}") from None
 

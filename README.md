@@ -32,7 +32,8 @@ Anything not listed below is **planned, not implemented**. See
 - Implemented (Feature 06): `aperio roles`, `aperio policy-init`, `aperio policy-show`, `aperio policy-assign`, `aperio policy-permissions`, `aperio review-submit`, `aperio review-decide`, `aperio review-list`, `aperio review-status`
 - Implemented (Feature 07): `codex-cli` and `claude-cli` through `aperio agent-list`, `agent-doctor`, `run-preview`, and `run-start --authorize-exec [--authorize-write]` (documented non-interactive CLIs; read-only by default; no GUI-app automation)
 - Implemented (M1): `aperio context-pack [workspace]` with `general` (default) and optional `software` profiles, Markdown/JSON output, deterministic byte budgeting, trust/provenance labels, imported/proposed context labels, and strict read-only operation
-- Not implemented (by design, yet): full configurable domain-profile registry (M2), autonomous loops, sandboxed execution, Cursor/ZCode GUI integrations, cloud sync
+- Implemented (M2): `aperio profiles`, `aperio goal-check`, and `aperio goal-pack` — a versioned universal goal contract (goal-schema v1), six data-only task profiles, optional work decomposition, and goal→context-pack conversion that works with no project, provider, or model API
+- Not implemented (by design, yet): autonomous loops, sandboxed execution, Cursor/ZCode GUI integrations, cloud sync
 
 ## Requirements
 
@@ -60,6 +61,12 @@ aperio status ./my-project
 # Read the full shareable context (state, brief, decisions, handoff)
 aperio memory ./my-project           # human summary
 aperio memory ./my-project --json    # machine-readable, stable schema
+
+# Universal goal contract — validate an assignment for any domain.
+# No project, provider, or model API is involved.
+aperio goal-check goal.json
+aperio profiles
+aperio goal-pack goal.json > pack.md
 
 # Universal context pack — works with no Aperio project at all.
 # The default profile is domain-neutral.
@@ -389,6 +396,49 @@ still applies to the current plan revision, work attempt, and task revision;
 stale approvals are excluded from current context rather than presented as
 current evidence. See
 [docs/context-pack.md](docs/context-pack.md) for the full contract.
+
+### `aperio goal-check` / `aperio goal-pack` / `aperio profiles` (M2)
+
+M2 turns "an assignment" into a validated document any agent can use. A
+goal is versioned JSON (`goal-schema v1`): objective, intended outcome,
+profile, constraints/requirements, assumptions, uncertainties, risks,
+audience, deliverables, quality and acceptance criteria, output contract,
+evidence requirements, an optional work decomposition, and
+provenance/trust metadata. Only `objective` and `intended_outcome` are
+required; anything absent is reported as absent rather than invented.
+
+```sh
+# A design brief, validated and reported on (no project needed)
+aperio goal-check brief.json
+
+# Convert the same goal into a portable, provider-neutral pack
+aperio goal-pack brief.json --json > pack.json
+
+# Optional: add read-only project context (never .aperio/local/)
+aperio goal-pack brief.json ./my-project
+
+# Which profiles exist, and what each one suggests?
+aperio profiles --json
+```
+
+- Profiles — `general` (default), `design`, `research`, `writing`,
+  `business`, `software` — are data only. Their criteria are suggestions,
+  shown separately from operator requirements, and never gate approval or
+  completion.
+- Work decomposition is optional: a one-off question needs no task graph.
+  Supplied graphs reuse the plan-schema v1 dependency validator, so cycles,
+  self-dependencies, duplicate ids, and unknown dependencies are rejected.
+- Goal identity is a SHA-256 over the canonical goal: no timestamp, path, or
+  version input, so the same goal has the same identity anywhere.
+- Agent- or import-declared provenance makes the goal `proposed` /
+  `imported` and prints a notice that it is data to assess, not operator
+  instruction.
+- Legacy plans, decisions, handoffs, reviews, and archives are untouched;
+  no migration, no new mandatory project file.
+- Generating a pack is preparation only: it does not execute, verify, or
+  complete anything.
+
+See [docs/goal-contract.md](docs/goal-contract.md) for the full contract.
 
 ### `aperio memory` (Feature 02)
 

@@ -76,7 +76,22 @@
   model API, provider launch, schema migration, canonical memory ledger, or
   automatic performance claim is introduced.
 
-- **Known provider release blocker (unresolved, not part of M1):**
+- **M2 — Universal goal, work & task-profile generalization (implemented):**
+  `aperio goal-check`, `aperio goal-pack`, and `aperio profiles` introduce
+  goal-schema v1: a versioned, validated, provider-neutral description of
+  any knowledge-work assignment (objective, outcome, profile, constraints,
+  assumptions, uncertainties, risks, audience, deliverables, quality and
+  acceptance criteria, output contract, evidence requirements, optional work
+  decomposition, provenance/trust). Two modes work: standalone (no
+  `.aperio/`, plan, provider, model API, or code) and project-backed
+  (read-only reuse of M1 context). Six data-only profiles exist; `general`
+  stays the default and their criteria remain advisory. Work graphs reuse
+  the plan-schema v1 dependency validator and are optional, so a single
+  question needs no graph. Legacy plans, reviews, decisions, handoffs, and
+  the portable archive are untouched; there is no migration and no new
+  mandatory project file. See `docs/goal-contract.md`.
+
+- **Known provider release blocker (unresolved, not part of M1/M2):**
   Feature 07 has a P1 metadata-bound mismatch. `adapters._bounded_usage()`
   accepts values up to `10**12`, while
   `runtime._validate_provider_result()` rejects usage values above
@@ -91,9 +106,10 @@ assignment ("one feature per assignment").
 
 ## Next (requires independent review and explicit instruction)
 
-- **M2 — configurable domain profiles:** declarative profile registry and
-  validation, building on the M1 `general`/`software` IDs. Do not start
-  before M1 is independently reviewed.
+- **M3 — reviewed universal goal hardening:** whatever the M2 review
+  confirms (for example goal persistence/provenance review, or importing a
+  validated goal into an existing plan with an explicit, non-destructive
+  adoption path). Do not start before M2 is independently reviewed.
 
 ## Later / exploratory
 

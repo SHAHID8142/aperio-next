@@ -123,6 +123,19 @@
 - New safety behaviors need both a positive case and an adversarial case
   (what happens when a user/something else tampers with the directory).
 
+## Schema ownership
+
+- Project state (`schema.py`), plan-schema v1 (`planmodel.py`), the context
+  pack (`context_pack.py`), and the portable archive v1 (`portable.py`) are
+  independently versioned and owned by their modules.
+- `goal-schema v1` is owned by `aperio/goals.py` and the profile registry
+  (`profile v1`) by `aperio/profiles.py`. Both are universal-layer contracts:
+  stdlib only, no provider import, no project dependency, and no write path
+  outside an explicitly requested output file.
+- Adding a field to a versioned contract means bumping that contract's
+  version and keeping a reader for the older form. A newer version is
+  refused with a clear error, never silently partially read.
+
 ## Versioning
 
 - Single version, declared in `pyproject.toml` and mirrored in

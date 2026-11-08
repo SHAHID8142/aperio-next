@@ -6,6 +6,9 @@ Commands:
     aperio status <dir>               report project state (read-only)
     aperio memory <dir> [--json]      read portable project memory (Feature 02)
     aperio context-pack [dir] ...     build a read-only universal context pack
+    aperio profiles [--json]          list built-in task profiles
+    aperio goal-check <goal.json>     validate a goal and report completeness
+    aperio goal-pack <goal.json> ...  build a context pack from a goal
     aperio decision-add <dir> ...     append a decision (append-only)
     aperio handoff-write <dir> --file <handoff.json>
                                       replace the handoff with a validated one
@@ -59,6 +62,12 @@ from aperio.context_pack import (
     render_context_pack_markdown,
 )
 from aperio.decisions import append_decision
+from aperio.goals import (
+    GOAL_SCHEMA_VERSION,
+    build_goal_context_pack,
+    describe_goal,
+    load_goal_file,
+)
 from aperio.errors import AperioError, StateError, ValidationError
 from aperio.handoff import (
     HANDOFF_FIELDS,
@@ -66,6 +75,12 @@ from aperio.handoff import (
     write_handoff,
 )
 from aperio.inputs import read_json_fields
+from aperio.profiles import (
+    DEFAULT_PROFILE as GOAL_DEFAULT_PROFILE,
+    get_profile,
+    list_profiles,
+    profile_suggestions,
+)
 from aperio.integrity import check_integrity
 from aperio.memory import load_context
 from aperio.paths import resolve_target
@@ -249,6 +264,81 @@ def build_parser() -> argparse.ArgumentParser:
     context_parser.add_argument(
         "--json", dest="as_json", action="store_true",
         help="emit the validated JSON context pack instead of Markdown",
+    )
+
+    profiles_parser = subparsers.add_parser(
+        "profiles",
+        help="list built-in task profiles (data only, no provider calls)",
+        description=(
+            "Show the built-in task profiles: the input fields each domain "
+            "usually uses and the criteria it suggests. Suggestions never "
+            "gate approval or completion."
+        ),
+    )
+    profiles_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit the profile registry as machine-readable JSON",
+    )
+
+    goal_check_parser = subparsers.add_parser(
+        "goal-check",
+        help="validate a goal document and report what is missing",
+        description=(
+            "Validate a goal document against goal-schema v"
+            f"{GOAL_SCHEMA_VERSION} and report content identity, profile, "
+            "trust, and which optional fields are missing. Read-only."
+        ),
+    )
+    goal_check_parser.add_argument(
+        "goal_file", metavar="GOAL_FILE", help="path to a goal JSON file",
+    )
+    goal_check_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit the validation report as JSON",
+    )
+
+    goal_pack_parser = subparsers.add_parser(
+        "goal-pack",
+        help="build a portable context pack from a goal document",
+        description=(
+            "Convert a validated goal into a provider-neutral context pack "
+            "that can be pasted into any agent. Read-only: it never starts "
+            "an agent, approves work, or writes into a project."
+        ),
+    )
+    goal_pack_parser.add_argument(
+        "goal_file", metavar="GOAL_FILE", help="path to a goal JSON file",
+    )
+    goal_pack_parser.add_argument(
+        "workspace", nargs="?",
+        help="optional initialized Aperio project directory (read-only)",
+    )
+    goal_pack_parser.add_argument(
+        "--budget", type=int, default=CONTEXT_DEFAULT_BUDGET_BYTES,
+        metavar="BYTES",
+        help="selected context-content budget in UTF-8 bytes "
+             f"(0..{CONTEXT_MAX_BUDGET_BYTES}; default {CONTEXT_DEFAULT_BUDGET_BYTES})",
+    )
+    goal_pack_parser.add_argument(
+        "--imported-context", action="append", default=[], metavar="FILE",
+        help="operator-selected external context, labeled imported/untrusted; "
+             "repeatable",
+    )
+    goal_pack_parser.add_argument(
+        "--proposed-context", action="append", default=[], metavar="FILE",
+        help="operator-selected agent claim, labeled proposed; repeatable",
+    )
+    goal_pack_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit the validated JSON context pack instead of Markdown",
+    )
+    goal_pack_parser.add_argument(
+        "--output", metavar="FILE",
+        help="write the pack to a file instead of stdout",
+    )
+    goal_pack_parser.add_argument(
+        "--force", action="store_true",
+        help="overwrite an existing --output file",
     )
 
     decision_parser = subparsers.add_parser(
@@ -925,6 +1015,130 @@ def _cmd_context_pack(args) -> None:
         )
     else:
         sys.stdout.write(render_context_pack_markdown(document))
+
+
+def _cmd_profiles(args) -> None:
+    if args.as_json:
+        sys.stdout.write(
+            json.dumps({"profiles": list_profiles()}, ensure_ascii=False, indent=2)
+            + "\n"
+        )
+        return
+    default = get_profile(GOAL_DEFAULT_PROFILE)
+    print("Built-in task profiles (data only; suggestions never gate work)")
+    print()
+    for profile in list_profiles():
+        marker = " (default)" if profile["id"] == default["id"] else ""
+        print(f"{profile['id']} v{profile['version']}{marker}")
+        print(f"  {profile['description']}")
+        print(f"  Usually specified: {', '.join(profile['focus_fields'])}")
+        print()
+    print("Inspect one profile: aperio profiles --json")
+
+
+def _cmd_goal_check(args) -> None:
+    goal = load_goal_file(args.goal_file)
+    report = describe_goal(goal)
+    suggestions = profile_suggestions(goal["profile"])
+    payload = {"report": report, "suggestions": suggestions}
+    if args.as_json:
+        sys.stdout.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+        return
+    print("Goal valid" + f" (goal-schema v{report['goal_schema_version']})")
+    print(f"Identity:     {report['goal_identity']}")
+    print(f"Content hash: {report['goal_sha256']}")
+    print(
+        f"Profile:      {report['profile']} v{report['profile_version']}"
+    )
+    print(f"Trust:        {report['trust']} (declared source: "
+          f"{report['provenance']['source']})")
+    work = report["work"]
+    if work["task_count"]:
+        print(
+            f"Work:         {work['task_count']} task(s); dependency levels: "
+            + " -> ".join(str(level) for level in work["levels"])
+        )
+    else:
+        print("Work:         none (a single task needs no decomposition)")
+    missing = report["completeness"]["missing"]
+    if missing:
+        print()
+        print("Not supplied by the operator (Aperio does not invent values):")
+        for entry in missing:
+            print(f"  - {entry['field']}: {entry['detail']}")
+    print()
+    print(
+        "Profile suggestions are advisory and never gate approval or "
+        "completion."
+    )
+    print("Build a pack: aperio goal-pack " + str(args.goal_file))
+
+
+def _write_pack_output(path: str, text: str, *, force: bool) -> None:
+    target = Path(path)
+    if target.is_symlink():
+        raise ValidationError(
+            "refusing to write through a symlink; pass a real file path"
+        )
+    parent = target.parent
+    if not parent.exists():
+        raise ValidationError("output directory does not exist")
+    if target.exists() and not force:
+        raise ValidationError(
+            "output file already exists (use --force to overwrite)"
+        )
+    temp = parent / f".{target.name}.aperio-tmp"
+    try:
+        with temp.open("w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+        temp.replace(target)
+    except OSError as exc:
+        try:
+            temp.unlink()
+        except OSError:
+            pass
+        raise ValidationError(
+            f"cannot write output file: {exc.strerror or exc}"
+        ) from None
+
+
+def _cmd_goal_pack(args) -> None:
+    goal = load_goal_file(args.goal_file)
+    imported_items = []
+    for index, path in enumerate(args.imported_context, start=1):
+        imported_items.append(
+            attached_context_item(
+                read_utf8_text_file(path, label="imported context file"),
+                trust="imported",
+                ordinal=index,
+            )
+        )
+    proposed_items = []
+    for index, path in enumerate(args.proposed_context, start=1):
+        proposed_items.append(
+            attached_context_item(
+                read_utf8_text_file(path, label="proposed context file"),
+                trust="proposed",
+                ordinal=index,
+            )
+        )
+    document = build_goal_context_pack(
+        goal,
+        workspace=args.workspace,
+        budget_bytes=args.budget,
+        imported_items=imported_items,
+        proposed_items=proposed_items,
+    )
+    text = (
+        json.dumps(document, ensure_ascii=False, indent=2) + "\n"
+        if args.as_json
+        else render_context_pack_markdown(document)
+    )
+    if args.output:
+        _write_pack_output(args.output, text, force=args.force)
+        print(f"Wrote context pack to {args.output}")
+        return
+    sys.stdout.write(text)
 
 
 def _cmd_decision_add(args) -> None:
@@ -1886,6 +2100,12 @@ def main(argv: list[str] | None = None) -> int:
             _print_memory(load_context(args.project_directory), args.as_json)
         elif args.command == "context-pack":
             _cmd_context_pack(args)
+        elif args.command == "profiles":
+            _cmd_profiles(args)
+        elif args.command == "goal-check":
+            _cmd_goal_check(args)
+        elif args.command == "goal-pack":
+            _cmd_goal_pack(args)
         elif args.command == "decision-add":
             _cmd_decision_add(args)
         elif args.command == "handoff-write":

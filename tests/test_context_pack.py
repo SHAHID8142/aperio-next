@@ -983,3 +983,61 @@ def test_review_applicability_is_evaluated_per_task(
     }
     assert verified == {first, second}
     assert "superseded" not in pack["content"]["excluded"]["by_reason"]
+
+
+def test_historical_rejected_decision_not_current_after_attempt_change(
+    run_cli, project_dir, tmp_path
+):
+    """A non-approved decision for an earlier attempt is never current.
+
+    M1 trust fix + M2 regression: once the task attempt changes, the old
+    ``changes-requested`` decision describes a past attempt. It must be
+    excluded (reason ``previous-attempt``) and must never surface as
+    ``verified`` or ``attested`` evidence for the active attempt.
+    """
+
+    aperio_dir = _governed(run_cli, project_dir, tmp_path)
+    code, out, err = run_cli(
+        "review-submit", str(project_dir), "--task", "TASK-001",
+        "--actor", "i", "--scope", "acceptance criteria",
+        "--evidence", "pytest: attempt one",
+    )
+    assert code == 0, err
+    review_id = REV_RE.search(out).group(0)
+    code, _, err = run_cli(
+        "review-decide", str(project_dir), review_id, "--actor", "r",
+        "--outcome", "changes-requested", "--findings", "coverage is thin",
+    )
+    assert code == 0, err
+    # A rejected decision blocks completion (Feature 06 fail-closed), so the
+    # attempt only advances after a fresh review is approved.
+    approved_id = _submit_and_approve(run_cli, project_dir, evidence="pytest: attempt one")
+
+    code, _, err = run_cli(
+        "task-status", str(project_dir), "TASK-001", "--status", "completed",
+        "--evidence", "pytest: attempt one", "--limitations", "none",
+        "--result", "passed", "--actor", "i",
+    )
+    assert code == 0, err
+    code, _, err = run_cli(
+        "task-status", str(project_dir), "TASK-001", "--status", "in-progress",
+        "--reopen", "--owner", "i", "--actor", "i",
+    )
+    assert code == 0, err
+
+    pack = _pack_json(
+        run_cli, str(project_dir), "--objective", "Continue after rework."
+    )
+    current = [
+        item for item in _review_items(pack)
+        if item["trust"] in ("verified", "attested")
+    ]
+    assert review_id not in {item["source_ref"] for item in current}
+    assert pack["content"]["excluded"]["by_reason"]["previous-attempt"] >= 1
+    warning_codes = {entry["code"] for entry in pack["content"]["warnings"]}
+    assert "historical_review_excluded" in warning_codes
+
+    stored = json.loads((aperio_dir / "reviews.json").read_text())["reviews"]
+    outcomes = {review["review_id"]: review["outcome"] for review in stored}
+    assert outcomes == {review_id: "changes-requested", approved_id: "approved"}
+    assert all(review["target"]["attempt"] == 1 for review in stored)

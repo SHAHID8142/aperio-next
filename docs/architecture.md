@@ -1,4 +1,4 @@
-# Aperio Architecture — Features 01–07 and M1 (implemented)
+# Aperio Architecture — Features 01–07, M1, and M2 (implemented)
 
 This document describes what Aperio **is today**. Planned capabilities are in
 [roadmap.md](roadmap.md) and are never described here as working.
@@ -34,6 +34,12 @@ definition of the product.
   explicit provenance/trust labels, deterministic whole-item budgeting,
   Markdown and JSON from one canonical payload, and no provider or model
   call.
+- M2 delivers the universal goal contract: a versioned (`goal-schema v1`),
+  validated, provider-neutral description of any knowledge-work assignment,
+  an optional task graph that reuses the plan-schema v1 dependency
+  validator, six data-only task profiles whose criteria stay advisory, and a
+  read-only goal→context-pack conversion that adds no project file and no
+  schema migration. See `docs/goal-contract.md`.
 
 ## Explicit non-goals (for the whole project)
 
@@ -57,6 +63,9 @@ src/aperio/
 ├── __main__.py    python -m aperio entry point
 ├── cli.py         argparse CLI; catches AperioError, maps to exit codes
 ├── context_pack.py universal read-only context assembly (M1)
+├── goals.py       universal goal contract: validate, identity, work graph,
+│                  goal → context pack (M2, goal-schema v1)
+├── profiles.py    data-only task-profile registry (M2, profile v1)
 ├── decisions.py   append-only decision log: strict grammar, parse, append
 ├── errors.py      AperioError + PathError / NotInitializedError /
 │                  StateError / ValidationError
@@ -141,6 +150,49 @@ Key contracts:
 
 See [context-pack.md](context-pack.md) for the full command and JSON
 contract.
+
+## Universal goal contract (M2)
+
+`aperio goal-check` / `aperio goal-pack` / `aperio profiles` add the missing
+half of the universal story: M1 knows how to render context, M2 knows how to
+*validate and version an assignment* before any context is rendered.
+
+Key contracts:
+
+- **Domain-neutral, minimal, explicit.** `objective` and
+  `intended_outcome` are the only required fields. Software concepts
+  (repository, commit, diff, test runner) appear nowhere in the core
+  vocabulary; they live only in the optional `software` profile's
+  suggestions.
+- **Honest gaps.** Missing optional fields are reported as missing
+  (`goal-check`, and a "Missing goal information" section in the pack).
+  No default constraint, deliverable, or acceptance criterion is invented.
+- **Bounded and deterministic.** File/field/list/task caps are enforced
+  before any output; unknown fields are rejected at every level; identity is
+  a SHA-256 over the canonical goal with no timestamp, path, or version
+  input.
+- **Profiles are data.** `profiles.py` is a dict registry with a structural
+  self-check. No plugin loading, no dynamic import, no executable rule
+  engine, no third-party dependency. A profile's criteria are rendered as
+  *suggestions* under an explicit advisory heading and stored separately
+  from operator requirements; they never gate approval or completion.
+- **Reuse, don't replace.** Graph validation is
+  `planmodel.validate_dependency_graph` (the plan-schema v1 rules,
+  unchanged messages, parameterized artifact prefix) and input hardening is
+  `inputs.check_no_foreign_line_separators`. M2 adds no second validator.
+- **A goal is not a plan.** Goal work decomposition is descriptive input for
+  a reader. It creates no `plan.json`, no task lifecycle, no approval, and
+  no attempt binding. Feature 03/06 governance remains exactly as shipped,
+  and remains optional for standalone goals.
+- **One canonical pack.** `build_goal_context_pack` feeds the M1 builder, so
+  budget, trust, hashing, and Markdown/JSON agreement are inherited rather
+  than reimplemented. Goal-only material lives in `content.goal`; profile
+  suggestions in `content.profile_suggestions`. Omitted `goal_context`
+  leaves M1 output byte-identical.
+- **No provider coupling.** `aperio.goals` imports no adapter or runtime
+  module (asserted by test), and no goal feature launches anything.
+
+See [goal-contract.md](goal-contract.md) for the field-by-field contract.
 
 ## Safe path policy (implemented)
 
