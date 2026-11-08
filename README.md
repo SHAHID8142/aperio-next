@@ -384,7 +384,10 @@ aperio context-pack --objective "Write a research summary" \
 
 The generated Markdown quotes project material as **data**, not
 instructions, and labels trust as `authoritative`, `verified`, `attested`,
-`proposed`, or `imported`. See
+`proposed`, or `imported`. A review is `verified` only while its approval
+still applies to the current plan revision, work attempt, and task revision;
+stale approvals are excluded from current context rather than presented as
+current evidence. See
 [docs/context-pack.md](docs/context-pack.md) for the full contract.
 
 ### `aperio memory` (Feature 02)

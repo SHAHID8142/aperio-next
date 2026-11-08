@@ -1283,3 +1283,41 @@ def plan_summary(aperio_dir: Path) -> dict | None:
             task["id"] for task in plan["tasks"] if task["status"] == "blocked"
         ),
     }
+
+
+def plan_review_basis(aperio_dir: Path) -> dict | None:
+    """Read-only snapshot used to judge whether a review still applies.
+
+    Independent reviews are bound to a material plan revision, a work
+    attempt, and an evidence revision. This returns exactly those facts so
+    a read-only consumer (the universal context pack) can tell a *current*
+    approval from a historical one without re-implementing the lifecycle.
+
+    Returns ``None`` when no plan exists or the plan declares a newer
+    schema version: in that case no review can be shown as current.
+
+    :raises StateError: when the plan file is corrupt (a consumer that must
+        degrade catches it and treats reviews as not current).
+    :raises PathError: when the plan file is a symlink.
+    """
+    summary = plan_summary(aperio_dir)
+    if summary is None or summary.get("unsupported_schema"):
+        return None
+    plan = read_plan(aperio_dir)
+    approval = plan["approval"]
+    tasks: dict[str, dict] = {}
+    for task in plan["tasks"]:
+        verification = task.get("verification") or {}
+        tasks[task["id"]] = {
+            "status": task["status"],
+            "attempt": int(task.get("attempt", 0)),
+            "revision": int(task.get("revision", 0)),
+            "implementer": task.get("implementer") or task.get("owner"),
+            "verification_result": verification.get("result"),
+        }
+    return {
+        "approved": approval["status"] == "approved",
+        "material_revision": approval["approved_revision"],
+        "plan_version": plan["plan_version"],
+        "tasks": tasks,
+    }

@@ -69,9 +69,12 @@
   The pack carries provenance/trust labels, explicit completeness,
   deterministic whole-item byte budgeting, Markdown and JSON from one
   canonical payload, reproducible content hashes, imported/proposed
-  context labels, and strict read-only/privacy boundaries. No model API,
-  provider launch, schema migration, canonical memory ledger, or automatic
-  performance claim is introduced.
+  context labels, and strict read-only/privacy boundaries. Review context is
+  `verified` only while the approval is still applicable to the current plan
+  revision, work attempt, and task revision; stale approvals are excluded
+  and newer pending/rejected decisions appear as attested decisions. No
+  model API, provider launch, schema migration, canonical memory ledger, or
+  automatic performance claim is introduced.
 
 - **Known provider release blocker (unresolved, not part of M1):**
   Feature 07 has a P1 metadata-bound mismatch. `adapters._bounded_usage()`

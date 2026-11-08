@@ -28,9 +28,9 @@ from aperio.errors import AperioError, PathError, ValidationError
 from aperio.handoff import handoff_path, read_handoff
 from aperio.memory import BRIEF_FILE_NAME
 from aperio.paths import resolve_target
-from aperio.planstore import plan_summary
+from aperio.planstore import plan_review_basis, plan_summary
 from aperio.project import aperio_dir_for, require_supported_state
-from aperio.reviews import list_reviews
+from aperio.reviews import review_applicability
 from aperio.runtime import execution_summary
 from aperio.schema import utc_now_iso
 
@@ -65,7 +65,7 @@ TRUST_DESCRIPTIONS = {
 }
 
 _SENSITIVITY_LEVELS = ("shareable", "local_only")
-_MAX_APPROVED_REVIEWS = 5
+_MAX_REVIEW_ITEMS = 5
 _MIN_TERM_LENGTH = 3
 _STOP_WORDS = frozenset(
     {
@@ -513,11 +513,103 @@ def _load_execution(
     )
 
 
+#: Review applicability statuses that may be shown in *current* context.
+_CURRENT_REVIEW_STATUSES = ("current", "current-decision")
+
+_REVIEW_STATUS_DETAIL = {
+    "superseded": "a newer review for the same task supersedes this record",
+    "previous-plan-revision": "recorded against an earlier material plan revision",
+    "no-approved-plan": "no approved plan revision is current",
+    "unattributed": "predates attempt-bound attribution and cannot prove which work it covers",
+    "previous-attempt": "covers an earlier work attempt (the task was reopened or reclaimed)",
+    "evidence-changed": "work or evidence changed after this review was submitted",
+    "not-independent": "was decided by its own submitter or implementer",
+    "task-not-active": "the task is no longer in a state this approval covers",
+    "unknown-task": "targets a task that is not in the current plan",
+    "plan-scoped": "targets the plan rather than a task; not task-level verification",
+}
+
+
+def _review_item(
+    review: dict, kind: str, title: str, content: str
+) -> ContextItem:
+    return ContextItem(
+        source="workspace",
+        source_ref=review["review_id"],
+        kind=kind,
+        title=title,
+        content=content,
+        trust="verified" if kind == "review" else "attested",
+        origin="workspace",
+        method="independent-review" if kind == "review" else "review-decision",
+        observed_at=review.get("decided_at") or review.get("created_at"),
+    )
+
+
+def _approved_review_item(review: dict) -> ContextItem:
+    target = review["target"]
+    lines = [
+        f"Target: task {target.get('task_id')} at plan revision "
+        f"{target.get('plan_revision')}, work attempt {target.get('attempt')}, "
+        f"task revision {target.get('task_revision')}",
+        "Outcome: approved",
+        f"Reviewer: {review.get('reviewer')}",
+        f"Decided: {review.get('decided_at')}",
+        "Evidence:",
+    ]
+    lines.extend(f"- {item}" for item in review.get("evidence") or [])
+    if review.get("limitations"):
+        lines.append(f"Limitations: {review['limitations']}")
+    if review.get("findings"):
+        lines.append(f"Findings: {review['findings']}")
+    return _review_item(
+        review,
+        "review",
+        f"Approved review {review['review_id']}",
+        "\n".join(lines),
+    )
+
+
+def _decision_review_item(review: dict) -> ContextItem:
+    target = review["target"]
+    lines = [
+        f"Target: task {target.get('task_id')} at plan revision "
+        f"{target.get('plan_revision')}",
+        f"Outcome: {review.get('outcome')}",
+        f"Reviewer: {review.get('reviewer')}",
+        f"Decided: {review.get('decided_at')}",
+        "Status: this is the latest review decision for the current work "
+        "attempt; it is not independent verification of the work.",
+    ]
+    if review.get("findings"):
+        lines.append(f"Findings: {review['findings']}")
+    if review.get("limitations"):
+        lines.append(f"Limitations: {review['limitations']}")
+    return _review_item(
+        review,
+        "review-decision",
+        f"Review {review['review_id']} — {review.get('outcome')}",
+        "\n".join(lines),
+    )
+
+
 def _load_reviews(
     aperio_dir: Path, warnings: list[dict], excluded: dict[str, int]
 ) -> list[ContextItem]:
+    """Current-applicable review context only.
+
+    Only the latest approval that still matches the material plan revision,
+    work attempt, and task revision is ``verified``; a newer pending or
+    rejected decision is included as an ``attested`` decision record. Every
+    other record is historical: it is counted by reason and never presented
+    as current verification. Records themselves are never modified.
+    """
     try:
-        reviews = list_reviews(aperio_dir)
+        basis = plan_review_basis(aperio_dir)
+    except (AperioError, OSError):
+        basis = None
+    try:
+        classified = review_applicability(aperio_dir, basis=basis)
     except (AperioError, OSError):
         _exclude(excluded, "unreadable")
         _warn(
@@ -527,46 +619,60 @@ def _load_reviews(
             "review records could not be validated and were skipped",
         )
         return []
-    approved = [review for review in reviews if review.get("outcome") == "approved"]
-    approved.sort(key=lambda review: (review.get("created_at", ""), review["review_id"]))
-    if len(approved) > _MAX_APPROVED_REVIEWS:
-        _exclude(
-            excluded, "source_limit", len(approved) - _MAX_APPROVED_REVIEWS
+    if not classified:
+        return []
+
+    selected = [
+        entry for entry in classified
+        if entry["status"] in _CURRENT_REVIEW_STATUSES
+    ]
+    selected.sort(
+        key=lambda entry: (
+            entry["review"].get("created_at") or "",
+            entry["review"]["review_id"],
         )
+    )
+    if len(selected) > _MAX_REVIEW_ITEMS:
+        _exclude(excluded, "source_limit", len(selected) - _MAX_REVIEW_ITEMS)
         _warn(
             warnings,
-            "approved_reviews_limited",
+            "reviews_limited",
             "reviews",
-            "only the most recent approved reviews were considered",
+            "only the most recent applicable reviews were considered",
         )
+        selected = selected[-_MAX_REVIEW_ITEMS:]
+
+    historical: dict[str, int] = {}
+    for entry in classified:
+        status = entry["status"]
+        if status in _CURRENT_REVIEW_STATUSES:
+            continue
+        historical[status] = historical.get(status, 0) + 1
+    for status, count in historical.items():
+        _exclude(excluded, status, count)
+        _warn(
+            warnings,
+            "historical_review_excluded",
+            "reviews",
+            f"{count} review record(s) excluded from current context: "
+            + _REVIEW_STATUS_DETAIL.get(status, "not applicable to current work"),
+        )
+    if any(entry["status"] == "current-decision" for entry in selected):
+        _warn(
+            warnings,
+            "review_decision_not_verified",
+            "reviews",
+            "the latest review for a task is not an approval; it is shown as "
+            "an attested decision, never as verified evidence",
+        )
+
     items: list[ContextItem] = []
-    for review in approved[-_MAX_APPROVED_REVIEWS:]:
-        target = review.get("target") or {}
-        lines = [
-            f"Target: task {target.get('task_id')} at plan revision "
-            f"{target.get('plan_revision')}",
-            "Outcome: approved",
-            f"Reviewer: {review.get('reviewer')}",
-            f"Decided: {review.get('decided_at')}",
-            "Evidence:",
-        ]
-        lines.extend(f"- {item}" for item in review.get("evidence") or [])
-        if review.get("limitations"):
-            lines.append(f"Limitations: {review['limitations']}")
-        if review.get("findings"):
-            lines.append(f"Findings: {review['findings']}")
+    for entry in selected:
+        review = entry["review"]
         items.append(
-            ContextItem(
-                source="workspace",
-                source_ref=review["review_id"],
-                kind="review",
-                title=f"Approved review {review['review_id']}",
-                content="\n".join(lines),
-                trust="verified",
-                origin="workspace",
-                method="independent-review",
-                observed_at=review.get("decided_at"),
-            )
+            _approved_review_item(review)
+            if entry["status"] == "current"
+            else _decision_review_item(review)
         )
     return items
 
@@ -702,6 +808,7 @@ _PRIORITY = {
     ("workspace", "plan"): 3,
     ("workspace", "execution"): 4,
     ("workspace", "review"): 5,
+    ("workspace", "review-decision"): 5,
     ("workspace", "decision"): 6,
     ("imported", "background"): 7,
     ("proposed", "background"): 8,

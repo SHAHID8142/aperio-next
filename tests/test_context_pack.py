@@ -629,3 +629,357 @@ def test_local_only_item_is_excluded_and_counted():
     assert refs == ["attached:1"]
     assert pack["content"]["excluded"]["by_reason"] == {"sensitivity": 1}
     assert "never share this" not in json.dumps(pack, ensure_ascii=False)
+
+
+# --- M1 trust-correctness: review applicability -------------------------------
+
+REV_RE = re.compile(r"REV-\d{4,}")
+
+
+def _two_task_plan() -> dict:
+    plan = _plan()
+    plan["tasks"].append(
+        {
+            "id": "TASK-002",
+            "title": "second task",
+            "objective": "second objective",
+            "deliverables": ["notes"],
+            "acceptance_criteria": ["noted"],
+            "depends_on": [],
+        }
+    )
+    return plan
+
+
+def _governed(run_cli, project_dir, tmp_path, plan=None) -> Path:
+    code, _, err = run_cli("init", str(project_dir))
+    assert code == 0, err
+    code, _, err = run_cli(
+        "policy-init", str(project_dir),
+        "--assign", "p:planner", "--assign", "i:implementer",
+        "--assign", "r:reviewer", "--assign", "r2:reviewer",
+    )
+    assert code == 0, err
+    plan_file = tmp_path / "plan.json"
+    plan_file.write_text(json.dumps(plan or _plan()), encoding="utf-8")
+    code, _, err = run_cli(
+        "plan-create", str(project_dir), "--file", str(plan_file),
+        "--actor", "p",
+    )
+    assert code == 0, err
+    code, _, err = run_cli("plan-approve", str(project_dir), "--actor", "r")
+    assert code == 0, err
+    _claim(run_cli, project_dir)
+    return project_dir / ".aperio"
+
+
+def _claim(run_cli, project_dir, task="TASK-001", actor="i") -> None:
+    code, _, err = run_cli(
+        "task-status", str(project_dir), task, "--status", "in-progress",
+        "--owner", actor, "--actor", actor,
+    )
+    assert code == 0, err
+
+
+def _submit_and_approve(run_cli, project_dir, evidence="pytest: evidence A") -> str:
+    code, out, err = run_cli(
+        "review-submit", str(project_dir), "--task", "TASK-001",
+        "--actor", "i", "--scope", "acceptance criteria",
+        "--evidence", evidence,
+    )
+    assert code == 0, err
+    review_id = REV_RE.search(out).group(0)
+    code, _, err = run_cli(
+        "review-decide", str(project_dir), review_id, "--actor", "r",
+        "--outcome", "approved", "--findings", "scope met",
+    )
+    assert code == 0, err
+    return review_id
+
+
+def _review_items(pack) -> list[dict]:
+    return [
+        item for item in pack["content"]["context_items"]
+        if item["kind"] in ("review", "review-decision")
+    ]
+
+
+def test_current_approved_review_is_verified(run_cli, project_dir, tmp_path):
+    _governed(run_cli, project_dir, tmp_path)
+    review_id = _submit_and_approve(run_cli, project_dir)
+    pack = _pack_json(
+        run_cli, str(project_dir), "--objective", "Prepare completion."
+    )
+    reviews = [item for item in _review_items(pack) if item["source_ref"] == review_id]
+    assert len(reviews) == 1
+    assert reviews[0]["trust"] == "verified"
+    assert reviews[0]["kind"] == "review"
+
+
+def test_reopened_task_prior_approval_is_not_verified(
+    run_cli, project_dir, tmp_path
+):
+    aperio_dir = _governed(run_cli, project_dir, tmp_path)
+    review_id = _submit_and_approve(run_cli, project_dir)
+    code, _, err = run_cli(
+        "task-status", str(project_dir), "TASK-001", "--status", "completed",
+        "--evidence", "pytest: evidence A", "--limitations", "none",
+        "--result", "passed", "--actor", "i",
+    )
+    assert code == 0, err
+    code, _, err = run_cli(
+        "task-status", str(project_dir), "TASK-001", "--status", "in-progress",
+        "--reopen", "--owner", "i", "--actor", "i",
+    )
+    assert code == 0, err
+
+    pack = _pack_json(
+        run_cli, str(project_dir), "--objective", "Continue the reopened task."
+    )
+    assert review_id not in {
+        item["source_ref"] for item in _review_items(pack)
+        if item["trust"] == "verified"
+    }
+    assert "previous-attempt" in pack["content"]["excluded"]["by_reason"]
+    tasks = json.loads((aperio_dir / "plan.json").read_text())["tasks"][0]
+    assert tasks["attempt"] == 2
+    # Classification is read-only: the immutable review record is untouched.
+    stored = json.loads((aperio_dir / "reviews.json").read_text())["reviews"]
+    assert [review["review_id"] for review in stored] == [review_id]
+    assert stored[0]["outcome"] == "approved"
+    assert stored[0]["target"]["attempt"] == 1
+    assert tasks["verification"]["result"] is None
+
+
+def test_revised_evidence_invalidates_prior_approval(
+    run_cli, project_dir, tmp_path
+):
+    _governed(run_cli, project_dir, tmp_path)
+    review_id = _submit_and_approve(run_cli, project_dir)
+    code, _, err = run_cli(
+        "task-status", str(project_dir), "TASK-001", "--status", "in-progress",
+        "--evidence", "pytest: evidence B", "--limitations", "none",
+        "--result", "passed", "--actor", "i",
+    )
+    assert code == 0, err
+
+    pack = _pack_json(
+        run_cli, str(project_dir), "--objective", "Complete with new evidence."
+    )
+    verified = {
+        item["source_ref"] for item in _review_items(pack)
+        if item["trust"] == "verified"
+    }
+    assert review_id not in verified
+    assert "evidence-changed" in pack["content"]["excluded"]["by_reason"]
+
+
+def test_newer_rejected_review_prevents_older_approval_as_verified(
+    run_cli, project_dir, tmp_path
+):
+    _governed(run_cli, project_dir, tmp_path)
+    approved_id = _submit_and_approve(run_cli, project_dir)
+    code, out, err = run_cli(
+        "review-submit", str(project_dir), "--task", "TASK-001",
+        "--actor", "i", "--scope", "acceptance criteria",
+        "--evidence", "pytest: evidence A",
+    )
+    assert code == 0, err
+    rejected_id = REV_RE.search(out).group(0)
+    code, _, err = run_cli(
+        "review-decide", str(project_dir), rejected_id, "--actor", "r",
+        "--outcome", "rejected", "--findings", "evidence is insufficient",
+    )
+    assert code == 0, err
+
+    pack = _pack_json(
+        run_cli, str(project_dir), "--objective", "Address the findings."
+    )
+    items = {item["source_ref"]: item for item in _review_items(pack)}
+    assert approved_id not in items
+    assert items[rejected_id]["trust"] == "attested"
+    assert items[rejected_id]["kind"] == "review-decision"
+    assert "superseded" in pack["content"]["excluded"]["by_reason"]
+    assert not [
+        item for item in items.values() if item["trust"] == "verified"
+    ]
+
+
+def test_newer_pending_review_prevents_older_approval_as_verified(
+    run_cli, project_dir, tmp_path
+):
+    _governed(run_cli, project_dir, tmp_path)
+    approved_id = _submit_and_approve(run_cli, project_dir)
+    code, out, err = run_cli(
+        "review-submit", str(project_dir), "--task", "TASK-001",
+        "--actor", "i", "--scope", "acceptance criteria",
+        "--evidence", "pytest: evidence A",
+    )
+    assert code == 0, err
+    pending_id = REV_RE.search(out).group(0)
+
+    pack = _pack_json(
+        run_cli, str(project_dir), "--objective", "Wait for the review."
+    )
+    items = {item["source_ref"]: item for item in _review_items(pack)}
+    assert approved_id not in items
+    assert items[pending_id]["trust"] == "attested"
+    assert "pending" in items[pending_id]["content"]
+    assert "superseded" in pack["content"]["excluded"]["by_reason"]
+
+
+def test_review_from_a_previous_plan_revision_is_historical(
+    run_cli, project_dir, tmp_path
+):
+    aperio_dir = _governed(run_cli, project_dir, tmp_path, plan=_two_task_plan())
+    review_id = _submit_and_approve(run_cli, project_dir)
+    revised = _two_task_plan()
+    revised["tasks"][1]["title"] = "second task, rescoped"
+    revised_file = tmp_path / "plan-v2.json"
+    revised_file.write_text(json.dumps(revised), encoding="utf-8")
+    code, _, err = run_cli(
+        "plan-revise", str(project_dir), "--file", str(revised_file),
+        "--revises", "2", "--actor", "p",
+    )
+    assert code == 0, err
+
+    draft_pack = _pack_json(
+        run_cli, str(project_dir), "--objective", "Draft plan context."
+    )
+    assert review_id not in {
+        item["source_ref"] for item in _review_items(draft_pack)
+    }
+    assert "no-approved-plan" in draft_pack["content"]["excluded"]["by_reason"]
+
+    code, _, err = run_cli("plan-approve", str(project_dir), "--actor", "r")
+    assert code == 0, err
+    pack = _pack_json(
+        run_cli, str(project_dir), "--objective", "Revised plan context."
+    )
+    assert review_id not in {
+        item["source_ref"] for item in _review_items(pack)
+    }
+    assert "previous-plan-revision" in pack["content"]["excluded"]["by_reason"]
+    reviews = json.loads((aperio_dir / "reviews.json").read_text())["reviews"]
+    assert reviews[0]["review_id"] == review_id
+    assert reviews[0]["outcome"] == "approved"
+
+
+def test_legacy_review_without_attempt_attribution_is_not_verified(
+    run_cli, project_dir, tmp_path
+):
+    aperio_dir = _governed(run_cli, project_dir, tmp_path)
+    (aperio_dir / "reviews.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "reviews": [
+                    {
+                        "review_id": "REV-0001",
+                        "target": {
+                            "kind": "task",
+                            "task_id": "TASK-001",
+                            "plan_revision": 1,
+                            "run_id": None,
+                        },
+                        "submitted_by": "i",
+                        "implemented_by": None,
+                        "submitted_role": "implementer",
+                        "scope": ["acceptance criteria"],
+                        "evidence": ["pytest: evidence A"],
+                        "outcome": "approved",
+                        "reviewer": "r",
+                        "findings": "legacy approval",
+                        "limitations": None,
+                        "created_at": "2025-01-01T00:00:00Z",
+                        "decided_at": "2025-01-01T01:00:00Z",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    pack = _pack_json(
+        run_cli, str(project_dir), "--objective", "Legacy review context."
+    )
+    assert not [
+        item for item in _review_items(pack) if item["trust"] == "verified"
+    ]
+    assert "unattributed" in pack["content"]["excluded"]["by_reason"]
+
+
+def test_standalone_pack_without_reviews_has_no_review_context(run_cli):
+    pack = _pack_json(run_cli, "--objective", "One-off task.")
+    assert pack["content"]["context_items"] == []
+    assert pack["content"]["excluded"]["by_reason"] == {}
+
+
+def test_review_context_is_deterministic_and_path_free(
+    run_cli, project_dir, tmp_path
+):
+    _governed(run_cli, project_dir, tmp_path)
+    review_id = _submit_and_approve(run_cli, project_dir)
+    first = _pack_json(
+        run_cli, str(project_dir), "--objective", "Deterministic context."
+    )
+    second = _pack_json(
+        run_cli, str(project_dir), "--objective", "Deterministic context."
+    )
+    assert first["content"] == second["content"]
+    assert first["content_sha256"] == second["content_sha256"]
+    review = next(
+        item for item in _review_items(first) if item["source_ref"] == review_id
+    )
+    assert review["trust"] == "verified"
+    assert str(project_dir) not in json.dumps(review, ensure_ascii=False)
+    assert "/.aperio/" not in json.dumps(review, ensure_ascii=False)
+
+
+def test_blocked_task_approval_is_not_shown_as_current(
+    run_cli, project_dir, tmp_path
+):
+    _governed(run_cli, project_dir, tmp_path)
+    review_id = _submit_and_approve(run_cli, project_dir)
+    code, _, err = run_cli(
+        "task-status", str(project_dir), "TASK-001", "--status", "blocked",
+        "--reason", "waiting on client input", "--actor", "i",
+    )
+    assert code == 0, err
+    pack = _pack_json(
+        run_cli, str(project_dir), "--objective", "Unblock the task."
+    )
+    assert review_id not in {
+        item["source_ref"] for item in _review_items(pack)
+        if item["trust"] == "verified"
+    }
+    assert "task-not-active" in pack["content"]["excluded"]["by_reason"]
+
+
+def test_review_applicability_is_evaluated_per_task(
+    run_cli, project_dir, tmp_path
+):
+    _governed(run_cli, project_dir, tmp_path, plan=_two_task_plan())
+    first = _submit_and_approve(run_cli, project_dir)
+    _claim(run_cli, project_dir, task="TASK-002")
+    code, out, err = run_cli(
+        "review-submit", str(project_dir), "--task", "TASK-002",
+        "--actor", "i", "--scope", "acceptance criteria",
+        "--evidence", "pytest: evidence B",
+    )
+    assert code == 0, err
+    second = REV_RE.search(out).group(0)
+    code, _, err = run_cli(
+        "review-decide", str(project_dir), second, "--actor", "r",
+        "--outcome", "approved",
+    )
+    assert code == 0, err
+
+    pack = _pack_json(
+        run_cli, str(project_dir), "--objective", "Review both tasks."
+    )
+    verified = {
+        item["source_ref"] for item in _review_items(pack)
+        if item["trust"] == "verified"
+    }
+    assert verified == {first, second}
+    assert "superseded" not in pack["content"]["excluded"]["by_reason"]

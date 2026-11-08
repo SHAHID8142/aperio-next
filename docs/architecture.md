@@ -110,10 +110,18 @@ Key contracts:
 - **`general` is the default profile.** The software workflow is available
   only through the explicit optional `software` profile.
 - **Trust is descriptive, not authentication.** Operator requirements are
-  authoritative; approved plans are authoritative; independently approved
-  reviews are `verified` for their stated scope; decision-log entries and
+  authoritative; approved plans are authoritative; decision-log entries and
   handoffs are `attested`; agent claims are `proposed`; external files are
   `imported`. Imported or proposed material is never promoted to fact.
+- **A review is `verified` only while it still applies.** The context pack
+  reuses Feature 06's applicability conditions through
+  `reviews.review_applicability` and `planstore.plan_review_basis`: a review
+  must be the latest for its task at the current material plan revision and
+  match the current work attempt and task revision. Stale or historical
+  approvals are excluded from current context (counted by reason), and a
+  newer pending/changes-requested/rejected decision is shown as an
+  `attested` decision record. Historical review records are never modified,
+  and the completion gate itself is untouched.
 - **Quoted project content is data, not permission.** The Markdown warns
   the receiving agent not to obey embedded instructions that conflict with
   the operator requirements.

@@ -712,6 +712,146 @@ def _canonical_limitations(value: str | None) -> str:
     return "" if not text or text.lower() == "none" else text
 
 
+REVIEW_APPLICABILITY_STATUSES = (
+    "current",
+    "current-decision",
+    "superseded",
+    "previous-plan-revision",
+    "no-approved-plan",
+    "unattributed",
+    "previous-attempt",
+    "evidence-changed",
+    "not-independent",
+    "task-not-active",
+    "unknown-task",
+    "plan-scoped",
+)
+
+
+def _classify_current_candidate(
+    review: dict, task: dict | None
+) -> str:
+    """Classify the latest review at the material revision.
+
+    Mirrors the fail-closed predicates of :func:`_review_requirement`
+    (attribution, attempt, evidence revision, outcome, independence) and
+    adds the lifecycle state, so a historical approval is never presented
+    as current verification. It never mutates a record and never approves
+    anything.
+    """
+    target = review["target"]
+    if review.get("outcome") != "approved":
+        return "current-decision"
+    if task is None:
+        return "unknown-task"
+    if (
+        review.get("implemented_by") is None
+        or "attempt" not in target
+        or "task_revision" not in target
+    ):
+        return "unattributed"
+    if review.get("reviewer") in (
+        review.get("implemented_by"),
+        review.get("submitted_by"),
+    ):
+        return "not-independent"
+    if target.get("attempt") != task.get("attempt"):
+        return "previous-attempt"
+    status = task.get("status")
+    if status == "in-progress":
+        if target.get("task_revision") != task.get("revision"):
+            return "evidence-changed"
+        return "current"
+    if status == "completed":
+        # Completion records a passing verification and advances the task
+        # revision by one; any other revision means the reviewed evidence is
+        # no longer the recorded completion evidence.
+        if task.get("verification_result") != "passed":
+            return "task-not-active"
+        if target.get("task_revision") != int(task.get("revision", 0)) - 1:
+            return "evidence-changed"
+        return "current"
+    return "task-not-active"
+
+
+def review_applicability(
+    aperio_dir: Path, *, basis: dict | None
+) -> list[dict]:
+    """Read-only classification of every review record for current context.
+
+    ``basis`` is :func:`aperio.planstore.plan_review_basis` output (or
+    ``None`` when no supported plan is readable, in which case nothing is
+    current). Each returned entry is ``{"review": <record>, "status": <one
+    of REVIEW_APPLICABILITY_STATUSES>}`` in stored order. Records are
+    returned by reference and are never modified: history is immutable.
+
+    Only the latest review for a task at the material plan revision is
+    eligible to be ``current``; every earlier review is ``superseded``, and
+    a newer pending/changes-requested/rejected decision is reported as
+    ``current-decision`` so an older approval can never look current.
+    """
+    reviews = read_reviews(aperio_dir)["reviews"]
+    if not reviews:
+        return []
+    material = (
+        basis.get("material_revision")
+        if basis is not None and basis.get("approved")
+        else None
+    )
+    tasks = (basis or {}).get("tasks") or {}
+
+    groups: dict[tuple[str, str], list[dict]] = {}
+    for review in reviews:
+        target = review["target"]
+        kind = "plan" if target.get("kind") == "plan" else "task"
+        key = (
+            target.get("task_id")
+            if kind == "task"
+            else str(target.get("plan_revision"))
+        )
+        groups.setdefault((kind, str(key)), []).append(review)
+
+    result: list[dict] = []
+    for (kind, key), group in groups.items():
+        if kind == "plan":
+            result.extend(
+                {"review": review, "status": "plan-scoped"} for review in group
+            )
+            continue
+        if material is None:
+            result.extend(
+                {"review": review, "status": "no-approved-plan"}
+                for review in group
+            )
+            continue
+        at_revision = [
+            review
+            for review in group
+            if review["target"].get("plan_revision") == material
+        ]
+        if not at_revision:
+            result.extend(
+                {"review": review, "status": "previous-plan-revision"}
+                for review in group
+            )
+            continue
+        candidate = at_revision[-1]
+        result.extend(
+            {"review": review, "status": "superseded"}
+            for review in group
+            if review is not candidate
+        )
+        result.append(
+            {
+                "review": candidate,
+                "status": _classify_current_candidate(
+                    candidate, tasks.get(key)
+                ),
+            }
+        )
+    return result
+
+
 def review_requirement(
     aperio_dir: Path,
     task_id: str,

@@ -106,7 +106,8 @@ Readable project inputs are limited to the shareable surface:
 - `.aperio/decisions.md`
 - a non-template `.aperio/handoff.md`
 - plan and execution summaries
-- approved review records
+- review records that are still applicable to the current work attempt
+  (see [review applicability](#review-applicability))
 
 Every read is optional. A damaged optional artifact is skipped with a warning;
 the rest of the pack remains usable. State itself must be valid and supported.
@@ -162,10 +163,13 @@ The JSON envelope is:
 - `excluded` counts/reasons and `budget` accounting;
 - `warnings` with safe, bounded codes/details.
 
-`excluded.by_reason` mixes two kinds of exclusion: source-level
+`excluded.by_reason` mixes three kinds of exclusion: source-level
 (`unsupported_schema`, `unreadable`, `malformed_source`, `duplicate`,
-`unsafe_symlink`, `source_limit`) and selection-level (`budget`,
-`item_limit`, `sensitivity`, `invalid_content`, `oversize`).
+`unsafe_symlink`, `source_limit`), selection-level (`budget`, `item_limit`,
+`sensitivity`, `invalid_content`, `oversize`), and review applicability
+(`superseded`, `previous-plan-revision`, `no-approved-plan`, `unattributed`,
+`previous-attempt`, `evidence-changed`, `not-independent`,
+`task-not-active`, `unknown-task`, `plan-scoped`).
 `budget.items_excluded` counts only the candidate context items that were
 not selected, so it can be smaller than `excluded.total`.
 
@@ -181,10 +185,44 @@ hash before emitting anything.
 | Label | Meaning |
 |---|---|
 | `authoritative` | Operator instruction/requirements, operator brief, or approved plan |
-| `verified` | Independently approved review, for its stated target/scope |
+| `verified` | Approved independent review that is still applicable to the current plan revision, work attempt, and task revision |
 | `attested` | Operator/project record that is not independently verified (brief, handoff, decision log, execution metadata) |
 | `proposed` | Agent-generated or otherwise unverified claim |
 | `imported` | External material; structurally accepted but semantically untrusted |
+
+### Review applicability
+
+An approval is only current while it still applies. `verified` review context
+is limited to the **latest** review for a task at the current material plan
+revision that is `approved` *and* matches the task's current work attempt and
+task revision — the same conditions Feature 06 enforces for completion.
+
+Every other record is historical and is never shown as current verification.
+It is counted under `excluded.by_reason` with one of:
+
+| Reason | Meaning |
+|---|---|
+| `superseded` | a newer review for the same task exists |
+| `previous-plan-revision` | recorded against an earlier material plan revision |
+| `no-approved-plan` | no approved plan revision is current |
+| `unattributed` | predates attempt-bound attribution |
+| `previous-attempt` | covers an earlier attempt (task reopened or reclaimed) |
+| `evidence-changed` | work or evidence changed after submission |
+| `not-independent` | decided by its own submitter or implementer |
+| `task-not-active` | the task is no longer in a state the approval covers |
+| `unknown-task` | targets a task that is not in the current plan |
+| `plan-scoped` | targets the plan, not a task |
+
+When the latest review for a task is `pending`, `changes-requested`, or
+`rejected`, that decision is included as an **`attested`** `review-decision`
+item (with its findings) and the older approval is excluded as `superseded`.
+A newer decision therefore never lets a stale approval look current, and a
+task that is reopened or whose evidence changes loses its verified review
+context until a fresh review is approved.
+
+Classification is read-only. Immutable review records are never modified,
+and the Feature 06 completion gate is unchanged — this classification mirrors
+it, it does not replace or relax it.
 
 Historical decision-log entries are **not** upgraded to verified facts.
 Repetition, model confidence, and self-evaluation never promote a claim.
