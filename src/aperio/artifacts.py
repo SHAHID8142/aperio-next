@@ -20,6 +20,11 @@ implements one policy for all of them:
    resolved parent must be that directory — traversal, absolute paths,
    malformed references, and links to outside files are rejected.
 
+The same exclusive-creation policy is reused for operator-visible output
+files (``publish_text_atomic``), so a command that writes a shareable
+artifact cannot follow a planted temporary path, truncate an existing file
+without an explicit overwrite, or lose a race with a concurrent writer.
+
 Residual hazard (documented, not hidden): without ``openat``-style
 traversal, check-then-create is not atomic against a hostile process
 running as the same user. The exclusive-create flag closes the practical
@@ -32,6 +37,7 @@ workspace.
 from __future__ import annotations
 
 import os
+import tempfile
 from pathlib import Path, PurePosixPath
 
 from aperio.errors import PathError, StateError
@@ -170,6 +176,111 @@ def create_exclusive_text(path: Path, text: str, *, what: str = "artifact") -> N
             f"cannot write {what} at {path}: {exc.strerror or exc}; the "
             "partial file created by this command was removed"
         ) from None
+
+
+def publish_text_atomic(
+    path: Path, text: str, *, force: bool = False, what: str = "output file"
+) -> None:
+    """Publish ``text`` at ``path`` without unsafe overwrites.
+
+    Policy (POSIX-first, with a documented fallback):
+
+    1. The destination leaf is rejected if it is a symlink or a non-regular
+       file, *before* anything is created (same rule as run artifacts).
+    2. The content is written to a uniquely named temporary file in the
+       destination directory, created with :func:`tempfile.mkstemp`
+       (``O_CREAT|O_EXCL``): a planted symlink or an existing leftover at any
+       guessed temporary name is never opened, followed, or truncated, and
+       concurrent commands cannot collide on the same name.
+    3. Without ``force`` the file is published with ``os.link``, which fails
+       atomically if the destination exists — so a destination created
+       *after* any earlier check is still never overwritten. Where hard links
+       are unavailable, the fallback re-checks existence immediately before
+       ``os.replace`` and refuses; that window is not atomic and is
+       documented rather than claimed.
+    4. With ``force`` the file is published with ``os.replace`` (atomic
+       replacement on POSIX; on Windows it fails cleanly if the destination
+       is open in another process).
+    5. Cleanup removes only the temporary file this call created (inode
+       re-check), so a file another writer swapped in is never deleted.
+
+    The published file is owner-readable/writable only (``0600``, as created
+    by ``mkstemp``): a pack can contain operator material, so it is not
+    world-readable by default.
+    """
+    _reject_unsafe_leaf(path, what)
+    if path.exists() and not force:
+        raise StateError(
+            f"cannot write {what} at {path}: the destination already exists; "
+            "pass --force to overwrite it"
+        )
+    try:
+        fd, temp_name = tempfile.mkstemp(
+            prefix=f".{path.name}.", suffix=".aperio-tmp", dir=str(path.parent)
+        )
+    except OSError as exc:
+        raise StateError(
+            f"cannot write {what} at {path}: {exc.strerror or exc}; nothing "
+            "was written"
+        ) from None
+    temp = Path(temp_name)
+    created = None
+    published = False
+    try:
+        created = os.fstat(fd)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            fd = -1
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        _publish_temp(temp, path, force=force, what=what)
+        published = True
+    except OSError as exc:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        if created is not None:
+            _unlink_if_same(temp, created)
+        raise StateError(
+            f"cannot write {what} at {path}: {exc.strerror or exc}"
+            + ("" if published else "; the destination was not written")
+        ) from None
+    finally:
+        if not published and created is not None:
+            _unlink_if_same(temp, created)
+
+
+def _publish_temp(temp: Path, path: Path, *, force: bool, what: str) -> None:
+    if force:
+        os.replace(temp, path)
+        return
+    try:
+        os.link(temp, path)
+    except FileExistsError:
+        raise StateError(
+            f"cannot write {what} at {path}: the destination already exists "
+            "(it was created after this command started); pass --force to "
+            "overwrite it"
+        ) from None
+    except OSError:
+        # Filesystems or platforms without hard links: fall back to a
+        # last-moment existence check plus replace. Not atomic, so it is
+        # documented in docs/goal-contract.md rather than presented as safe
+        # under a hostile racer.
+        if path.exists():
+            raise StateError(
+                f"cannot write {what} at {path}: the destination already "
+                "exists (it was created after this command started); pass "
+                "--force to overwrite it"
+            ) from None
+        os.replace(temp, path)
+        return
+    try:
+        temp.unlink()
+    except OSError:  # pragma: no cover - published copy already exists
+        pass
 
 
 def discard_created_file(path: Path, handle) -> None:

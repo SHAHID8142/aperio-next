@@ -90,6 +90,12 @@
   question needs no graph. Legacy plans, reviews, decisions, handoffs, and
   the portable archive are untouched; there is no migration and no new
   mandatory project file. See `docs/goal-contract.md`.
+  M2 gate fixes: `--output` now publishes through an exclusively created
+  temporary file with atomic no-clobber semantics (no symlink following, no
+  truncation, no concurrent overwrite, `.aperio/` and goal-file destinations
+  refused); goal requirements and constraints keep separate 50-item caps so
+  every valid goal converts; and a non-string `profile` is a normal
+  validation error rather than an exception.
 
 - **Known provider release blocker (unresolved, not part of M1/M2):**
   Feature 07 has a P1 metadata-bound mismatch. `adapters._bounded_usage()`

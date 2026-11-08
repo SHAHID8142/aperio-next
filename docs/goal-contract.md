@@ -54,13 +54,17 @@ silently drop a requirement.
 | `work` | no | object | Optional work decomposition (`tasks`). |
 | `provenance` | no | object | `source`: `operator`, `agent`, or `imported`; optional `note`. |
 
-`requirements` and `constraints` are kept distinct in the goal (they mean
-different things) and combined into the pack's single "Requirements and
-constraints" section so no requirement is represented twice in a pack.
+`requirements` and `constraints` are kept distinct in the goal and stay
+distinct in the context pack (rendered as two subsections of "Requirements
+and constraints"). They are never merged into one list, so neither cap can
+silently swallow the other's entries, and no requirement is represented
+twice.
 
 Bounds (all enforced before anything is written): goal file ≤ 64 KiB,
-objective ≤ 16 KiB, every other text field ≤ 8 KiB UTF-8, ≤ 50 entries per
-list, ≤ 200 tasks. Text must be valid UTF-8, must not contain NUL, and must
+objective ≤ 16 KiB, every other text field ≤ 8 KiB UTF-8, **≤ 50 entries per
+list** (so up to 50 requirements *and* up to 50 constraints — 100 items
+combined — are valid), ≤ 200 tasks. Every goal that passes `goal-check` can
+be converted by `goal-pack`; the two commands share the same bounds. Text must be valid UTF-8, must not contain NUL, and must
 use only `\n` line breaks (CR, NEL, U+2028/U+2029, and the ASCII separators
 are rejected by the same rule that guards decisions and handoffs).
 
@@ -164,8 +168,41 @@ aperio goal-pack  goal.json > pack.md
 - No plan, handoff, provider, model API, or code is required.
 - The default profile is `general`.
 - Output goes to stdout unless `--output FILE` is passed; writing a file is
-  the only filesystem effect, and only when explicitly requested
-  (`--force` to overwrite, symlink targets refused).
+  the only filesystem effect, and only when explicitly requested.
+
+### Output file safety (`--output`)
+
+`goal-pack --output` uses `artifacts.publish_text_atomic`, the same
+exclusive-creation policy as Aperio's run artifacts:
+
+- The content is written to a uniquely named temporary file created with
+  `tempfile.mkstemp` (`O_CREAT|O_EXCL`) in the destination directory. A
+  planted symlink or leftover file at any guessed temporary name is never
+  opened, followed, or truncated, and concurrent commands cannot collide on
+  a shared temporary path.
+- Without `--force` the file is published with `os.link`, which fails
+  atomically when the destination exists. A destination created *after* the
+  earlier existence check is therefore still never overwritten, including
+  under concurrent writers: exactly one of N racing commands wins.
+- With `--force` the file is published with `os.replace`, after the leaf is
+  proven not to be a symlink or non-regular file; a previous version is
+  replaced atomically.
+- Cleanup removes only the temporary file the current call created (inode
+  re-check), and a failed write leaves the previous destination untouched.
+- The destination is refused when its resolved form contains a `.aperio`
+  path component (Aperio-managed project state, including through a
+  symlinked directory) or when it is the goal document itself. A missing or
+  non-directory parent is refused.
+- Published files are created owner-readable/writable only (`0600`); a pack
+  may contain operator material, so it is not world-readable by default.
+
+Platform note: hard-link publication is atomic on POSIX filesystems that
+support links. Where links are unavailable (`EPERM`, `EOPNOTSUPP`, `EXDEV`,
+…), Aperio falls back to a last-moment existence check followed by
+`os.replace`; that path is not atomic against a hostile racer and is
+documented rather than claimed as safe. Windows replacement fails cleanly if
+the destination is open elsewhere. Aperio's local test evidence is macOS and
+Linux only; no Windows behaviour is claimed beyond that clean-failure path.
 
 ## Project-backed mode (Mode B)
 
@@ -192,7 +229,8 @@ reviews, or the portable archive.
 | --- | --- |
 | `objective` | goal `objective` |
 | `profile`, `profile_version` | goal `profile` |
-| `constraints` | `requirements` then `constraints` |
+| `requirements` | goal `requirements` (separate list) |
+| `constraints` | goal `constraints` (separate list) |
 | `assumptions`, `risks`, `quality_criteria` | same-named goal fields |
 | `output_contract.expected_output` | goal `intended_outcome` |
 | `output_contract.format` | goal `output_contract.format` |
@@ -206,6 +244,9 @@ Consequences of this mapping:
 - Nothing is counted twice: deliverables, acceptance criteria, and evidence
   requirements live in the goal block only; uncertainties appear only as
   missing information.
+- Requirements and constraints keep their own caps and their own rendering.
+  A pack produced without `requirements` (every M1 caller) is byte-identical
+  to before.
 - The pack keeps M1's reproducible content hash, whole-item byte budget,
   trust labels, and Markdown/JSON agreement. `goal-pack` output verifies
   against its own hash.

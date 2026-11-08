@@ -184,6 +184,16 @@ Key contracts:
   a reader. It creates no `plan.json`, no task lifecycle, no approval, and
   no attempt binding. Feature 03/06 governance remains exactly as shipped,
   and remains optional for standalone goals.
+- **Separate, equally bounded lists.** Goal requirements and constraints keep
+  their own ≤ 50-item caps and are rendered as distinct subsections; M1
+  callers that pass only `constraints` get byte-identical output, so no
+  historic pack changes and no requirement is merged, truncated, or dropped.
+- **Safe output publication.** `--output` goes through
+  `artifacts.publish_text_atomic`: exclusive `mkstemp` temporary creation
+  (never follows or truncates a planted temporary path), atomic
+  no-clobber publication via `os.link`, atomic replacement only with
+  `--force`, cleanup restricted to this call's own temporary file, and
+  refusal of `.aperio/` state paths and of the goal document itself.
 - **One canonical pack.** `build_goal_context_pack` feeds the M1 builder, so
   budget, trust, hashing, and Markdown/JSON agreement are inherited rather
   than reimplemented. Goal-only material lives in `content.goal`; profile

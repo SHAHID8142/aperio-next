@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -61,6 +62,7 @@ from aperio.context_pack import (
     read_utf8_text_file,
     render_context_pack_markdown,
 )
+from aperio.artifacts import publish_text_atomic
 from aperio.decisions import append_decision
 from aperio.goals import (
     GOAL_SCHEMA_VERSION,
@@ -1074,32 +1076,41 @@ def _cmd_goal_check(args) -> None:
     print("Build a pack: aperio goal-pack " + str(args.goal_file))
 
 
-def _write_pack_output(path: str, text: str, *, force: bool) -> None:
-    target = Path(path)
-    if target.is_symlink():
-        raise ValidationError(
-            "refusing to write through a symlink; pass a real file path"
-        )
+def _check_output_destination(raw: str, *, goal_path: str) -> Path:
+    """Validate a goal-pack output path before anything is written.
+
+    Refuses: a missing/non-directory parent, any path that resolves into
+    Aperio-managed project state (``.aperio/``, including via a symlinked
+    directory), and the goal document the pack was derived from. Symlink and
+    non-regular leaves are rejected later by the publishing primitive.
+    """
+    target = Path(raw)
     parent = target.parent
     if not parent.exists():
         raise ValidationError("output directory does not exist")
-    if target.exists() and not force:
+    if not parent.is_dir():
+        raise ValidationError("output path parent is not a directory")
+    resolved_parent = Path(os.path.realpath(parent))
+    resolved = resolved_parent / target.name
+    if APERIO_DIR_NAME in resolved.parts:
         raise ValidationError(
-            "output file already exists (use --force to overwrite)"
+            "refusing to write into Aperio project state: the output path "
+            f"resolves inside '{APERIO_DIR_NAME}/', which holds managed "
+            "project memory; choose a path outside it"
         )
-    temp = parent / f".{target.name}.aperio-tmp"
-    try:
-        with temp.open("w", encoding="utf-8", newline="\n") as handle:
-            handle.write(text)
-        temp.replace(target)
-    except OSError as exc:
-        try:
-            temp.unlink()
-        except OSError:
-            pass
+    if os.path.realpath(target) == os.path.realpath(goal_path):
         raise ValidationError(
-            f"cannot write output file: {exc.strerror or exc}"
-        ) from None
+            "refusing to overwrite the goal file with its own context pack; "
+            "choose a different --output path"
+        )
+    return target
+
+
+def _write_pack_output(
+    path: str, text: str, *, force: bool, goal_path: str
+) -> None:
+    target = _check_output_destination(path, goal_path=goal_path)
+    publish_text_atomic(target, text, force=force, what="context pack")
 
 
 def _cmd_goal_pack(args) -> None:
@@ -1135,7 +1146,9 @@ def _cmd_goal_pack(args) -> None:
         else render_context_pack_markdown(document)
     )
     if args.output:
-        _write_pack_output(args.output, text, force=args.force)
+        _write_pack_output(
+            args.output, text, force=args.force, goal_path=args.goal_file
+        )
         print(f"Wrote context pack to {args.output}")
         return
     sys.stdout.write(text)

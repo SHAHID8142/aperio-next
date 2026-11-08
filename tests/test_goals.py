@@ -26,6 +26,7 @@ from aperio.context_pack import (
 from aperio.errors import ValidationError
 from aperio.goals import (
     GOAL_SCHEMA_VERSION,
+    goal_suggestions,
     build_goal_context_pack,
     canonical_goal_bytes,
     describe_goal,
@@ -562,7 +563,9 @@ def test_goal_pack_preserves_objective_constraints_and_profile():
     content = build_goal_context_pack(result)["content"]
     assert content["objective"] == "Compare two venues"
     assert content["profile"] == {"id": "business", "version": 1}
-    assert content["constraints"] == ["Use the 2026 quotes", "Budget cap 5k"]
+    # Requirements and constraints stay distinct; neither is merged or dropped.
+    assert content["requirements"] == ["Use the 2026 quotes"]
+    assert content["constraints"] == ["Budget cap 5k"]
     assert content["assumptions"] == ["Venue A is available"]
     assert content["risks"] == ["Prices may rise"]
     assert content["quality_criteria"] == ["Show the arithmetic"]
@@ -989,3 +992,142 @@ def test_agent_objective_is_not_labelled_operator_written():
 def test_context_pack_rejects_an_unknown_objective_source():
     with pytest.raises(ValidationError, match="objective source must be one of"):
         build_context_pack("Do it", declared_objective_source="telepathy")
+
+
+# --------------------------------------------------------------------------
+# M2 gate P2: requirements + constraints must not collide with M1 list caps
+# --------------------------------------------------------------------------
+
+
+def test_more_requirements_than_one_capped_list_converts():
+    """26 requirements + 25 constraints used to fail after goal validation."""
+
+    result = goal(
+        requirements=[f"requirement {index}" for index in range(1, 27)],
+        constraints=[f"constraint {index}" for index in range(1, 26)],
+    )
+    assert len(result["requirements"]) == 26
+    assert len(result["constraints"]) == 25
+
+    pack = build_goal_context_pack(result)
+    content = pack["content"]
+    assert content["requirements"] == result["requirements"]
+    assert content["constraints"] == result["constraints"]
+    assert len(content["requirements"]) == 26
+    assert len(content["constraints"]) == 25
+    assert pack["content_sha256"] == context_content_sha256(content)
+
+    markdown = render_context_pack_markdown(pack)
+    assert "requirement 26" in markdown and "constraint 25" in markdown
+    requirements_at = markdown.index("Requirements (explicit operator asks)")
+    constraints_at = markdown.index("Constraints (limits the result must respect)")
+    assert requirements_at < constraints_at
+
+
+def test_full_per_list_cap_converts_without_truncation():
+    result = goal(
+        requirements=[f"r{index}" for index in range(50)],
+        constraints=[f"c{index}" for index in range(50)],
+    )
+    content = build_goal_context_pack(result)["content"]
+    assert len(content["requirements"]) == 50
+    assert len(content["constraints"]) == 50
+    assert content["requirements"][-1] == "r49"
+    assert content["constraints"][-1] == "c49"
+
+
+@pytest.mark.parametrize("field", ["requirements", "constraints"])
+def test_goal_validation_rejects_more_than_the_documented_cap(field):
+    with pytest.raises(ValidationError, match=f"goal.{field} must contain at most 50"):
+        validate_goal({**MINIMAL, field: ["x"] * 51})
+
+
+def test_requirements_only_goal_does_not_warn_about_missing_constraints():
+    pack = build_goal_context_pack(goal(requirements=["Do the thing"]))
+    codes = {warning["code"] for warning in pack["content"]["warnings"]}
+    assert "constraints_not_provided" not in codes
+
+
+def test_goal_without_requirements_or_constraints_still_warns():
+    pack = build_goal_context_pack(goal())
+    codes = {warning["code"] for warning in pack["content"]["warnings"]}
+    assert "constraints_not_provided" in codes
+
+
+def test_m1_context_pack_has_no_requirements_field():
+    """M1 callers see unchanged content when no requirements are supplied."""
+
+    content = build_context_pack("Objective", constraints=["only constraint"])["content"]
+    assert "requirements" not in content
+    markdown = render_context_pack_markdown(
+        build_context_pack("Objective", constraints=["only constraint"])
+    )
+    assert "Requirements (explicit operator asks)" not in markdown
+    assert "### Requirements" not in markdown
+
+
+def test_context_pack_keeps_requirements_and_constraints_distinct():
+    content = build_context_pack(
+        "Objective", requirements=["req a"], constraints=["con b"]
+    )["content"]
+    assert content["requirements"] == ["req a"]
+    assert content["constraints"] == ["con b"]
+
+
+def test_context_pack_requirements_are_capped_independently():
+    with pytest.raises(ValidationError, match="requirements must contain at most 50"):
+        build_context_pack("Objective", requirements=["r"] * 51)
+
+
+# --------------------------------------------------------------------------
+# M2 gate P2: malformed profile types and other malformed-type entry points
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "bad_profile",
+    [[], {}, None, True, False, 5, 1.5, ["general"], {"id": "general"}],
+)
+def test_malformed_profile_type_raises_validation_error(bad_profile):
+    with pytest.raises(ValidationError, match="goal.profile must be a string"):
+        validate_goal({**MINIMAL, "profile": bad_profile})
+    # The same document must also fail cleanly through the pack builder.
+    with pytest.raises(ValidationError, match="goal.profile"):
+        build_goal_context_pack({**MINIMAL, "profile": bad_profile})
+
+
+@pytest.mark.parametrize("name", ["General", "general ", "", "software2"])
+def test_unknown_profile_string_still_reports_the_allowed_set(name):
+    with pytest.raises(ValidationError, match="goal.profile must be one of"):
+        validate_goal({**MINIMAL, "profile": name})
+
+
+@pytest.mark.parametrize("bad", [None, [], "goal", 5, True])
+def test_entry_points_reject_non_object_goals_without_type_errors(bad):
+    """Public M2 helpers must fail closed, never with TypeError/AttributeError."""
+
+    for function in (
+        goal_completeness,
+        goal_content_sha256,
+        goal_identity,
+        goal_trust,
+        goal_suggestions,
+        describe_goal,
+        work_graph,
+        canonical_goal_bytes,
+    ):
+        with pytest.raises(ValidationError):
+            function(bad)
+
+
+def test_goal_check_cli_reports_malformed_profile_without_traceback(
+    run_cli, tmp_path
+):
+    path = tmp_path / "goal.json"
+    path.write_text(
+        json.dumps({**MINIMAL, "profile": ["general"]}), encoding="utf-8"
+    )
+    code, _out, err = run_cli("goal-check", str(path))
+    assert code == 1
+    assert "aperio: error: goal.profile" in err
+    assert "Traceback" not in err

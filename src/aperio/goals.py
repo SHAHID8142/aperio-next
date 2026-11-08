@@ -281,6 +281,10 @@ def validate_goal(data: object) -> dict:
             )
 
     profile = data.get("profile", DEFAULT_PROFILE)
+    if not isinstance(profile, str):
+        raise ValidationError(
+            "goal.profile must be a string; one of: " + ", ".join(PROFILES)
+        )
     if profile not in PROFILES:
         raise ValidationError(
             "goal.profile must be one of: " + ", ".join(PROFILES)
@@ -369,7 +373,13 @@ def load_goal_file(path: str | Path) -> dict:
 
 
 def canonical_goal_bytes(goal: dict) -> bytes:
-    """Canonical UTF-8 bytes used for the reproducible goal identity."""
+    """Canonical UTF-8 bytes used for the reproducible goal identity.
+
+    Accepts any goal document; it is validated (and normalized) first, so
+    malformed input raises ``ValidationError`` instead of a mapping or type
+    error.
+    """
+    goal = validate_goal(goal)
     return json.dumps(
         goal, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
@@ -382,13 +392,15 @@ def goal_content_sha256(goal: dict) -> str:
 
 def goal_identity(goal: dict) -> str:
     """Explicit ``goal_id`` when supplied, else a hash-derived identity."""
-    if goal.get("goal_id"):
+    goal = validate_goal(goal)
+    if goal["goal_id"]:
         return goal["goal_id"]
     return "GOAL-" + goal_content_sha256(goal)[:12]
 
 
 def goal_trust(goal: dict) -> str:
     """Trust tier implied by the declared provenance source."""
+    goal = validate_goal(goal)
     source = (goal.get("provenance") or {}).get("source", "operator")
     return SOURCE_TRUST.get(source, "imported")
 
@@ -400,6 +412,7 @@ def work_graph(goal: dict) -> dict:
     no dependencies. A goal without ``work`` yields ``{"tasks": []}`` plus a
     note that no decomposition was supplied — never an invented graph.
     """
+    goal = validate_goal(goal)
     work = goal.get("work")
     tasks = list((work or {}).get("tasks") or [])
     by_id = {task["id"]: task for task in tasks}
@@ -464,6 +477,7 @@ def goal_completeness(goal: dict) -> dict:
     Missing information is reported as missing. Nothing is filled in, and
     no suggested criterion is promoted into a requirement.
     """
+    goal = validate_goal(goal)
     missing = [
         {"field": field, "detail": detail}
         for field, detail in _COMPLETENESS_FIELDS
@@ -482,11 +496,13 @@ def goal_completeness(goal: dict) -> dict:
 
 def goal_suggestions(goal: dict) -> dict:
     """Profile suggestions, explicitly marked as non-requirements."""
-    return profile_suggestions(goal.get("profile") or DEFAULT_PROFILE)
+    goal = validate_goal(goal)
+    return profile_suggestions(goal["profile"])
 
 
 def describe_goal(goal: dict) -> dict:
     """Compact, machine-readable summary used by ``aperio goal-check``."""
+    goal = validate_goal(goal)
     return {
         "goal_identity": goal_identity(goal),
         "goal_sha256": goal_content_sha256(goal),
@@ -508,6 +524,7 @@ def describe_goal(goal: dict) -> dict:
 def goal_block(goal: dict) -> dict:
     """Provider-neutral goal metadata embedded in a context pack."""
 
+    goal = validate_goal(goal)
     profile = goal["profile"]
     return {
         "goal_id": goal["goal_id"],
@@ -530,6 +547,7 @@ def goal_block(goal: dict) -> dict:
 def goal_warnings(goal: dict) -> list[dict]:
     """Warnings the context pack must carry about the goal itself."""
 
+    goal = validate_goal(goal)
     source = (goal.get("provenance") or {}).get("source", "operator")
     if source == "operator":
         return []
@@ -569,10 +587,8 @@ def build_goal_context_pack(
         budget_bytes=(
             DEFAULT_BUDGET_BYTES if budget_bytes is None else budget_bytes
         ),
-        constraints=[
-            *normalized["requirements"],
-            *normalized["constraints"],
-        ],
+        constraints=normalized["constraints"],
+        requirements=normalized["requirements"],
         assumptions=normalized["assumptions"],
         risks=normalized["risks"],
         quality_criteria=normalized["quality_criteria"],

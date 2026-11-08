@@ -421,6 +421,13 @@ aperio goal-pack brief.json ./my-project
 aperio profiles --json
 ```
 
+- Requirements and constraints stay separate all the way through (each may
+  hold up to 50 entries), so a large goal cannot fail conversion because two
+  bounded lists were merged into one.
+- `--output FILE` publishes atomically through an exclusively created
+  temporary file: no symlink is followed, no existing file is truncated
+  without `--force`, concurrent writers cannot overwrite each other, and
+  paths inside `.aperio/` or the goal document itself are refused.
 - Profiles — `general` (default), `design`, `research`, `writing`,
   `business`, `software` — are data only. Their criteria are suggestions,
   shown separately from operator requirements, and never gate approval or

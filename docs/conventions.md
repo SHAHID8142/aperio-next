@@ -113,6 +113,15 @@
 - Never commit secrets, credentials, tokens, private client information, or
   machine-specific configuration to this repository.
 
+## Output publication
+
+Any command that writes an operator-visible file (not project state) uses
+`artifacts.publish_text_atomic`: exclusive temporary creation, atomic
+no-clobber publication, `--force` for an explicit atomic replacement, and
+cleanup of only the file the call created. Do not open a predictable
+temporary path, and do not implement check-then-write publication — a
+concurrent creator must not be able to lose its file to us.
+
 ## Testing
 
 - Every feature ships with tests in the same change. No test is marked

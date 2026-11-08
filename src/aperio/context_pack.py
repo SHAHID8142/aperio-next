@@ -893,6 +893,7 @@ def build_context_pack(
     proposed_items: Sequence[ContextItem] = (),
     goal_context: dict | None = None,
     declared_objective_source: str | None = None,
+    requirements: Sequence[str] = (),
 ) -> dict:
     """Build a canonical context-pack document.
 
@@ -901,6 +902,11 @@ def build_context_pack(
     workspace is strictly read-only. The returned document contains both
     reproducible content identity and generation metadata; render the
     Markdown from this same document so the two views cannot drift.
+
+    ``requirements`` is an optional second list, kept separate from
+    ``constraints`` so the M2 goal layer can preserve that distinction in the
+    canonical goal without merging the two into one capped list. When it is
+    empty the produced pack is byte-identical to earlier M1 output.
 
     ``declared_objective_source`` records *who declared* an explicitly
     supplied objective (``operator`` by default). The M2 goal layer uses it so
@@ -961,6 +967,7 @@ def build_context_pack(
         else None
     )
     constraints_list = _clean_list(constraints, "constraints")
+    requirements_list = _clean_list(requirements, "requirements")
     assumptions_list = _clean_list(assumptions, "assumptions")
     risks_list = _clean_list(risks, "risks")
     quality_list = _clean_list(quality_criteria, "quality criteria")
@@ -979,7 +986,7 @@ def build_context_pack(
         _clean_text(audience, "audience") if audience is not None else None
     )
 
-    if not constraints_list:
+    if not constraints_list and not requirements_list:
         _warn(
             warnings,
             "constraints_not_provided",
@@ -1155,6 +1162,8 @@ def build_context_pack(
         },
         "warnings": warnings,
     }
+    if requirements_list:
+        content["requirements"] = requirements_list
     if goal_context is not None:
         if not isinstance(goal_context, dict):
             raise ValidationError("goal_context must be an object")
@@ -1219,6 +1228,29 @@ def _quote_data(text: str) -> str:
 
 def _optional(value: str | None) -> str:
     return value if value is not None else "Not provided."
+
+
+def _requirements_section(content: dict) -> list[str]:
+    """Body of the requirements/constraints section.
+
+    Packs without separately supplied requirements render exactly as before;
+    with them, the two are shown as distinct subsections instead of being
+    merged into one list.
+    """
+
+    requirements = content.get("requirements") or []
+    constraints = content.get("constraints") or []
+    if not requirements:
+        return [_markdown_list(constraints)]
+    return [
+        "Requirements (explicit operator asks):",
+        "",
+        _markdown_list(requirements),
+        "",
+        "Constraints (limits the result must respect):",
+        "",
+        _markdown_list(constraints),
+    ]
 
 
 def _goal_markdown(content: dict) -> list[str]:
@@ -1388,7 +1420,7 @@ def render_context_pack_markdown(document: dict) -> str:
         "",
         "## Requirements and constraints",
         "",
-        _markdown_list(content["constraints"]),
+        *_requirements_section(content),
         "",
         "## Assumptions",
         "",
