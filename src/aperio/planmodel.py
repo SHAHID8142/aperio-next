@@ -478,11 +478,30 @@ def _validate_stored_task(task: object, where: str, path) -> None:
             f"{path} is corrupt: {where}.verification.result must be null, 'passed' or 'failed'"
         )
     if status == "completed":
-        if result != "passed" or not (isinstance(verification.get("evidence"), str)
-                                      and verification["evidence"].strip()):
+        # A stored completion must carry a COMPLETE verification record:
+        # result exactly "passed", non-empty evidence and limitations, and
+        # a timestamp in the project's ISO-8601 UTC convention. Missing,
+        # null, wrong-typed, or malformed fields are damage.
+        missing_or_invalid = []
+        if result != "passed":
+            missing_or_invalid.append(f"result must be 'passed' (got {result!r})")
+        for key in ("evidence", "limitations"):
+            value = verification.get(key)
+            if not isinstance(value, str) or not value.strip():
+                missing_or_invalid.append(f"{key} must be a non-empty string")
+        verified_at = verification.get("verified_at")
+        if not isinstance(verified_at, str) or not re.fullmatch(
+            r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", verified_at
+        ):
+            missing_or_invalid.append(
+                "verified_at must be ISO-8601 UTC with a 'Z' suffix "
+                f"(got {verified_at!r})"
+            )
+        if missing_or_invalid:
             raise StateError(
-                f"{path} is corrupt: completed task {task['id']} needs passed "
-                "verification with evidence"
+                f"{path} is corrupt: completed task {task['id']} has an "
+                "incomplete verification record — "
+                + "; ".join(missing_or_invalid)
             )
 
 

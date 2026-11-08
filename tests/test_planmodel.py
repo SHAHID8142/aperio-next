@@ -579,3 +579,70 @@ def test_stored_impossible_approval_metadata_rejected():
     # plan_version is 1: approval of revision 5 is impossible.
     with pytest.raises(StateError, match="approved_revision"):
         validate_plan_document(doc, "plan.json")
+
+
+# --- Fix 2: complete stored verification records (fail-first regressions) --------
+
+PASSED_VERIFICATION = {
+    "evidence": "tests green", "limitations": "flaky on windows",
+    "result": "passed", "verified_at": "2026-01-01T00:00:00Z",
+}
+
+
+@pytest.mark.parametrize(
+    "verification",
+    [
+        # missing individual fields / nulls / empty / wrong types / malformed
+        {"evidence": None, "limitations": PASSED_VERIFICATION["limitations"],
+         "result": "passed", "verified_at": PASSED_VERIFICATION["verified_at"]},
+        {"evidence": "", "limitations": "l", "result": "passed",
+         "verified_at": "2026-01-01T00:00:00Z"},
+        {"evidence": 5, "limitations": "l", "result": "passed",
+         "verified_at": "2026-01-01T00:00:00Z"},
+        {"evidence": "e", "limitations": None, "result": "passed",
+         "verified_at": "2026-01-01T00:00:00Z"},
+        {"evidence": "e", "limitations": "l", "result": "passed"},
+        {"evidence": "e", "limitations": "l", "result": "passed",
+         "verified_at": None},
+        {"evidence": "e", "limitations": "l", "result": "passed",
+         "verified_at": "2026-01-01 00:00:00"},
+        {"evidence": "e", "limitations": "l", "result": "passed",
+         "verified_at": "not-a-timestamp"},
+        {"evidence": "e", "limitations": "l", "result": None,
+         "verified_at": "2026-01-01T00:00:00Z"},
+        {"evidence": "e", "limitations": "l", "result": "failed",
+         "verified_at": "2026-01-01T00:00:00Z"},
+        {"evidence": "e", "limitations": "l", "result": "PASSED",
+         "verified_at": "2026-01-01T00:00:00Z"},
+        {"evidence": "e", "limitations": "l", "result": True,
+         "verified_at": "2026-01-01T00:00:00Z"},
+    ],
+)
+def test_stored_completed_task_requires_complete_verification(verification):
+    """Every incomplete or malformed verification combination is refused
+    for a stored completed task."""
+    doc = stored_plan(
+        tasks=[stored_task("TASK-001", status="completed", verification=verification)]
+    )
+    with pytest.raises(StateError, match="verification"):
+        validate_plan_document(doc, "plan.json")
+
+
+def test_stored_completed_task_with_complete_verification_accepted():
+    doc = stored_plan(
+        tasks=[stored_task("TASK-001", status="completed",
+                           verification=PASSED_VERIFICATION)]
+    )
+    validate_plan_document(doc, "plan.json")  # must not raise
+
+
+def test_stored_in_progress_task_keeps_failed_record():
+    """In-progress tasks may record failed verification attempts."""
+    doc = stored_plan(
+        tasks=[stored_task(
+            "TASK-001", status="in-progress", owner="a",
+            verification={"evidence": "attempt 1", "limitations": "flaky",
+                          "result": "failed", "verified_at": "2026-01-01T00:00:00Z"},
+        )]
+    )
+    validate_plan_document(doc, "plan.json")

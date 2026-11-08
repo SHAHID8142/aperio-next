@@ -929,3 +929,162 @@ def test_blocked_and_completed_dependency_cases(run_cli, project_dir):
     )
     summary = plan_summary(aperio_dir)
     assert summary["executable_task_ids"] == ["TASK-002"]  # completed dep
+
+
+# --- Fix 1: unknown per-task extension metadata survives revisions --------------
+
+
+def _add_task_metadata(aperio_dir, task_id, metadata):
+    plan_file = aperio_dir / "plan.json"
+    document = json.loads(plan_file.read_text())
+    for task in document["tasks"]:
+        if task["id"] == task_id:
+            task.update(metadata)
+    plan_file.write_text(json.dumps(document, ensure_ascii=False))
+
+
+METADATA = {
+    "orchestrator_note": {"nested": [1, 2, {"deep": True}], "none": None},
+    "attempt_count": 3,
+    "ratio": 0.5,
+    "flag": False,
+    "tags": ["a", "b"],
+}
+
+
+def test_extension_metadata_survives_revise_for_pending_task(
+    run_cli, project_dir
+):
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    _create(aperio_dir)
+    _add_task_metadata(aperio_dir, "TASK-001", METADATA)
+    revised = _revised_content(
+        PLAN_INPUT, "TASK-001", title="renamed (pending task)"
+    )
+    revise_plan(aperio_dir, revised, revises=1)
+    task = next(
+        t for t in read_plan(aperio_dir)["tasks"] if t["id"] == "TASK-001"
+    )
+    for key, expected in METADATA.items():
+        assert task[key] == expected, f"metadata {key} lost or changed"
+        assert type(task[key]) is type(expected), f"{key} changed JSON type"
+
+
+def test_extension_metadata_survives_revise_for_in_progress_task(
+    run_cli, project_dir
+):
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    _create(aperio_dir)
+    approve_plan(aperio_dir)
+    update_task(aperio_dir, "TASK-001", new_status="in-progress", owner="a")
+    _add_task_metadata(aperio_dir, "TASK-001", METADATA)
+    revised = _revised_content(
+        PLAN_INPUT, "TASK-001", title="renamed (in-progress task)"
+    )
+    revise_plan(aperio_dir, revised, revises=2)
+    task = next(
+        t for t in read_plan(aperio_dir)["tasks"] if t["id"] == "TASK-001"
+    )
+    for key, expected in METADATA.items():
+        assert task[key] == expected
+    assert task["status"] == "in-progress"  # lifecycle still carried
+
+
+def test_extension_metadata_survives_revise_for_completed_task(
+    run_cli, project_dir
+):
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    _create(aperio_dir)
+    approve_plan(aperio_dir)
+    update_task(aperio_dir, "TASK-001", new_status="in-progress", owner="a")
+    update_task(
+        aperio_dir, "TASK-001", new_status="completed",
+        evidence="e", limitations="l", result="passed",
+    )
+    _add_task_metadata(aperio_dir, "TASK-001", METADATA)
+    revised = _revised_content(
+        PLAN_INPUT, "TASK-001", title="renamed (completed task)"
+    )
+    revise_plan(aperio_dir, revised, revises=3)
+    task = next(
+        t for t in read_plan(aperio_dir)["tasks"] if t["id"] == "TASK-001"
+    )
+    for key, expected in METADATA.items():
+        assert task[key] == expected
+    assert task["verification"]["result"] == "passed"  # evidence intact
+
+
+def test_removed_task_metadata_never_reassigned(run_cli, project_dir):
+    """Metadata belongs to its task: a removed pending task's extension
+    keys must not appear on surviving tasks."""
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    _create(aperio_dir)
+    _add_task_metadata(aperio_dir, "TASK-001", METADATA)
+    revised = json.loads(json.dumps(PLAN_INPUT))
+    revised["tasks"] = [revised["tasks"][1]]  # drop TASK-001 (pending: ok)
+    revised["tasks"][0]["depends_on"] = []
+    revise_plan(aperio_dir, revised, revises=1)
+    survivor = next(
+        t for t in read_plan(aperio_dir)["tasks"] if t["id"] == "TASK-002"
+    )
+    for key in METADATA:
+        assert key not in survivor
+
+
+def test_strict_input_rejection_unchanged(run_cli, project_dir, tmp_path):
+    """Extension preservation is on-disk only: author-supplied input still
+    rejects unknown keys (no weakening of strict validation)."""
+    run_cli("init", str(project_dir))
+    bad = json.loads(json.dumps(PLAN_INPUT))
+    bad["tasks"][0]["orchestrator_note"] = {"x": 1}
+    input_file = tmp_path / "bad-plan.json"
+    input_file.write_text(json.dumps(bad))
+    with pytest.raises(ValidationError, match="orchestrator_note"):
+        create_plan(project_dir / ".aperio", bad)
+
+
+# --- Fix 3: accurate revision guidance ------------------------------------------
+
+
+def test_material_change_guidance_names_working_workflow(run_cli, project_dir):
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    _create(aperio_dir)
+    approve_plan(aperio_dir)
+    _start_and_complete(aperio_dir, "TASK-001")
+    revised = _revised_content(
+        PLAN_INPUT, "TASK-001", acceptance_criteria=["NEW criteria"]
+    )
+    with pytest.raises(StateError, match="Return the task to 'pending'"):
+        revise_plan(aperio_dir, revised, revises=3)
+
+
+def test_guided_reopen_chain_actually_allows_revision(run_cli, project_dir):
+    """The workflow the guidance names must actually succeed: reopen the
+    completed task, block, unblock (now pending), then the material
+    revision is accepted."""
+    run_cli("init", str(project_dir))
+    aperio_dir = project_dir / ".aperio"
+    _create(aperio_dir)
+    approve_plan(aperio_dir)
+    _start_and_complete(aperio_dir, "TASK-001")
+    revised = _revised_content(
+        PLAN_INPUT, "TASK-001", acceptance_criteria=["NEW criteria"]
+    )
+    with pytest.raises(StateError, match="Return the task to 'pending'"):
+        revise_plan(aperio_dir, revised, revises=3)
+    # The guided chain: reopen -> block -> unblock -> revise.
+    update_task(aperio_dir, "TASK-001", new_status="in-progress",
+                owner="agent-x", reopen=True)
+    update_task(aperio_dir, "TASK-001", new_status="blocked", reason="revising")
+    update_task(aperio_dir, "TASK-001", new_status="pending")
+    # Each lifecycle transition bumps plan_version; the agent re-reads
+    # (plan-show --json) and declares the post-chain version.
+    document = revise_plan(aperio_dir, revised, revises=6)
+    task = next(t for t in document["tasks"] if t["id"] == "TASK-001")
+    assert task["status"] == "pending"  # revise leaves the task pending
+    assert task["verification"]["result"] is None  # cleared by reopen chain

@@ -289,9 +289,12 @@ topologically. Full schema: see `aperio/planmodel.py` and the README.
   (objective, deliverables, acceptance criteria, or dependencies) to a
   non-pending task is **refused** with actionable guidance: the previous
   verification evidence must not appear valid for a different contract.
-  Resolution is deliberate — reopen the task (`task-status --reopen`,
-  clearing the evidence) or assign a new task id; existing evidence is
-  preserved, never discarded automatically. The comparison is exact
+  Resolution is deliberate — return the task to `pending` through
+  explicit lifecycle transitions (reopen if completed, then block and
+  unblock) or assign a new task id; existing evidence is preserved,
+  never discarded automatically. Each transition in the chain bumps
+  `plan_version`, and a draft plan additionally requires re-approval
+  before execution tracking resumes. The comparison is exact
   equality, so visually-identical-but-differently-normalized edits
   (unicode normalization forms, list ordering) are also treated as
   material — refuse-and-preserve is the safe direction. New tasks start pending;

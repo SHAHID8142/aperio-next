@@ -269,7 +269,11 @@ def _empty_approval() -> dict:
     }
 
 
-def _carry_lifecycle(old_tasks: list[dict], new_tasks: list[dict]) -> tuple[list[dict], list[str]]:
+def _carry_lifecycle(
+    old_tasks: list[dict],
+    new_tasks: list[dict],
+    approval_status: str = "approved",
+) -> tuple[list[dict], list[str]]:
     """Carry system-managed lifecycle state from the old document.
 
     Surviving task ids keep status/owner/blocked_reason/verification
@@ -322,12 +326,30 @@ def _carry_lifecycle(old_tasks: list[dict], new_tasks: list[dict]) -> tuple[list
                         f"{old['status']} task {task['id']} "
                         f"(changed: {', '.join(material)}); its recorded "
                         "lifecycle state and verification evidence would "
-                        "no longer match the new contract. Reopen it "
-                        "deliberately first ('aperio task-status ... "
-                        "--status in-progress --reopen') or assign a new "
-                        "task id. Nothing was modified."
+                        "no longer match the new contract. Return the task "
+                        "to 'pending' through explicit lifecycle "
+                        "transitions first (reopen if completed, then "
+                        "block and unblock), or assign a new task id — "
+                        "either way the old verification evidence stays "
+                        "recoverable in the plan file until you decide. "
+                        + (
+                            "Note: the plan is currently in draft; "
+                            "re-approve it (aperio plan-approve) before "
+                            "resuming execution tracking. "
+                            if approval_status != "approved"
+                            else "Note: each guided transition changes "
+                            "plan_version — re-read the plan (aperio "
+                            "plan-show --json) and declare the new version "
+                            "when revising. "
+                        )
+                        + "Nothing was modified."
                     )
-            carried = dict(task)
+            # Merge onto the OLD stored task so unknown compatible
+            # extension fields (and their nested values) survive the
+            # revision untouched; the new input replaces only the known
+            # content fields, and lifecycle fields stay Aperio-controlled.
+            carried = dict(old)
+            carried.update(task)
             for key in TASK_SYSTEM_KEYS:
                 carried[key] = old[key]
             merged.append(carried)
@@ -503,7 +525,9 @@ def revise_plan(aperio_dir: Path, content: dict, revises: int) -> dict:
                 "and retry. Nothing was modified."
             )
         merged_tasks, _removed = _carry_lifecycle(
-            snapshot["tasks"], plan_content["tasks"]
+            snapshot["tasks"],
+            plan_content["tasks"],
+            approval_status=snapshot["approval"]["status"],
         )
         new_document = dict(snapshot)  # preserves unknown keys
         new_document.update(plan_content)
