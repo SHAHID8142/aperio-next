@@ -758,8 +758,11 @@ def _finalize_startup_failure(
 
 def _with_note(exc: AperioError, note: str) -> AperioError:
     """Re-raise an actionable Aperio error of the same class plus a note."""
+    base = str(exc).rstrip()
+    if base and base[-1] not in ".!?":
+        base += "."  # keep the two sentences readable on one line
     try:
-        return type(exc)(f"{exc} {note}")
+        return type(exc)(f"{base} {note}")
     except Exception:  # pragma: no cover - all AperioError types take one arg
         return exc
 

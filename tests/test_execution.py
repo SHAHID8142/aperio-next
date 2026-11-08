@@ -1449,6 +1449,7 @@ def test_manual_handoff_symlinked_parent_fails_run_and_releases_claim(
         dispatch_task(aperio_dir, "TASK-001", adapter_id="manual",
                       config=None, authorize_exec=False)
     assert "returned to pending" in str(caught.value)
+    assert "repair. The task claim" in str(caught.value)  # readable join
     assert list(outside.iterdir()) == []
     run = read_executions(aperio_dir)["runs"][0]
     assert run["run_id"] == "RUN-0001"
