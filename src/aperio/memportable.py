@@ -39,7 +39,7 @@ from aperio.memstore import (
     MemoryStore,
     SENSITIVITY_LEVELS,
     SENSITIVITY_RANK,
-    is_active,
+    is_current,
     memory_content_sha256,
     memory_identity,
     validate_memory_record,
@@ -162,7 +162,9 @@ def export_memories(
             tag.lower() for tag in snapshot["tags"]
         }:
             continue
-        if not include_inactive and not is_active(snapshot):
+        # Current applicability, not just "not retracted": a memory that has
+        # not started or has expired is not exported as current knowledge.
+        if not include_inactive and not is_current(snapshot):
             continue
         if snapshot["sensitivity"] == "private":
             if not include_private:
@@ -374,6 +376,28 @@ def import_memories(
             report["excluded_sensitivity"].append(memory_id)
             continue
         if memory_id in existing:
+            stored = existing[memory_id]
+            if stored.get("sensitivity") != record["sensitivity"]:
+                # Same knowledge, different classification. Never let the
+                # stored (possibly less private) value stand as if the file
+                # agreed with it.
+                report["conflicts"].append(
+                    {
+                        "incoming_memory_id": memory_id,
+                        "existing_memory_id": memory_id,
+                        "title": record["title"],
+                        "reason": (
+                            "duplicate content with a different sensitivity: "
+                            f"stored {stored.get('sensitivity')!r}, file "
+                            f"{record['sensitivity']!r}"
+                        ),
+                        "resolution": (
+                            "review the stored memory and correct its "
+                            "sensitivity by retracting and re-proposing"
+                        ),
+                    }
+                )
+                continue
             report["duplicates"].append(memory_id)
             continue
         conflict = _subject_conflict(existing, record)

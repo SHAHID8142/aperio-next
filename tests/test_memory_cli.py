@@ -132,7 +132,7 @@ def test_review_accept_then_verify_then_retract(tmp_path: Path, capsys) -> None:
     assert code == 0 and "attested" in out
     code, out, _ = run_cli(
         capsys, "mem-review", str(store), mid, "--verify",
-        "--evidence", "brand guide v3, page 4",
+        "--evidence", "brand guide v3, page 4", "--actor", "reviewer",
     )
     assert code == 0 and "verified" in out
     code, out, _ = run_cli(

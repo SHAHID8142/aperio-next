@@ -475,11 +475,16 @@ decisions, observations, limitations, lessons, conventions, proposals, and
 outcomes. It needs no project, plan, git repository, provider, or API key.
 
 Every record starts `proposed`. Only an explicit review makes it `attested`
-(accepted as authoritative *for its scope*) or `verified` (evidence recorded).
-Acceptance is not factual proof, imports never raise trust, and nothing is
-promoted automatically. Retrieval is deterministic keyword + scope + review
-state ranking with explicit exclusion reasons and whole-item budgeting — no
-embeddings, no model scores, no network.
+(accepted as authoritative *for its scope*) or `verified`. Verification
+requires at least one evidence reference and a declared reviewer, and refuses
+a reviewer identical to the declared proposer; identifiers are attribution,
+not authentication. Acceptance is not factual proof, imports never raise
+trust, and nothing is promoted automatically. Retrieval is deterministic
+keyword + scope + review state ranking with explicit exclusion reasons and
+whole-item budgeting — no embeddings, no model scores, no network. Validity
+windows (`valid_from`/`valid_until`) are evaluated on every read against
+today unless `--as-of` is given, so stale knowledge drops out of recall and
+packs without any extra flag.
 
 `--memory-store` adds retrieved memory to a context pack as quoted data after
 operator context, with its trust label, review state, and identity. Without

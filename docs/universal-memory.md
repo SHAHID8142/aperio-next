@@ -73,6 +73,17 @@ timestamps, actors, paths, and versions are excluded, so:
 - re-proposing identical content is a no-op that reports the existing record;
 - a review never changes identity.
 
+Because identity is content-derived, `sensitivity`, `valid_from`, and
+`valid_until` are **not** part of it. Re-proposing the same content with a
+different classification or validity window therefore fails closed with an
+explanatory error instead of silently keeping the older value: that would let
+a memory stay less private than its author believes, or keep an outdated
+window. Correct a classification by retracting the memory and proposing the
+corrected record (or by changing the content so the two are distinguishable).
+The same check appears when an import brings identical content with a
+different sensitivity: it is reported as a conflict, never skipped as a
+harmless duplicate.
+
 Event timestamps stay separate from reproducible content identity.
 
 ## Trust and review states
@@ -81,7 +92,7 @@ Event timestamps stay separate from reproducible content identity.
 | --- | --- | --- |
 | `proposed` | `proposed` | stored, unreviewed; a claim or suggestion |
 | `attested` | `attested` | the operator accepted it as authoritative **for its scope** |
-| `verified` | `verified` | independent evidence was recorded as supporting it |
+| `verified` | `verified` | evidence was recorded as supporting it (see below) |
 | `superseded` | — | replaced by a newer memory |
 | `retracted` | — | wrong or no longer applicable |
 | `expired` | — | `valid_until` has passed (derived, not stored) |
@@ -112,6 +123,46 @@ Known limitations, stated honestly:
 - Aperio does not verify the content of evidence references; it records that
   the operator supplied them.
 
+### What `verify` actually requires
+
+`aperio mem-review --verify` is a claim of support, so it fails closed unless
+all three conditions hold:
+
+1. at least one non-empty `--evidence` reference (something a reviewer could
+   check — the tool stores the reference, it never fetches it);
+2. a declared `--actor` reviewer identifier;
+3. the reviewer identifier differs from the memory's declared proposer when a
+   proposer was recorded.
+
+The transition records the reviewer, the evidence, and the exact from/to
+state in the append-only history. A record's snapshot then carries a
+`verification` block naming its basis:
+
+| `verification.basis` | Meaning |
+| --- | --- |
+| `evidence` | a `verify` transition recorded at least one evidence reference |
+| `unrecorded` | marked verified without evidence (always pre-gate history) |
+| `not-verified` | the record is proposed or attested, not verified |
+
+Acceptance is **not** verification: `--accept` records that the operator
+accepts the claim as authoritative for its scope, keeps `basis:
+not-verified`, and never raises the trust label to `verified`.
+
+**Honest limits.** An actor id is a declaration, not authentication: Aperio
+cannot prove who ran a review or that a reviewer was independent, so the
+stored guarantee is *declared separation of identifiers*, not proven
+independence. The tool also cannot check that the cited evidence exists or
+supports the claim.
+
+**Legacy histories.** A `verify` event written before these rules existed is
+never rewritten or reinterpreted: the store still reports `state: verified`
+and the original event, but the snapshot reports `basis: unrecorded`,
+`downgraded: true`, and a trust label of `attested`. Retrieval ranks and
+labels it as attested and raises `memory_verification_unrecorded`, so an
+unsupported old claim can never read as evidence-backed. Re-running
+`--verify` with evidence and a reviewer records a new transition (allowed
+even from `verified`) and restores the evidence-backed label.
+
 ## Retrieval
 
 ```sh
@@ -133,16 +184,41 @@ Selection is deterministic and inspectable:
 4. **Freshness and budget.** Recency breaks ties; memories are included
    whole or excluded, never truncated.
 
-Every exclusion is counted with a reason: `state`, `expired`, `sensitivity`,
-`scope`, `tag`, `no-match`, `budget`, `limit`, `duplicate`, `oversize`.
+Every exclusion is counted with a reason: `state`, `expired`, `future`,
+`sensitivity`, `scope`, `tag`, `no-match`, `budget`, `limit`, `duplicate`,
+`oversize`.
+
+### Time applicability
+
+Validity is evaluated on **every** read, not only when a date is supplied:
+
+- no `--as-of` means *today* (UTC), so `valid_until`/`valid_from` apply to
+  ordinary recall, packs, and exports without any extra flag;
+- `--as-of YYYY-MM-DD` makes the answer reproducible for a historical date;
+  the report echoes `as_of` and the rule it applied;
+- both bounds are **inclusive**: a memory is current from the start of
+  `valid_from` through the end of `valid_until`;
+- dates are validated strictly, so a typo fails with a single-line error
+  instead of silently disabling expiry;
+- out-of-window memories are excluded whatever their review state, and are
+  counted as `expired` or `future`, never dropped silently;
+- stored records are never rewritten as time passes: expiry is derived at
+  read time, so an old store reopened later shows the same raw records and a
+  different derived view. `mem-list` and `mem-show` show the derived reason
+  and the date it was evaluated against.
 
 Behaviour worth knowing:
 
 - retracted, superseded, and expired memories never appear in normal recall;
 - unreviewed memories can appear (as proposals) and raise a
   `memory_unreviewed_selected` warning;
-- `private` memories are excluded unless `--max-sensitivity private` is
-  passed, and even then they are marked local-only in a pack;
+- `private` memories are excluded from recall unless
+  `--max-sensitivity private` is passed, and they are **never** written into a
+  context pack or an exchange file by default: a pack is a shareable artifact,
+  so `private` content stays local to `mem-list`/`mem-show`/`mem-recall`
+  output. `mem-export` needs both `--include-private` and
+  `--max-sensitivity private`, and a pack reports the exclusion as
+  `sensitivity` rather than quoting the content;
 - conflicts are shown, not resolved: two selected memories with the same
   scope and title but different content raise `memory_conflict` with both ids
   and no automatic winner;
@@ -210,6 +286,16 @@ Import rules:
 A hash proves the bytes were not altered. It says nothing about who wrote
 them or whether the claim is true.
 
+### What the chain hash does and does not prove
+
+Each line carries a SHA-256 over its own content plus the previous line's
+hash. That detects edits, reordering, mid-line truncation, and insertion. It
+cannot detect the removal of one or more **complete final records**: a prefix
+of a valid chain is itself a valid chain. Detecting that requires an external
+anchor (a recorded head hash, a signature, or a copy elsewhere), which this
+format does not have. The chain is corruption detection, never
+authentication, and it proves neither authorship nor completeness.
+
 ## Which artifact is authoritative
 
 | Information | Authoritative artifact |
@@ -225,6 +311,28 @@ Memory never duplicates an authority: a memory that restates a decision is a
 separate, reviewable note, and the decision log remains the record of what was
 decided. Legacy records are never migrated, rewritten, or interpreted by the
 memory layer.
+
+## Append safety and durability
+
+Events are appended to the existing store through a single verified
+descriptor:
+
+- the file is opened without following symlinks (`O_NOFOLLOW` where the
+  platform provides it), and the opened descriptor is proven to be the same
+  `(device, inode)` that was just validated, so a file swapped in between the
+  check and the open is refused instead of written to;
+- the hash chain is re-read and re-verified *through that descriptor* before
+  anything is appended;
+- the payload is written in a loop until every byte is accepted: short
+  writes are retried, a zero-byte write is a hard failure, and an I/O error is
+  reported as possible damage rather than as a completed transition;
+- `fsync` flushes the file's contents before success is reported.
+
+The durability guarantee stops there. Aperio does **not** promise crash or
+power-loss atomicity: the directory entry that creates a new store is not
+flushed, and no filesystem journal is inspected. A store left with an
+incomplete final line refuses further appends until it is inspected and
+repaired by hand; the existing complete records stay readable.
 
 ## Recovery and failure behaviour
 
@@ -251,11 +359,11 @@ memory layer.
 | Command | Purpose |
 | --- | --- |
 | `aperio mem-propose --store F --type T --title S --content C` | add a proposed memory |
-| `aperio mem-review STORE MEMORY_ID --accept\|--verify\|--retract\|--supersede` | record a review decision |
-| `aperio mem-list STORE [--include-inactive] [--max-sensitivity L] [--json]` | list memories and states (local inspection shows private records by default; narrow with `--max-sensitivity`) |
+| `aperio mem-review STORE ID --accept\|--verify\|--retract\|--supersede` | record a review decision (`--verify` needs `--evidence` and `--actor`) |
+| `aperio mem-list STORE [--include-inactive] [--max-sensitivity L] [--as-of D] [--json]` | list memories and states (local inspection shows private records by default; narrow with `--max-sensitivity`) |
 | `aperio mem-show STORE MEMORY_ID [--json]` | inspect one memory and its history |
-| `aperio mem-recall STORE --objective "..." [--json]` | retrieve relevant memories |
-| `aperio mem-export STORE --output F [--force]` | write a portable exchange file |
+| `aperio mem-recall STORE --objective "..." [--as-of D] [--json]` | retrieve relevant memories (validity evaluated today unless `--as-of` is given) |
+| `aperio mem-export STORE --output F [--as-of D] [--force]` | write a portable exchange file |
 | `aperio mem-import STORE FILE [--dry-run] [--json]` | import an exchange file as proposals |
 
 ## Privacy limits worth repeating

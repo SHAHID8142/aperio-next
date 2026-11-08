@@ -158,7 +158,12 @@ def test_import_preserves_content_identity_but_not_trust(tmp_path: Path) -> None
     source = make_store(tmp_path, "source.mem")
     memory = seed(source)
     source.review(memory["memory_id"], "accept", actor="operator")
-    source.review(memory["memory_id"], "verify", actor="reviewer")
+    source.review(
+        memory["memory_id"],
+        "verify",
+        actor="reviewer",
+        evidence=["external source check"],
+    )
     document = export_memories(source)
 
     target = make_store(tmp_path, "target.mem")

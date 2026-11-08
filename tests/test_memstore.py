@@ -249,11 +249,18 @@ def test_history_is_append_only(tmp_path: Path) -> None:
 )
 def test_allowed_transitions(tmp_path: Path, action, setup, expected_state) -> None:
     store = store_at(tmp_path)
-    memory = store.propose(BASE)["memory"]
+    memory = store.propose({**BASE, "actor": "proposer"})["memory"]
     for step in setup:
         store.review(memory["memory_id"], step, actor="operator")
-    updated = store.review(memory["memory_id"], action, actor="operator")
-    assert updated["state"] == expected_state
+    # Verification additionally requires recorded evidence and a declared
+    # reviewer; see tests/test_memory_gate.py for that contract.
+    extra = (
+        {"evidence": ["brand guide v3, page 4"]} if action == "verify" else {}
+    )
+    updated = store.review(
+        memory["memory_id"], action, actor="operator", **extra
+    )
+    assert updated["recorded_state"] == expected_state
 
 
 def test_reinstate_returns_a_record_to_proposed(tmp_path: Path) -> None:
@@ -269,7 +276,6 @@ def test_reinstate_returns_a_record_to_proposed(tmp_path: Path) -> None:
     "action, setup",
     [
         ("accept", ["accept"]),
-        ("verify", ["verify"]),
         ("retract", ["retract"]),
         ("reinstate", []),
         ("accept", ["retract"]),
@@ -277,11 +283,18 @@ def test_reinstate_returns_a_record_to_proposed(tmp_path: Path) -> None:
 )
 def test_disallowed_transitions_fail_closed(tmp_path: Path, action, setup) -> None:
     store = store_at(tmp_path)
-    memory = store.propose(BASE)["memory"]
+    memory = store.propose({**BASE, "actor": "proposer"})["memory"]
+
+    def run(step: str):
+        extra = (
+            {"evidence": ["brand guide v3, page 4"]} if step == "verify" else {}
+        )
+        return store.review(memory["memory_id"], step, actor="operator", **extra)
+
     for step in setup:
-        store.review(memory["memory_id"], step, actor="operator")
+        run(step)
     with pytest.raises(StateError):
-        store.review(memory["memory_id"], action, actor="operator")
+        run(action)
 
 
 def test_unknown_action_and_unknown_memory_are_refused(tmp_path: Path) -> None:

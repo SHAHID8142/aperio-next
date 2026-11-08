@@ -126,6 +126,15 @@ but always enters as `proposed`. Memory is quoted context in a pack, never an
 operator instruction, and it is appended after operator context so it cannot
 displace it.
 
+Appends are serialized by the store lock and must be complete: open the store
+without following symlinks, prove the opened descriptor is the file that was
+validated, re-verify the chain through that descriptor, retry short writes,
+and treat a zero-byte write or an I/O error as possible damage rather than a
+successful transition. Never claim crash or power-loss atomicity the
+filesystem does not provide. Validity windows are evaluated on every read
+(today by default, an explicit `--as-of` for history) and both bounds are
+inclusive; the stored record is never rewritten as time passes.
+
 ## Output publication
 
 Any command that writes an operator-visible file (not project state) uses

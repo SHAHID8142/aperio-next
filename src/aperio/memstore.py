@@ -35,6 +35,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat as stat_module
 from datetime import date
 from pathlib import Path
 
@@ -132,9 +133,14 @@ TRANSITION_KEYS = (
 # Allowed review transitions. There is deliberately no path that increases
 # trust without a named action, actor, and timestamp, and no path from a
 # terminal state back to an active one: corrections are new records.
+#
+# ``verify`` additionally requires recorded evidence and a declared reviewer
+# (see :meth:`MemoryStore.review`); it is also allowed from ``verified`` so a
+# record verified before that requirement existed can be re-affirmed with the
+# evidence attached, instead of being retracted and re-proposed.
 ALLOWED_TRANSITIONS = {
     "accept": {"from": ("proposed",), "to": "attested"},
-    "verify": {"from": ("proposed", "attested"), "to": "verified"},
+    "verify": {"from": ("proposed", "attested", "verified"), "to": "verified"},
     "retract": {"from": ("proposed", "attested", "verified"), "to": "retracted"},
     "supersede": {
         "from": ("proposed", "attested", "verified"),
@@ -144,6 +150,17 @@ ALLOWED_TRANSITIONS = {
 }
 
 _CHAIN_FIELD = "chain_sha256"
+
+VALIDITY_RULE = "valid_from <= date <= valid_until (both ends inclusive)"
+
+VERIFICATION_INDEPENDENCE_NOTE = (
+    "Declared identifiers only: Aperio cannot authenticate who ran the "
+    "review, so this records separation of declared identities, not proven "
+    "independence."
+)
+
+# Used for partial-write hardening; tests replace this single indirection.
+_os_write = os.write
 
 
 def line_sha256(line: dict, previous: str | None = None) -> str:
@@ -241,6 +258,57 @@ def _optional_text(
     return _text(
         value, field, max_bytes=max_bytes, single_line=single_line
     )
+
+
+def evaluate_on(value: str | None = None) -> str:
+    """Return the ISO date a validity question is evaluated against.
+
+    ``None`` means *today* (UTC), so ordinary recall applies ``valid_from``
+    and ``valid_until`` without the operator having to pass a flag. A given
+    value is validated strictly (``YYYY-MM-DD``, a real calendar date) so a
+    typo can never silently disable expiry.
+    """
+
+    if value is None:
+        return date.today().isoformat()
+    if not isinstance(value, str) or len(value) != 10:
+        _fail("memory as_of must be an ISO date (YYYY-MM-DD)")
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        _fail("memory as_of must be an ISO date (YYYY-MM-DD)")
+    return value
+
+
+def memory_validity(memory: dict, *, as_of: str | None = None) -> dict:
+    """Whether a memory is applicable on ``as_of`` (default: today).
+
+    Both bounds are **inclusive**: a memory is current from the start of
+    ``valid_from`` through the end of ``valid_until``. Expiry is derived at
+    read time, so a stored record is never rewritten as time passes, and the
+    same inputs plus the same evaluation date always give the same answer.
+    """
+
+    evaluated = evaluate_on(as_of)
+    valid_from = memory.get("valid_from")
+    valid_until = memory.get("valid_until")
+    reason: str | None = None
+    detail: str | None = None
+    if valid_from and evaluated < valid_from:
+        reason = "future"
+        detail = f"valid_from {valid_from} has not started"
+    elif valid_until and evaluated > valid_until:
+        reason = "expired"
+        detail = f"valid_until {valid_until} passed"
+    return {
+        "evaluated_on": evaluated,
+        "current": reason is None,
+        "reason": reason,
+        "detail": detail,
+        "valid_from": valid_from,
+        "valid_until": valid_until,
+        "rule": VALIDITY_RULE,
+    }
 
 
 def _iso_date(value: object, field: str) -> str | None:
@@ -468,6 +536,58 @@ def validate_memory_record(record: object, *, require_id: bool = True) -> dict:
 # ---------------------------------------------------------------------------
 
 
+def _verification(record: dict, events: list[dict], state: str) -> dict:
+    """How a ``verified`` state was reached, without inventing confidence.
+
+    A ``verify`` transition recorded before verification required evidence
+    stays exactly as recorded (history is never reinterpreted), but it is
+    reported as ``unrecorded`` and its trust is downgraded to ``attested``:
+    the store knows a decision was made, not that any evidence backs it.
+    """
+
+    if state != "verified":
+        return {
+            "basis": "not-verified",
+            "evidence": [],
+            "reviewer": None,
+            "reviewer_distinct_from_proposer": None,
+            "independence": "not-applicable",
+            "note": VERIFICATION_INDEPENDENCE_NOTE,
+        }
+    verify_event = None
+    for event in events:
+        if event["to_state"] == "verified":
+            verify_event = event
+    evidence = list(verify_event["evidence"]) if verify_event else []
+    reviewer = verify_event.get("actor") if verify_event else None
+    proposer = record.get("actor")
+    if reviewer and proposer:
+        distinct: bool | None = reviewer.strip().lower() != proposer.strip().lower()
+        independence = (
+            "declared-distinct-identifiers" if distinct else "same-identifier"
+        )
+    else:
+        distinct = None
+        independence = "unknown"
+    basis = "evidence" if evidence else "unrecorded"
+    verification = {
+        "basis": basis,
+        "evidence": evidence,
+        "reviewer": reviewer,
+        "reviewer_distinct_from_proposer": distinct,
+        "independence": independence,
+        "note": VERIFICATION_INDEPENDENCE_NOTE,
+    }
+    if basis == "unrecorded":
+        verification["downgraded"] = True
+        verification["detail"] = (
+            "this record was marked verified without recorded supporting "
+            "evidence; it is not treated as evidence-backed. Re-run "
+            "'aperio mem-review --verify' with --evidence to record support."
+        )
+    return verification
+
+
 def _snapshot(record: dict, events: list[dict], *, as_of: str | None) -> dict:
     state = "proposed"
     updated_at = record.get("created_at")
@@ -503,17 +623,38 @@ def _snapshot(record: dict, events: list[dict], *, as_of: str | None) -> dict:
         "history": history[-MAX_HISTORY_ENTRIES:],
         "history_entries": len(events),
     }
-    if state in ("attested", "verified") and as_of:
-        until = snapshot["valid_until"]
-        if until and as_of > until:
-            snapshot["state"] = "expired"
-            snapshot["trust"] = "proposed"
-            snapshot["expired_reason"] = f"valid_until {until} passed"
+    snapshot["recorded_state"] = state
+    verification = _verification(record, events, state)
+    snapshot["verification"] = verification
+    if verification.get("downgraded"):
+        # A pre-gate verify event asserts a decision, not support: never let
+        # it read as evidence-backed downstream.
+        snapshot["trust"] = "attested"
+    validity = memory_validity(record, as_of=as_of)
+    snapshot["validity"] = validity
+    if state in ACTIVE_STATES and validity["reason"] == "expired":
+        # Derived, never stored: the record itself is untouched and stays
+        # current again when evaluated inside its window.
+        snapshot["state"] = "expired"
+        snapshot["trust"] = "proposed"
+        snapshot["expired_reason"] = validity["detail"]
+        snapshot["derived_expired"] = True
     return snapshot
 
 
 def is_active(snapshot: dict) -> bool:
     return snapshot["state"] in ACTIVE_STATES
+
+
+def is_current(snapshot: dict) -> bool:
+    """Active *and* applicable on the date its validity was evaluated."""
+
+    if not is_active(snapshot):
+        return False
+    validity = snapshot.get("validity")
+    if validity is None:
+        return memory_validity(snapshot)["current"]
+    return bool(validity["current"])
 
 
 # ---------------------------------------------------------------------------
@@ -563,7 +704,11 @@ class MemoryStore:
                 f"memory store {self.path} is larger than the supported "
                 f"{MAX_STORE_BYTES} bytes; split it into separate stores"
             )
-        raw = self.path.read_bytes()
+        return self._parse_store(self.path.read_bytes(), size)
+
+    def _parse_store(self, raw: bytes, size: int) -> dict:
+        if len(raw) != size:
+            size = len(raw)
         try:
             text = raw.decode("utf-8")
         except UnicodeDecodeError:
@@ -694,54 +839,26 @@ class MemoryStore:
         }
 
     def snapshots(self, *, as_of: str | None = None) -> dict:
-        """Current snapshots keyed by memory id, plus read diagnostics."""
+        """Current snapshots keyed by memory id, plus read diagnostics.
 
-        data = self.read()
-        snapshots = {
-            record_id: _snapshot(record, data["events"][record_id], as_of=as_of)
-            for record_id, record in (
-                (memory_identity(record), record) for record in data["records"]
-            )
-        }
-        return {
-            "memories": snapshots,
-            "damaged": data["damaged"],
-            "bytes": data["bytes"],
-            "header": data["header"],
-        }
-
-    # -- writing -----------------------------------------------------------
-    def _check_tail_is_intact(self) -> None:
-        """Refuse to append after an incomplete or corrupted tail.
-
-        Appending past a broken chain would make every later line unreadable,
-        so a store that ends mid-line (an interrupted write) or whose last
-        line breaks the chain fails closed with an actionable message. The
-        existing records stay readable; nothing is repaired silently.
+        ``as_of`` selects the date validity is evaluated against; omitted it
+        means today, so expiry applies to ordinary reads by default.
         """
 
-        raw = self.path.read_bytes()
-        if raw and not raw.endswith(b"\n"):
-            raise StateError(
-                f"memory store {self.path} ends with an incomplete line (an "
-                "interrupted write); inspect it with 'aperio mem-list' and "
-                "repair the file before adding memories"
-            )
-        state = self.snapshots()
-        if state["damaged"]:
-            first = state["damaged"][0]
-            raise StateError(
-                f"memory store {self.path} has a damaged line "
-                f"({first['line']}: {first['reason']}); inspect it with "
-                "'aperio mem-list' and repair the file before adding memories"
-            )
+        return _snapshots_from(self.read(), as_of=as_of)
 
+    # -- writing -----------------------------------------------------------
     def _mutate(self, build):
         """Run one read-modify-append cycle under the store's advisory lock.
 
         The decision (create vs append, duplicate check, allowed transition)
         is made *inside* the lock, so two concurrent writers can never both
         decide to create the store or apply the same transition twice.
+
+        The append itself never trusts the path twice: the file is opened
+        without following symlinks, the opened descriptor is proven to be the
+        same file that was just validated, the chain is re-checked from that
+        descriptor, and the payload is written until every byte is accepted.
         """
 
         parent = self.path.parent
@@ -763,60 +880,73 @@ class MemoryStore:
                     f"refusing to follow symlink at {self.path} for the "
                     "memory store"
                 )
-            if exists:
-                self._check_tail_is_intact()
-            lines = build(exists)
-            if not lines:
-                return None
-            previous: str | None = None
-            if exists:
-                previous = _last_line_hash(self.path)
-            chained = []
-            for line in lines:
-                chained_line = {**line}
-                chained_line[_CHAIN_FIELD] = line_sha256(chained_line, previous)
-                chained.append(chained_line)
-                previous = chained_line[_CHAIN_FIELD]
-            payload = "".join(
-                json.dumps(line, ensure_ascii=False, sort_keys=True) + "\n"
-                for line in chained
-            ).encode("utf-8")
-            if exists:
-                current = self.path.stat().st_size
-                if current + len(payload) > MAX_STORE_BYTES:
-                    raise StateError(
-                        f"memory store {self.path} would exceed the supported "
-                        f"{MAX_STORE_BYTES} bytes; split it into separate stores"
-                    )
-                fd = os.open(self.path, os.O_WRONLY | os.O_APPEND)
-                try:
-                    os.write(fd, payload)
-                finally:
-                    os.close(fd)
-            else:
+            if not exists:
+                lines = build(False, None)
+                if not lines:
+                    return None
+                payload = _encode_lines(lines)
                 publish_text_atomic(
                     self.path,
                     payload.decode("utf-8"),
                     what="memory store",
                 )
+                return lines
+
+            before = self.path.stat()
+            if before.st_size > MAX_STORE_BYTES:
+                raise StateError(
+                    f"memory store {self.path} is larger than the supported "
+                    f"{MAX_STORE_BYTES} bytes; split it into separate stores"
+                )
+            fd = _open_append_fd(self.path)
+            try:
+                _verify_same_file(fd, before, self.path)
+                raw = _read_fd(fd, self.path, before)
+                _reject_bad_tail(raw, self.path)
+                data = self._parse_store(raw, len(raw))
+                if data["damaged"]:
+                    first = data["damaged"][0]
+                    raise StateError(
+                        f"memory store {self.path} has a damaged line "
+                        f"({first['line']}: {first['reason']}); inspect it "
+                        "with 'aperio mem-list' and repair the file before "
+                        "adding memories"
+                    )
+                state = _snapshots_from(data, as_of=None)
+                lines = build(True, state)
+                if not lines:
+                    return None
+                previous = _last_line_hash(raw)
+                payload = _encode_lines(lines, previous)
+                if len(raw) + len(payload) > MAX_STORE_BYTES:
+                    raise StateError(
+                        f"memory store {self.path} would exceed the supported "
+                        f"{MAX_STORE_BYTES} bytes; split it into separate stores"
+                    )
+                _append_fully(fd, payload, self.path)
+            finally:
+                try:
+                    os.close(fd)
+                except OSError:  # pragma: no cover - defensive
+                    pass
             return lines
         finally:
             release_lock(self.lock_path, token)
 
-    def _plan_mutation(self, memory_id: str, action: str, **fields) -> dict:
-        state = self.snapshots()
+    def _plan_mutation(self, state: dict, memory_id: str, action: str) -> dict:
         snapshot = state["memories"].get(memory_id)
         if snapshot is None:
             raise StateError(f"no memory {memory_id} in {self.path}")
+        recorded_state = snapshot.get("recorded_state", snapshot["state"])
         rule = ALLOWED_TRANSITIONS.get(action)
         if rule is None:
             raise ValidationError(
                 "memory action must be one of: "
                 + ", ".join(sorted(ALLOWED_TRANSITIONS))
             )
-        if snapshot["state"] not in rule["from"]:
+        if recorded_state not in rule["from"]:
             raise StateError(
-                f"memory {memory_id} is {snapshot['state']}; "
+                f"memory {memory_id} is {recorded_state}; "
                 f"'{action}' is only allowed from: " + ", ".join(rule["from"])
             )
         return snapshot
@@ -847,11 +977,13 @@ class MemoryStore:
             )
         outcome: dict = {}
 
-        def build(exists: bool) -> list[dict]:
+        def build(exists: bool, state: dict | None) -> list[dict]:
             if exists:
-                state = self.snapshots()
+                if state is None:  # pragma: no cover - defensive
+                    state = self.snapshots()
                 existing = state["memories"].get(memory_id)
                 if existing is not None:
+                    _reject_reclassified_duplicate(existing, normalized)
                     outcome["duplicate"] = existing
                     return []
                 if len(state["memories"]) >= MAX_MEMORIES_PER_STORE:
@@ -923,12 +1055,14 @@ class MemoryStore:
                 + ", ".join(sorted(ALLOWED_TRANSITIONS))
             )
 
-        def build(exists: bool) -> list[dict]:
-            if not exists:
+        def build(exists: bool, state: dict | None) -> list[dict]:
+            if not exists or state is None:
                 raise StateError(
                     f"no memory store at {self.path}; nothing to review"
                 )
-            snapshot = self._plan_mutation(memory_id, action)
+            snapshot = self._plan_mutation(state, memory_id, action)
+            if action == "verify":
+                _require_verification_basis(snapshot, actor, evidence_list)
             event = {
                 "record": "transition",
                 "memory_id": memory_id,
@@ -936,7 +1070,7 @@ class MemoryStore:
                 "at": _utc_now(),
                 "actor": actor,
                 "action": action,
-                "from_state": snapshot["state"],
+                "from_state": snapshot.get("recorded_state", snapshot["state"]),
                 "to_state": ALLOWED_TRANSITIONS[action]["to"],
                 "note": note_text,
                 "evidence": evidence_list,
@@ -950,10 +1084,240 @@ class MemoryStore:
         return self.snapshots()["memories"][memory_id]
 
 
-def _last_line_hash(path: Path) -> str:
+def _snapshots_from(data: dict, *, as_of: str | None) -> dict:
+    """Derive current snapshots (replayed state + validity) from parsed data."""
+
+    snapshots = {
+        record_id: _snapshot(record, data["events"][record_id], as_of=as_of)
+        for record_id, record in (
+            (memory_identity(record), record) for record in data["records"]
+        )
+    }
+    return {
+        "memories": snapshots,
+        "damaged": data["damaged"],
+        "bytes": data["bytes"],
+        "header": data["header"],
+    }
+
+
+def _reject_bad_tail(raw: bytes, path: Path) -> None:
+    """Require the store to end on a complete line before appending.
+
+    Appending past a broken chain would make every later line unreadable, so
+    a store that ends mid-line (an interrupted write) is refused here. The
+    deeper chain check uses :func:`_parse_store`'s damage report.
+    """
+
+    if raw and not raw.endswith(b"\n"):
+        raise StateError(
+            f"memory store {path} ends with an incomplete line (an "
+            "interrupted write); inspect it with 'aperio mem-list' and "
+            "repair the file before adding memories"
+        )
+
+
+def _encode_lines(lines: list[dict], previous: str | None = None) -> bytes:
+    """Chain and serialize new lines, starting from ``previous``."""
+
+    chained = []
+    for line in lines:
+        chained_line = {**line}
+        chained_line[_CHAIN_FIELD] = line_sha256(chained_line, previous)
+        chained.append(chained_line)
+        previous = chained_line[_CHAIN_FIELD]
+    return "".join(
+        json.dumps(line, ensure_ascii=False, sort_keys=True) + "\n"
+        for line in chained
+    ).encode("utf-8")
+
+
+def _open_append_fd(path: Path) -> int:
+    """Open the store for appending without following symlinks.
+
+    ``O_NOFOLLOW`` closes the common swap-to-symlink race where available;
+    :func:`_verify_same_file` then proves the descriptor is the file that was
+    validated, which covers filesystems without that flag.
+    """
+
+    flags = os.O_RDWR | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        return os.open(path, flags)
+    except OSError as error:
+        if error.errno in (getattr(os, "ENOENT", 2),):
+            raise StateError(
+                f"memory store {path} disappeared while it was being opened; "
+                "nothing was written"
+            ) from None
+        if getattr(os, "O_NOFOLLOW", 0) and error.errno in (
+            getattr(os, "ELOOP", None),
+            getattr(os, "EMLINK", None),
+        ):
+            raise PathError(
+                f"refusing to follow symlink at {path} for the memory store"
+            ) from None
+        raise PathError(
+            f"cannot append to memory store {path}: {error.strerror or error}"
+        ) from None
+
+
+def _verify_same_file(fd: int, before: os.stat_result, path: Path) -> None:
+    """Prove the opened descriptor is the file that was validated."""
+
+    opened = os.fstat(fd)
+    if not stat_module.S_ISREG(opened.st_mode):
+        raise PathError(
+            f"memory store {path} is not a regular file; refusing to append"
+        )
+    if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+        raise PathError(
+            f"memory store {path} changed while it was being opened; "
+            "nothing was written. Re-run the command."
+        )
+
+
+def _read_fd(fd: int, path: Path, before: os.stat_result) -> bytes:
+    """Read the whole store through the already-verified descriptor."""
+
+    if before.st_size > MAX_STORE_BYTES:
+        raise StateError(
+            f"memory store {path} is larger than the supported "
+            f"{MAX_STORE_BYTES} bytes; split it into separate stores"
+        )
+    os.lseek(fd, 0, os.SEEK_SET)
+    chunks: list[bytes] = []
+    remaining = before.st_size
+    while remaining > 0:
+        chunk = os.read(fd, min(65536, remaining))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    raw = b"".join(chunks)
+    if len(raw) != before.st_size:
+        raise StateError(
+            f"memory store {path} changed size while it was being read; "
+            "nothing was written. Re-run the command."
+        )
+    return raw
+
+
+def _append_fully(fd: int, payload: bytes, path: Path) -> None:
+    """Write every byte of an event, or fail without claiming success.
+
+    Partial writes are retried, a zero-byte write is a hard failure, and an
+    I/O error is reported as damage rather than a completed transition. No
+    crash or power-loss atomicity is promised: ``fsync`` flushes this file's
+    contents, not the directory entry that creates it.
+    """
+
+    view = memoryview(payload)
+    written = 0
+    attempts = 0
+    while written < len(payload):
+        try:
+            count = _os_write(fd, view[written:])
+        except OSError as error:
+            raise StateError(
+                f"could not write memory store {path}: "
+                f"{error.strerror or error}. The store may now contain a "
+                "partial line; inspect it with 'aperio mem-list' and repair "
+                "it before adding memories."
+            ) from None
+        if not count or count < 0:
+            raise StateError(
+                f"could not write memory store {path}: the filesystem "
+                "accepted 0 bytes. The store may now contain a partial line; "
+                "inspect it with 'aperio mem-list' and repair it before "
+                "adding memories."
+            )
+        written += count
+        attempts += 1
+        if attempts > len(payload) + 8:  # pragma: no cover - defensive
+            raise StateError(
+                f"could not write memory store {path}: the write made no "
+                "progress; inspect the store before adding memories."
+            )
+    try:
+        os.fsync(fd)
+    except OSError:  # pragma: no cover - platform dependent
+        raise StateError(
+            f"wrote the memory event but could not flush memory store {path} "
+            "to disk; inspect it with 'aperio mem-list' before relying on it."
+        ) from None
+
+
+def _reject_reclassified_duplicate(existing: dict, record: dict) -> None:
+    """Refuse to treat a different classification as the same memory.
+
+    Identity is content-derived, so identical text is one memory. That must
+    never silently keep an older, less private classification (or an older
+    validity window) when the caller states a different one: the operator has
+    to see the conflict instead of believing the new classification took
+    effect.
+    """
+
+    differences = []
+    if existing.get("sensitivity") != record.get("sensitivity"):
+        differences.append(
+            f"sensitivity is stored as {existing.get('sensitivity')!r} but was "
+            f"proposed as {record.get('sensitivity')!r}"
+        )
+    for field in ("valid_from", "valid_until"):
+        if existing.get(field) != record.get(field):
+            differences.append(
+                f"{field} is stored as {existing.get(field)!r} but was "
+                f"proposed as {record.get(field)!r}"
+            )
+    if not differences:
+        return
+    raise ValidationError(
+        "a memory with identical type, title, content, scope, tags, and "
+        "evidence already exists, and its classification differs: "
+        + "; ".join(differences)
+        + ". Identity is derived from content, so re-proposing cannot change "
+        "it. Retract the existing memory and propose the corrected record, or "
+        "change the content so the two are distinguishable."
+    )
+
+
+def _require_verification_basis(
+    snapshot: dict, actor: str | None, evidence: list[str]
+) -> None:
+    """Refuse a ``verify`` transition that cannot state its own support.
+
+    Verification means *this claim is supported by evidence someone can
+    check*. Without a recorded evidence reference and a named reviewer the
+    command would only assert confidence, so it fails closed before anything
+    is appended.
+    """
+
+    usable = [item for item in evidence if item.strip()]
+    if not usable:
+        raise ValidationError(
+            "verification requires at least one evidence reference; pass "
+            "--evidence with something a reviewer could check"
+        )
+    if not actor or not actor.strip():
+        raise ValidationError(
+            "verification requires a declared reviewer; pass --actor. An "
+            "actor id is attribution, not authentication"
+        )
+    proposer = snapshot.get("actor")
+    if proposer and proposer.strip().lower() == actor.strip().lower():
+        raise ValidationError(
+            "verification requires separation of duties: the declared "
+            f"reviewer {actor!r} is the memory's declared proposer. Record "
+            "the review under a different declared identifier; Aperio cannot "
+            "authenticate identities, so this only enforces distinct "
+            "declarations"
+        )
+
+
+def _last_line_hash(raw: bytes) -> str:
     """Chain hash of the final stored line, used to extend the chain."""
 
-    raw = path.read_bytes()
+
     for line in reversed(raw.decode("utf-8", "replace").split("\n")):
         if line.strip():
             try:
@@ -1039,7 +1403,11 @@ __all__ = [
     "STATE_TRUST",
     "canonical_memory_bytes",
     "is_active",
+    "is_current",
     "memory_content_sha256",
+    "memory_validity",
+    "evaluate_on",
+    "VERIFICATION_INDEPENDENCE_NOTE",
     "memory_identity",
     "memory_revision_sha256",
     "memory_trust",

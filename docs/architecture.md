@@ -168,9 +168,16 @@ validation.
 
 `memrecall` ranks scope applicability, bounded keyword overlap, review state,
 freshness, and budget — deterministic, inspectable, and explicitly
-non-semantic. `memportable` writes and validates its own versioned exchange
+non-semantic. Validity (`valid_from`/`valid_until`) is evaluated on every
+read against today unless an explicit date is passed, so expiry never depends
+on the caller remembering a flag and a stored record is never rewritten as
+time passes. `verify` transitions require recorded evidence and a declared
+reviewer, and a ``verified`` state without evidence is reported as
+``unrecorded`` and labelled ``attested``. `memportable` writes and validates its own versioned exchange
 document; imports always enter as `proposed` and duplicates/conflicts are
-reported, never resolved silently.
+reported, never resolved silently. Appends open the store without following
+symlinks, prove the descriptor is the validated file, re-verify the chain
+through it, and write the whole event or fail,
 
 `context_pack` accepts already-selected memory items plus a retrieval report.
 Memory items are priority 9 in the existing ordering — after operator briefs,

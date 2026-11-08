@@ -27,7 +27,10 @@ from aperio.memstore import (
     SENSITIVITY_LEVELS,
     SENSITIVITY_RANK,
     STATE_TRUST,
+    VALIDITY_RULE,
+    evaluate_on,
     memory_trust,
+    memory_validity,
 )
 
 MAX_RECALL_ITEMS = 8
@@ -49,10 +52,12 @@ _TRUST_RANK = {"verified": 3, "attested": 2, "proposed": 1}
 RECALL_LIMITATION = (
     "Relevance is a bounded keyword overlap over the objective, title, tags, "
     "and content. It is deterministic and inspectable, not semantic: "
-    "paraphrase can be missed and a shared word can match. Scope and review "
-    "state, not guessed similarity, decide inclusion. An objective-scoped "
-    "memory applies when most of its own terms (at least 60%) appear in the "
-    "current objective, or when the two texts match exactly."
+    "paraphrase can be missed and a shared word can match. Scope, review "
+    "state, and the memory's own validity window, not guessed similarity, "
+    "decide inclusion. An objective-scoped memory applies when most of its "
+    "own terms (at least 60%) appear in the current objective, or when the "
+    "two texts match exactly. When no date is given, validity is evaluated "
+    "against today (UTC); pass --as-of for reproducible historical recall."
 )
 
 
@@ -126,6 +131,9 @@ def recall_memories(
     """Rank and select memories with explicit inclusion/exclusion reasons."""
 
     _validate_sensitivity(max_sensitivity)
+    # Default evaluation date: today. Expiry therefore applies to ordinary
+    # recall without any flag, while --as-of keeps historical recall exact.
+    evaluated_on = evaluate_on(as_of)
     if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
         raise ValidationError("memory recall limit must be a positive integer")
     if limit > MAX_RECALL_ITEMS:
@@ -165,8 +173,14 @@ def recall_memories(
                 + ", ".join(missing)
             )
         state = memory.get("state")
-        if state == "expired":
+        validity = memory_validity(memory, as_of=evaluated_on)
+        if validity["reason"] == "expired" or state == "expired":
             exclude("expired")
+            continue
+        if not validity["current"]:
+            # valid_from has not started: not applicable yet, whatever the
+            # review state says.
+            exclude("future")
             continue
         if state not in ACTIVE_STATES:
             exclude("state")
@@ -212,10 +226,10 @@ def recall_memories(
                 "memory": memory,
                 "scope_rank": scope_rank,
                 "relevance": relevance,
-                "trust_rank": _TRUST_RANK.get(memory_trust(state), 1),
+                "trust_rank": _TRUST_RANK.get(_trust(memory, state), 1),
                 "score": scope_rank * 1000
                 + relevance * 10
-                + _TRUST_RANK.get(memory_trust(state), 1),
+                + _TRUST_RANK.get(_trust(memory, state), 1),
             }
         )
 
@@ -283,6 +297,22 @@ def recall_memories(
                 ),
             }
         )
+    unrecorded = [
+        memory["memory_id"]
+        for memory in selected
+        if (memory.get("verification") or {}).get("basis") == "unrecorded"
+    ]
+    if unrecorded:
+        warnings.append(
+            {
+                "code": "memory_verification_unrecorded",
+                "detail": (
+                    "these memories were marked verified without recorded "
+                    "supporting evidence; they are shown as attested, not as "
+                    "evidence-backed: " + ", ".join(unrecorded[:5])
+                ),
+            }
+        )
     conflicts = _conflicts(selected)
     if conflicts:
         warnings.append(
@@ -299,6 +329,8 @@ def recall_memories(
         )
     return {
         "selected": selected,
+        "as_of": evaluated_on,
+        "validity": {"evaluated_on": evaluated_on, "rule": VALIDITY_RULE},
         "excluded": {"total": sum(excluded.values()), "by_reason": dict(sorted(excluded.items()))},
         "warnings": warnings,
         "conflicts": conflicts,
@@ -310,6 +342,15 @@ def recall_memories(
         },
         "limitation": RECALL_LIMITATION,
     }
+
+
+def _trust(memory: Mapping, state: str) -> str:
+    """Snapshot trust when the reader supplied it, else the state's tier."""
+
+    trust = memory.get("trust")
+    if isinstance(trust, str) and trust in STATE_TRUST.values():
+        return trust
+    return memory_trust(state)
 
 
 def _conflicts(selected: list[dict]) -> list[dict]:
@@ -358,8 +399,12 @@ def memory_context_items(selected: Sequence[dict]) -> list[ContextItem]:
             "tags": list(memory.get("tags", ())),
             "evidence": list(memory.get("evidence", ())),
             "valid_until": memory.get("valid_until"),
+            "valid_from": memory.get("valid_from"),
             "content_sha256": memory["content_sha256"],
             "reviewed": memory["state"] in ("attested", "verified"),
+            "verification_basis": (memory.get("verification") or {}).get(
+                "basis", "not-verified"
+            ),
         }
         items.append(
             ContextItem(
@@ -368,7 +413,10 @@ def memory_context_items(selected: Sequence[dict]) -> list[ContextItem]:
                 kind="memory",
                 title=memory["title"],
                 content=memory["content"],
-                trust=STATE_TRUST[memory["state"]],
+                trust=(
+                    memory.get("trust")
+                    or STATE_TRUST[memory["state"]]
+                ),
                 origin="memory-store",
                 method="operator-selected-memory",
                 observed_at=memory.get("updated_at"),

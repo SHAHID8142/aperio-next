@@ -135,6 +135,35 @@ afterwards is what 0.10.0 delivers:
   identity and provenance while importing everything as `proposed`;
 - standalone operation with no project, provider, or model API.
 
+## M3 release gate (0.10.1)
+
+The independent gate review confirmed three P1 defects in the 0.10.0 memory
+foundation; all three are corrected in 0.10.1:
+
+- **P1-A — verification without support.** `--verify` accepted no evidence
+  and no reviewer, so an unsupported claim could be labelled verified by
+  invoking the command. Verification now requires an evidence reference and
+  a declared reviewer, refuses a reviewer identical to the declared proposer,
+  and reports its own basis (`evidence`, `unrecorded`, `not-verified`).
+  Pre-gate `verified` records stay readable and are reported as `unrecorded`
+  with an `attested` trust label, never silently re-promoted.
+- **P1-B — expiry not applied in normal use.** Validity was only evaluated
+  when an optional `as_of` was supplied. Reads now default to today (UTC),
+  validate the date strictly, apply inclusive `valid_from`/`valid_until`
+  bounds to recall, packs, and exports, and count `expired`/`future`
+  exclusions visibly.
+- **P1-C — unchecked append.** A single unchecked `os.write` could lose or
+  truncate an event while reporting success. Appends now open the store
+  without following symlinks, prove the descriptor is the validated file,
+  re-verify the chain through that descriptor, retry short writes, fail on
+  zero-byte writes and I/O errors, and refuse further appends after damage.
+  `fsync` is issued; crash/power-loss atomicity is explicitly not promised.
+
+The same cycle closed a privacy-relevant model limit: content-derived identity
+excluded `sensitivity` and validity windows, so re-proposing identical text
+with a stricter classification was silently ignored. That now fails closed,
+and imports report such a mismatch as a conflict.
+
 ## Next (requires independent review and explicit instruction)
 
 - Remaining M3 hardening whatever the review confirms (for example goal

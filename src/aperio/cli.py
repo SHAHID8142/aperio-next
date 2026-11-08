@@ -183,7 +183,12 @@ def _add_memory_store_options(parser) -> None:
         "--memory-max-sensitivity",
         choices=MEMORY_SENSITIVITY_LEVELS,
         default=MEMORY_DEFAULT_SENSITIVITY,
-        help="highest memory sensitivity to include (default: internal)",
+        help=(
+            "highest memory sensitivity to consider (default: internal). "
+            "private memory is never written into a pack, because packs are "
+            "shareable artifacts; raise this only to make the exclusion "
+            "explicit"
+        ),
     )
     parser.add_argument(
         "--memory-as-of", metavar="YYYY-MM-DD",
@@ -458,8 +463,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--source-ref", metavar="TEXT", help="declared source reference",
     )
     mem_propose_parser.add_argument(
+        "--valid-from", metavar="YYYY-MM-DD",
+        help="date from which the memory is current (default: immediately)",
+    )
+    mem_propose_parser.add_argument(
         "--valid-until", metavar="YYYY-MM-DD",
-        help="date after which the memory is no longer current",
+        help="last date the memory is current (inclusive)",
     )
     mem_propose_parser.add_argument(
         "--supersedes", metavar="MEMORY_ID",
@@ -479,7 +488,10 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Record an explicit review decision. Acceptance makes a memory "
             "authoritative for its scope; it does not prove the claim. "
-            "Verification is for claims genuinely supported by evidence."
+            "Verification requires at least one evidence reference and a "
+            "declared reviewer identifier, and refuses a reviewer identical to "
+            "the memory's declared proposer. Identifiers are attribution, not "
+            "authentication: Aperio cannot prove who ran the review."
         ),
     )
     mem_review_parser.add_argument("store", metavar="STORE")
@@ -491,7 +503,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     review_action.add_argument(
         "--verify", dest="action", action="store_const", const="verify",
-        help="record independent evidence (verified)",
+        help=(
+            "record supporting evidence (verified); requires --evidence and "
+            "--actor, and the reviewer must differ from the declared proposer"
+        ),
     )
     review_action.add_argument(
         "--retract", dest="action", action="store_const", const="retract",
@@ -535,6 +550,10 @@ def build_parser() -> argparse.ArgumentParser:
     mem_list_parser.add_argument(
         "--include-inactive", action="store_true",
         help="also list retracted, superseded, and expired memories",
+    )
+    mem_list_parser.add_argument(
+        "--as-of", metavar="YYYY-MM-DD",
+        help="evaluate validity as of this date (default: today)",
     )
     mem_list_parser.add_argument(
         "--max-sensitivity", choices=MEMORY_SENSITIVITY_LEVELS,
@@ -1524,6 +1543,7 @@ def _cmd_mem_propose(args) -> None:
             "tags": args.tag,
             "sensitivity": args.sensitivity,
             "evidence": args.evidence,
+            "valid_from": args.valid_from,
             "valid_until": args.valid_until,
             "supersedes": args.supersedes,
             "actor": args.actor,
@@ -1608,12 +1628,21 @@ def _cmd_mem_review(args) -> None:
     if memory["state"] == "attested":
         print(
             "Accepted for its declared scope. Acceptance is not factual "
-            "verification: the claim itself was not independently checked."
+            "verification: the claim itself was not independently checked. "
+            "Use 'aperio mem-review --verify --evidence ... --actor ...' if "
+            "evidence supports it."
         )
     elif memory["state"] == "verified":
+        verification = memory.get("verification") or {}
+        evidence = verification.get("evidence") or []
         print(
-            "Recorded as verified. Aperio stores the claim; it does not "
-            "re-check your evidence."
+            f"Evidence recorded: {len(evidence)} reference(s), reviewer "
+            f"{verification.get('reviewer')!r}."
+        )
+        print(
+            "Aperio stores the claim and the reference; it does not re-check "
+            "the evidence and cannot authenticate the reviewer. This records "
+            "declared separation of identities, not proven independence."
         )
     elif memory["state"] == "retracted":
         print(
@@ -1624,7 +1653,7 @@ def _cmd_mem_review(args) -> None:
 
 def _cmd_mem_list(args) -> None:
     store = MemoryStore(args.store)
-    state = store.snapshots()
+    state = store.snapshots(as_of=args.as_of)
     memories = []
     for memory_id in sorted(state["memories"]):
         memory = state["memories"][memory_id]
@@ -1653,9 +1682,16 @@ def _cmd_mem_list(args) -> None:
     if not memories:
         print(f"No memories in {args.store} matched these filters.")
     for memory in memories:
+        validity = memory.get("validity") or {}
+        note = ""
+        if validity.get("reason") == "future":
+            note = f"  (not yet valid: {validity.get('detail')})"
+        elif validity.get("reason") == "expired":
+            note = f"  (not current: {validity.get('detail')})"
         print(
             f"{memory['memory_id']}  {memory['state']:<10} "
-            f"{memory['trust']:<10} {memory['type']:<16} {memory['title']}"
+            f"{memory['trust']:<10} {memory['type']:<16} "
+            f"{memory['title']}{note}"
         )
     if state["damaged"]:
         print()
@@ -1681,6 +1717,31 @@ def _cmd_mem_show(args) -> None:
         )
         return
     _print_memory_summary(memory)
+    validity = memory.get("validity") or {}
+    if validity:
+        print(
+            f"Validity: {'current' if validity.get('current') else validity.get('detail')}"
+            f" (evaluated {validity.get('evaluated_on')}; "
+            f"{validity.get('rule')})"
+        )
+    verification = memory.get("verification") or {}
+    if verification.get("basis") == "unrecorded":
+        print(
+            "Verification: recorded without supporting evidence - treated as "
+            "attested, not evidence-backed. Re-run 'aperio mem-review "
+            "--verify --evidence ... --actor ...' to record support."
+        )
+    elif verification.get("basis") == "evidence":
+        print(
+            "Verification: supported by recorded evidence "
+            f"({len(verification.get('evidence') or [])} reference(s), "
+            f"reviewer {verification.get('reviewer')!r})"
+        )
+    else:
+        print(
+            "Verification: none (acceptance records authority for scope, not "
+            "factual proof)"
+        )
     print()
     if memory["history"]:
         print("Review history (append-only):")
@@ -1742,6 +1803,7 @@ def _cmd_mem_recall(args) -> None:
         return
     print(f"Objective: {objective or '(none)'}")
     print(f"Profile:   {profile}")
+    print(f"Evaluated: {selection['as_of']} ({selection['validity']['rule']})")
     print(
         f"Selected:  {selection['budget']['items_included']} of "
         f"{selection['budget']['items_considered']} memories "
