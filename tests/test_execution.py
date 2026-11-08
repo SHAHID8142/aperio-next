@@ -1422,3 +1422,227 @@ def test_cli_run_report_lifecycle(run_cli, project_dir, tmp_path):
     code, out, err = run_cli("runs-reconcile", str(project_dir))
     assert code == 0, err
     assert not (aperio_dir / "executions.lock").exists()
+
+
+# --- release-blocker patch: startup failure boundary -----------------------------------
+
+
+def _manual_start_collision(aperio_dir: Path, run_id: str) -> Path:
+    runs = aperio_dir / "runs"
+    runs.mkdir(parents=True, exist_ok=True)
+    target = runs / f"{run_id}.handoff.md"
+    target.write_text("PRESERVE-ME")
+    return target
+
+
+def test_manual_handoff_symlinked_parent_fails_run_and_releases_claim(
+    run_cli, project_dir, tmp_path
+):
+    """A manual handoff blocked by a symlinked .aperio/runs must finalize
+    the run as failed (never leave it prepared), release this run's
+    verified claim, and leave outside files untouched."""
+    aperio_dir = _prepared_project(run_cli, project_dir)
+    outside = tmp_path / "outside-runs"
+    outside.mkdir()
+    os.symlink(outside, aperio_dir / "runs")
+    with pytest.raises(PathError, match="symlink") as caught:
+        dispatch_task(aperio_dir, "TASK-001", adapter_id="manual",
+                      config=None, authorize_exec=False)
+    assert "returned to pending" in str(caught.value)
+    assert list(outside.iterdir()) == []
+    run = read_executions(aperio_dir)["runs"][0]
+    assert run["run_id"] == "RUN-0001"
+    assert run["status"] == "failed"  # never left 'prepared'
+    assert "did not start" in run["outcome"]
+    assert run["claim_released"] is True
+    plan = json.loads((aperio_dir / "plan.json").read_text())
+    assert plan["tasks"][0]["status"] == "pending"
+    assert plan["tasks"][0]["owner"] is None
+    assert not (aperio_dir / "executions.lock").exists()
+    report = reconcile_runs(aperio_dir)
+    assert report["orphaned_tasks"] == []
+    assert report["recovery_required"] is False
+
+
+def test_manual_handoff_collision_fails_preserves_file_and_recovers(
+    run_cli, project_dir
+):
+    aperio_dir = _prepared_project(run_cli, project_dir)
+    occupied = _manual_start_collision(aperio_dir, "RUN-0001")
+    with pytest.raises(StateError, match="already occupied") as caught:
+        dispatch_task(aperio_dir, "TASK-001", adapter_id="manual",
+                      config=None, authorize_exec=False)
+    assert "returned to pending" in str(caught.value)
+    assert occupied.read_text() == "PRESERVE-ME"
+    first = read_executions(aperio_dir)["runs"][0]
+    assert first["status"] == "failed"
+    plan = json.loads((aperio_dir / "plan.json").read_text())
+    assert plan["tasks"][0]["status"] == "pending"
+    # Explicit recovery: remove the obstruction and dispatch again.
+    occupied.unlink()
+    second = dispatch_task(aperio_dir, "TASK-001", adapter_id="manual",
+                           config=None, authorize_exec=False)
+    assert second["run_id"] == "RUN-0002"
+    assert second["status"] == "awaiting-external"
+    document = read_executions(aperio_dir)
+    assert [r["status"] for r in document["runs"]] == [
+        "failed", "awaiting-external",
+    ]  # history preserved
+    assert read_run_handoff(aperio_dir, "RUN-0002")
+
+
+def test_manual_handoff_permission_denied_fails_cleanly(
+    run_cli, project_dir
+):
+    if not hasattr(os, "geteuid") or os.geteuid() == 0:
+        pytest.skip("permission checks are meaningless as root")
+    aperio_dir = _prepared_project(run_cli, project_dir)
+    runs = aperio_dir / "runs"
+    runs.mkdir()
+    runs.chmod(0o500)
+    try:
+        code, out, err = run_cli(
+            "run-start", str(project_dir), "TASK-001", "--agent", "manual",
+        )
+    finally:
+        runs.chmod(0o700)
+    assert code == 1
+    assert "aperio: error:" in err and "Traceback" not in err
+    assert "returned to pending" in err
+    run = read_executions(aperio_dir)["runs"][0]
+    assert run["status"] == "failed"
+    plan = json.loads((aperio_dir / "plan.json").read_text())
+    assert plan["tasks"][0]["status"] == "pending"
+
+
+def test_unverifiable_claim_is_reported_and_not_reversed(
+    run_cli, project_dir, monkeypatch
+):
+    """When ownership/state cannot be positively verified, the claim is
+    never reversed automatically; it is recorded as orphaned, reported by
+    reconciliation, and recoverable through an explicit operator path."""
+    from aperio import runtime as runtime_module
+
+    aperio_dir = _prepared_project(run_cli, project_dir)
+    plan_file = aperio_dir / "plan.json"
+    original_plan = plan_file.read_bytes()
+
+    def broken_start(self, *, run_id, aperio_dir, task, config, on_running=None):
+        plan_file.write_text("{ not valid json")  # claim now unverifiable
+        raise PathError("handoff directory is blocked")
+
+    from aperio.adapters import ManualHandoffAdapter
+
+    monkeypatch.setattr(ManualHandoffAdapter, "start", broken_start)
+    with pytest.raises(PathError, match="orphaned claim"):
+        dispatch_task(aperio_dir, "TASK-001", adapter_id="manual",
+                      config=None, authorize_exec=False)
+    run = read_executions(aperio_dir)["runs"][0]
+    assert run["status"] == "failed"
+    assert run["claim_orphaned"] is True
+    assert run["claim_released"] is False
+    # Restore a readable plan with the claim this run held (the claim
+    # itself survived: the failure only made it unverifiable).
+    plan = json.loads(original_plan)
+    plan["tasks"][0]["status"] = "in-progress"
+    plan["tasks"][0]["owner"] = "manual:RUN-0001"
+    plan_file.write_text(json.dumps(plan))
+    report = reconcile_runs(aperio_dir)
+    assert report["orphaned_tasks"] == ["TASK-001"]
+    assert report["recovery_required"] is True
+    # Explicit recovery path then allows a valid dispatch.
+    monkeypatch.undo()
+    update_task(aperio_dir, "TASK-001", new_status="blocked",
+                reason="dispatch failed")
+    update_task(aperio_dir, "TASK-001", new_status="pending")
+    result = dispatch_task(aperio_dir, "TASK-001", adapter_id="manual",
+                           config=None, authorize_exec=False)
+    assert result["status"] == "awaiting-external"
+    assert read_run_handoff(aperio_dir, result["run_id"])
+
+
+def test_manual_startup_failure_never_overwrites_cancelled_run(
+    run_cli, project_dir, monkeypatch
+):
+    from aperio import runtime as runtime_module
+
+    aperio_dir = _prepared_project(run_cli, project_dir)
+
+    def cancel_then_fail(self, *, run_id, aperio_dir, task, config, on_running=None):
+        runtime_module.cancel_run(aperio_dir, run_id, reason="startup cancel")
+        raise PathError("handoff blocked after cancellation")
+
+    from aperio.adapters import ManualHandoffAdapter
+
+    monkeypatch.setattr(ManualHandoffAdapter, "start", cancel_then_fail)
+    with pytest.raises(PathError) as caught:
+        dispatch_task(aperio_dir, "TASK-001", adapter_id="manual",
+                      config=None, authorize_exec=False)
+    assert "already cancelled" in str(caught.value)
+    run = read_executions(aperio_dir)["runs"][0]
+    assert run["status"] == "cancelled"  # precedence preserved
+    assert "finalize after cancellation ignored" in run["outcome_note"]
+    assert "claim_released" not in run
+    plan = json.loads((aperio_dir / "plan.json").read_text())
+    assert plan["tasks"][0]["status"] == "in-progress"  # cancel never edits claims
+
+
+def test_reconcile_cancels_prepared_run_without_a_claim(run_cli, project_dir):
+    """A prepared record whose task is no longer claimed (crash after a
+    startup failure released it) is cancelled, never left blocking."""
+    aperio_dir = _prepared_project(run_cli, project_dir)
+    dispatch_task(aperio_dir, "TASK-001", adapter_id="manual",
+                  config=None, authorize_exec=False)
+    update_task(aperio_dir, "TASK-001", new_status="blocked",
+                reason="simulated release")
+    update_task(aperio_dir, "TASK-001", new_status="pending")
+    exec_file = aperio_dir / "executions.json"
+    document = json.loads(exec_file.read_text())
+    document["runs"][0]["status"] = "prepared"
+    exec_file.write_text(json.dumps(document))
+    report = reconcile_runs(aperio_dir)
+    assert report["cancelled_stale"] == ["RUN-0001"]
+    assert report["orphaned_tasks"] == []
+    assert read_executions(aperio_dir)["runs"][0]["status"] == "cancelled"
+
+
+def test_subprocess_startup_oserror_is_actionable_and_secret_free(
+    run_cli, project_dir, tmp_path, monkeypatch
+):
+    """A non-FileNotFound OSError during Popen is normalized into an
+    Aperio error: no traceback, no raw config value in the message, the
+    record, or portable memory; the run is failed and the claim released."""
+    import errno
+
+    _prepared_project(run_cli, project_dir)
+    aperio_dir = project_dir / ".aperio"
+
+    def boom(*args, **kwargs):
+        raise OSError(errno.ENOMEM, "Cannot allocate memory")
+
+    monkeypatch.setattr("aperio.adapters.subprocess.Popen", boom)
+    secret = SYNTHETIC_CONFIG_SECRET
+    config = _local_config(
+        tmp_path, project_dir=project_dir, script="print('never')",
+        args=["-c", "print('never')", secret],
+    )
+    config_path = _write_config(tmp_path, "cfg.json", config)
+    code, out, err = run_cli(
+        "run-start", str(project_dir), "TASK-001",
+        "--agent", "local-process", "--config", config_path,
+        "--authorize-exec",
+    )
+    assert code == 1
+    assert "could not be started" in err
+    assert "Cannot allocate memory" in err
+    assert "Traceback" not in err
+    assert secret not in err and secret not in out
+    records = (aperio_dir / "executions.json").read_text()
+    assert secret not in records
+    assert str(tmp_path) not in records
+    assert secret not in json.dumps(execution_summary(aperio_dir))
+    run = read_executions(aperio_dir)["runs"][0]
+    assert run["status"] == "failed"
+    assert run["claim_released"] is True
+    plan = json.loads((aperio_dir / "plan.json").read_text())
+    assert plan["tasks"][0]["status"] == "pending"

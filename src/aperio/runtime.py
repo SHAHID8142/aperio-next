@@ -605,6 +605,165 @@ def _dispatch_locked(
     }
 
 
+def _task_state_or_none(
+    aperio_dir: Path, task_id: str
+) -> tuple[str, str | None] | None:
+    """Return ``(status, owner)`` for one task, or None when unreadable."""
+    try:
+        plan = read_plan(aperio_dir)
+    except (StateError, NotInitializedError):
+        return None
+    for task in plan["tasks"]:
+        if task["id"] == task_id:
+            return task["status"], task["owner"]
+    return None
+
+
+def _run_status_or_none(aperio_dir: Path, run_id: str) -> str | None:
+    """Read one run's status without deciding anything (None if unknown)."""
+    try:
+        document = read_executions(aperio_dir)
+    except AperioError:
+        return None
+    if document is None:
+        return None
+    for run in document["runs"]:
+        if run["run_id"] == run_id:
+            return run["status"]
+    return None
+
+
+def _release_startup_claim(
+    aperio_dir: Path, task_id: str, claim_owner: str
+) -> tuple[str, str | None]:
+    """Return the claim to pending ONLY when ownership and state verify.
+
+    Returns ``(state, owner)`` where state is ``released``, ``not_ours``
+    (the task moved on / belongs to someone else — left untouched), or
+    ``unverifiable`` (plan unreadable or the lifecycle API refused — left
+    untouched and reported as an orphaned claim).
+    """
+    state = _task_state_or_none(aperio_dir, task_id)
+    if state is None:
+        return "unverifiable", None
+    status, owner = state
+    if status != "in-progress" or owner != claim_owner:
+        return "not_ours", owner
+    try:
+        update_task(
+            aperio_dir, task_id, new_status="blocked",
+            reason="dispatch failed before execution",
+        )
+        update_task(aperio_dir, task_id, new_status="pending")
+    except AperioError:
+        return "unverifiable", owner
+    return "released", owner
+
+
+def _claim_recovery_hint(task_id: str) -> str:
+    return (
+        "recover explicitly with 'aperio task-status <project> "
+        f"{task_id} --status blocked --reason \"dispatch failed\"' and "
+        "then '--status pending'"
+    )
+
+
+def _finalize_startup_failure(
+    aperio_dir: Path,
+    *,
+    run_id: str,
+    task_id: str,
+    claim_owner: str,
+    already_claimed: bool,
+    error: AperioError,
+) -> str:
+    """Finalize a run whose adapter never started, then explain the claim.
+
+    The record is finalized as ``failed`` with neutral, non-secret text
+    (never the raw exception, argv, or config). A claim is released back
+    to ``pending`` only when this run's ownership and the in-progress
+    state are positively verified; otherwise it is left untouched and
+    marked ``claim_orphaned`` so reconciliation reports it. A run already
+    cancelled/finalized by a competing writer is never overwritten.
+    """
+    status = _run_status_or_none(aperio_dir, run_id)
+    claim_state = "unverifiable"
+    claim_owner_seen: str | None = None
+    if status == "prepared":
+        if already_claimed:
+            claim_state = "previous"
+            previous = _task_state_or_none(aperio_dir, task_id)
+            claim_owner_seen = previous[1] if previous is not None else None
+        else:
+            claim_state, claim_owner_seen = _release_startup_claim(
+                aperio_dir, task_id, claim_owner
+            )
+    elif status in ("cancelled", "failed", "interrupted", "completed"):
+        claim_state = "run_finalized"
+
+    record = _finalize_run(
+        aperio_dir,
+        run_id,
+        updates={
+            "status": "failed",
+            "outcome": (
+                "execution error: the adapter did not start "
+                f"({type(error).__name__}); nothing was executed"
+            ),
+            "diagnostics_note": (
+                "startup failed before any result was recorded; re-run the "
+                "command to see the actionable error (not stored in the "
+                "shareable record)"
+            ),
+            "claim_released": claim_state == "released",
+            "claim_orphaned": claim_state == "unverifiable",
+            "finished_at": utc_now_iso(),
+        },
+        status="failed",
+    )
+    if record.get("status") == "cancelled":
+        return (
+            f"Run {run_id} was already cancelled; the cancelled status and "
+            "the task claim were left untouched for explicit resolution."
+        )
+    if claim_state == "released":
+        return (
+            "The task claim was verified as this run's and returned to "
+            "pending; nothing was executed."
+        )
+    if claim_state == "previous":
+        return (
+            f"The task remains claimed by {claim_owner_seen!r} from a "
+            "previous run; it was left untouched. Resolve it explicitly "
+            f"({_claim_recovery_hint(task_id)}) if the earlier attempt is "
+            "abandoned."
+        )
+    if claim_state == "not_ours":
+        return (
+            f"The task is now owned by {claim_owner_seen!r}, not by this "
+            "run; it was left untouched."
+        )
+    if claim_state == "run_finalized":
+        return (
+            "The run had already been finalized by a competing writer; "
+            "its status and the task claim were left untouched for "
+            "explicit resolution."
+        )
+    return (
+        "The task claim could not be verified or released automatically; "
+        "it is recorded as an orphaned claim and reconciliation reports it "
+        f"while the claim survives. {_claim_recovery_hint(task_id)}."
+    )
+
+
+def _with_note(exc: AperioError, note: str) -> AperioError:
+    """Re-raise an actionable Aperio error of the same class plus a note."""
+    try:
+        return type(exc)(f"{exc} {note}")
+    except Exception:  # pragma: no cover - all AperioError types take one arg
+        return exc
+
+
 def _dispatch_execute(
     aperio_dir: Path, dispatch_result: dict, *, adapter, adapter_id: str,
     config: dict | None = None,
@@ -655,10 +814,21 @@ def _dispatch_execute(
         _flip_to_running(aperio_dir, run_id, pid)
 
     if adapter_id == MANUAL_ADAPTER_ID:
-        result = adapter.start(
-            run_id=run_id, aperio_dir=aperio_dir,
-            task=_task_from_plan(aperio_dir, task_id), config=None,
-        )
+        # Shared dispatch error boundary: a manual handoff that cannot be
+        # written must never leave the run 'prepared' with a live claim.
+        try:
+            task = _task_from_plan(aperio_dir, task_id)
+            result = adapter.start(
+                run_id=run_id, aperio_dir=aperio_dir,
+                task=task, config=None,
+            )
+        except AperioError as exc:
+            note = _finalize_startup_failure(
+                aperio_dir, run_id=run_id, task_id=task_id,
+                claim_owner=claim_owner, already_claimed=already_claimed,
+                error=exc,
+            )
+            raise _with_note(exc, note) from None
         return _finalize_run(
             aperio_dir, run_id,
             updates={
@@ -693,14 +863,23 @@ def _dispatch_execute(
     except AperioError as exc:
         if "pid" in pid_holder:
             _terminate_process(pid_holder["pid"])
-        _finalize_run(
+        if "pid" not in pid_holder:
+            # The child process was never created: no work happened, so
+            # the same startup boundary as the manual adapter applies.
+            note = _finalize_startup_failure(
+                aperio_dir, run_id=run_id, task_id=task_id,
+                claim_owner=claim_owner, already_claimed=already_claimed,
+                error=exc,
+            )
+            raise _with_note(exc, note) from None
+        record = _finalize_run(
             aperio_dir, run_id,
             updates={
                 "status": "failed",
                 "outcome": (
-                    "execution error: the adapter did not start "
-                    f"({type(exc).__name__}); the actionable error was "
-                    "reported to the operator"
+                    "execution error: the adapter failed after the child "
+                    f"was created ({type(exc).__name__}); the actionable "
+                    "error was reported to the operator"
                 ),
                 "diagnostics_note": (
                     "execution failed before any result was recorded; "
@@ -710,7 +889,18 @@ def _dispatch_execute(
             },
             status="failed",
         )
-        raise
+        if record.get("status") == "cancelled":
+            note = (
+                f"Run {run_id} was cancelled during startup; the cancelled "
+                "status and the task claim were left untouched for "
+                "explicit resolution."
+            )
+        else:
+            note = (
+                "The task remains claimed by this run; retry with the same "
+                f"adapter or {_claim_recovery_hint(task_id)}."
+            )
+        raise _with_note(exc, note) from None
 
     status = (
         "completed"
@@ -1181,7 +1371,12 @@ def reconcile_runs(aperio_dir: Path) -> dict:
     (interrupted, cancelled-stale) are written; pid interpretation is
     refused for records from other machines; an awaiting-external run
     whose task was completed out-of-band is flagged (suggested for
-    cancellation), never auto-cancelled."""
+    cancellation), never auto-cancelled.
+
+    Orphaned claims are reported (never silently resolved): a ``prepared``
+    run whose task is not claimed, and a finalized-failed run whose
+    startup claim could not be verified/released (``claim_orphaned``).
+    """
     require_supported_state(aperio_dir)
     document = read_executions(aperio_dir)
     report = {
@@ -1250,8 +1445,29 @@ def reconcile_runs(aperio_dir: Path) -> dict:
                 )
                 report["cancelled_stale"].append(run["run_id"])
                 report["orphaned_tasks"].append(run["task_id"])
-            elif task_status is None:
+            elif task_status in (None, "pending", "blocked", "completed"):
+                # The run never started and no claim is held by it: safe
+                # to cancel the stale record so it cannot block dispatch.
+                _finalize_run(
+                    aperio_dir, run["run_id"],
+                    updates={
+                        "status": "cancelled",
+                        "outcome": (
+                            "cancelled by reconciliation: the run never "
+                            "started and no task claim is held by it"
+                        ),
+                        "cancelled_at": utc_now_iso(),
+                    },
+                    status="cancelled",
+                )
                 report["cancelled_stale"].append(run["run_id"])
+        elif run["status"] == "failed" and run.get("claim_orphaned") is True:
+            task_status = _task_status_or_none(aperio_dir, run["task_id"])
+            if (
+                task_status == "in-progress"
+                and run["task_id"] not in report["orphaned_tasks"]
+            ):
+                report["orphaned_tasks"].append(run["task_id"])
         elif run["status"] == "awaiting-external":
             task_status = _task_status_or_none(aperio_dir, run["task_id"])
             if task_status == "completed":

@@ -46,7 +46,7 @@ from aperio.artifacts import (
     discard_created_file,
     open_exclusive_binary,
 )
-from aperio.errors import ValidationError
+from aperio.errors import StateError, ValidationError
 
 MANUAL_ADAPTER_ID = "manual"
 LOCAL_PROCESS_ADAPTER_ID = "local-process"
@@ -484,6 +484,18 @@ class LocalProcessAdapter(AgentAdapter):
             discard_created_file(local_log, mirror_handle)
             raise ValidationError(
                 f"local-process: invalid argv: {exc}"
+            ) from None
+        except OSError as exc:
+            # Any other startup failure (resource exhaustion, argument list
+            # too long, ...) becomes an actionable Aperio error. No raw
+            # configuration value (executable, argv, environment) is
+            # echoed here or stored anywhere.
+            discard_created_file(local_log, mirror_handle)
+            raise StateError(
+                "local-process: the configured executable could not be "
+                f"started ({exc.strerror or type(exc).__name__}); no "
+                "process was created. Check the adapter config and retry "
+                "(no configuration values were recorded)."
             ) from None
 
         pid = process.pid

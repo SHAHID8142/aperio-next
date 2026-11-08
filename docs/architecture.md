@@ -460,9 +460,25 @@ goes through the Feature-03 lifecycle API with a run-scoped owner
 record as failed. Retry = new run with `previous_run_id`; a delayed
 claim can never silently reopen a completed task (explicit `--reopen`
 required). Reconciliation marks dead-pid runs `interrupted`, cancels
-never-started prepared records, reports orphans and plan-version drift,
-and refuses to interpret pids recorded on other machines — it never
-invents success and never deletes evidence.
+never-started prepared records (including prepared records whose task is
+no longer claimed, so they cannot block dispatch), reports orphans and
+plan-version drift, and refuses to interpret pids recorded on other
+machines — it never invents success and never deletes evidence.
+
+**Startup failure boundary.** Both adapters run inside one dispatch error
+boundary. If the adapter fails before it starts (handoff blocked by a
+symlinked/occupied/unwritable `runs/` directory, unreadable plan, missing
+executable, any other subprocess `OSError`), the run is durably finalized
+as `failed` with neutral, non-secret text (exception class only — never
+message, argv, or config) and a competing cancellation/finalization is
+never overwritten. This run's claim is returned to `pending` only when
+ownership (`owner == adapter:RUN-NNNN`) and the in-progress state are
+positively verified; otherwise the claim is left untouched and the record
+is marked `claim_orphaned` for reconciliation to report. Recovery is
+explicit: fix the obstruction and dispatch again, or
+`task-status <task> --status blocked --reason ...` then `--status pending`.
+A failure after the child process was created keeps the claim for an
+explicit retry/verification decision (work may have run).
 
 ## Cross-agent portability principles (implemented)
 
