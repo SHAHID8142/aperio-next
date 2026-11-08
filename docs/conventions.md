@@ -119,8 +119,10 @@ Any command that writes an operator-visible file (not project state) uses
 `artifacts.publish_text_atomic`: exclusive temporary creation, atomic
 no-clobber publication, `--force` for an explicit atomic replacement, and
 cleanup of only the file the call created. Do not open a predictable
-temporary path, and do not implement check-then-write publication — a
-concurrent creator must not be able to lose its file to us.
+temporary path, and never implement check-then-write publication — a
+concurrent creator must not be able to lose its file to us. If atomic
+no-clobber publication is unavailable on the target filesystem, fail closed
+with an actionable error instead of degrading to a racy fallback.
 
 ## Testing
 

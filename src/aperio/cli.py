@@ -1054,6 +1054,12 @@ def _cmd_goal_check(args) -> None:
     )
     print(f"Trust:        {report['trust']} (declared source: "
           f"{report['provenance']['source']})")
+    if report["trust"] != "authoritative":
+        print(
+            "Instructions: attributed to "
+            f"`{report['provenance']['source']}` - not operator instructions; "
+            "a context pack renders them as untrusted proposals"
+        )
     work = report["work"]
     if work["task_count"]:
         print(

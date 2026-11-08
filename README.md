@@ -427,7 +427,14 @@ aperio profiles --json
 - `--output FILE` publishes atomically through an exclusively created
   temporary file: no symlink is followed, no existing file is truncated
   without `--force`, concurrent writers cannot overwrite each other, and
-  paths inside `.aperio/` or the goal document itself are refused.
+  paths inside `.aperio/` or the goal document itself are refused. Where the
+  filesystem cannot publish without overwriting (no hard links), the command
+  fails closed with an actionable error rather than degrading to a racy
+  fallback.
+- A goal's declared source governs instruction authority. `agent` and
+  `imported` goals are still transferred and inspectable, but their
+  requirements, constraints, outcomes, criteria, and work are labelled as
+  attributed proposals and never presented as operator instructions.
 - Profiles — `general` (default), `design`, `research`, `writing`,
   `business`, `software` — are data only. Their criteria are suggestions,
   shown separately from operator requirements, and never gate approval or

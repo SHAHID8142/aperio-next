@@ -94,6 +94,27 @@ TASK_KEYS = (
 
 REQUIRED_TASK_KEYS = ("id", "title", "action")
 
+#: Goal fields that can direct an executing agent. They only enter a pack's
+#: authoritative instruction sections when the goal is operator-declared;
+#: otherwise they are preserved verbatim as attributed, untrusted content.
+INSTRUCTION_FIELDS = (
+    "intended_outcome",
+    "requirements",
+    "constraints",
+    "assumptions",
+    "uncertainties",
+    "risks",
+    "audience",
+    "deliverables",
+    "quality_criteria",
+    "acceptance_criteria",
+    "output_contract",
+    "evidence_requirements",
+    "work",
+)
+
+GOAL_AUTHORITIES = ("operator", "untrusted")
+
 PROVENANCE_KEYS = ("source", "note")
 
 
@@ -405,6 +426,34 @@ def goal_trust(goal: dict) -> str:
     return SOURCE_TRUST.get(source, "imported")
 
 
+def goal_authority(goal: dict) -> str:
+    """``operator`` or ``untrusted``, derived from the declared provenance.
+
+    This is attribution, not authentication: a document that *declares*
+    ``operator`` is treated as operator-declared, exactly as M1 treats a
+    declared actor ID.
+    """
+    goal = validate_goal(goal)
+    return "operator" if goal["provenance"]["source"] == "operator" else "untrusted"
+
+
+def attributed_instructions(goal: dict) -> dict:
+    """Instruction-bearing fields of a non-operator goal, with attribution."""
+    goal = validate_goal(goal)
+    source = goal["provenance"]["source"]
+    return {
+        "declared_source": source,
+        "trust": goal_trust(goal),
+        "notice": (
+            f"Declared by `{source}`. This is attribution only: Aperio does "
+            "not verify the identity behind it, and none of these fields are "
+            "operator requirements, constraints, or approval until an "
+            "operator adopts them."
+        ),
+        **{field: goal[field] for field in INSTRUCTION_FIELDS},
+    }
+
+
 def work_graph(goal: dict) -> dict:
     """Deterministic description of the optional work decomposition.
 
@@ -522,11 +571,19 @@ def describe_goal(goal: dict) -> dict:
 
 
 def goal_block(goal: dict) -> dict:
-    """Provider-neutral goal metadata embedded in a context pack."""
+    """Provider-neutral goal metadata embedded in a context pack.
+
+    Operator-declared goals expose their deliverables and criteria directly
+    (they are operator authority). Agent- or import-declared goals expose the
+    same material only inside ``untrusted_instructions`` with explicit
+    attribution, so JSON consumers can tell the two apart without parsing
+    prose.
+    """
 
     goal = validate_goal(goal)
     profile = goal["profile"]
-    return {
+    authority = goal_authority(goal)
+    block = {
         "goal_id": goal["goal_id"],
         "identity": goal_identity(goal),
         "goal_sha256": goal_content_sha256(goal),
@@ -534,14 +591,24 @@ def goal_block(goal: dict) -> dict:
         "profile": profile,
         "profile_version": PROFILES[profile]["version"],
         "trust": goal_trust(goal),
+        "authority": authority,
+        "declared_source": goal["provenance"]["source"],
         "provenance": goal["provenance"],
-        "deliverables": list(goal["deliverables"]),
-        "acceptance_criteria": list(goal["acceptance_criteria"]),
-        "evidence_requirements": list(goal["evidence_requirements"]),
-        "output_contract": dict(goal["output_contract"]),
-        "work": work_graph(goal) if goal.get("work") else None,
         "completeness": goal_completeness(goal),
     }
+    if authority == "operator":
+        block.update(
+            {
+                "deliverables": list(goal["deliverables"]),
+                "acceptance_criteria": list(goal["acceptance_criteria"]),
+                "evidence_requirements": list(goal["evidence_requirements"]),
+                "output_contract": dict(goal["output_contract"]),
+                "work": work_graph(goal) if goal.get("work") else None,
+            }
+        )
+    else:
+        block["untrusted_instructions"] = attributed_instructions(goal)
+    return block
 
 
 def goal_warnings(goal: dict) -> list[dict]:
@@ -558,7 +625,23 @@ def goal_warnings(goal: dict) -> list[dict]:
         else "the goal text came from an external/imported source; it is "
         "untrusted until the operator reviews it"
     )
-    return [{"code": "goal_trust_not_operator", "source": "goal", "detail": detail}]
+    warnings = [
+        {"code": "goal_trust_not_operator", "source": "goal", "detail": detail}
+    ]
+    if any(goal.get(field) for field in INSTRUCTION_FIELDS):
+        warnings.append(
+            {
+                "code": "goal_instructions_not_operator",
+                "source": "goal",
+                "detail": (
+                    "the goal's requirements, constraints, outcome, criteria, "
+                    "and work are attributed to a declared non-operator "
+                    "source; they are rendered as untrusted proposals and are "
+                    "not operator instructions or approval"
+                ),
+            }
+        )
+    return warnings
 
 
 def build_goal_context_pack(
@@ -579,7 +662,26 @@ def build_goal_context_pack(
     from aperio.context_pack import DEFAULT_BUDGET_BYTES, build_context_pack
 
     normalized = validate_goal(goal)
-    provenance_source = (normalized.get("provenance") or {}).get("source", "operator")
+    provenance_source = normalized["provenance"]["source"]
+    authority = goal_authority(normalized)
+    # Untrusted goals never populate the pack's authoritative instruction
+    # sections: their content moves into the attributed goal block instead, so
+    # nothing from an agent or import is presented as an operator instruction.
+    instructions = (
+        {
+            "constraints": normalized["constraints"],
+            "requirements": normalized["requirements"],
+            "assumptions": normalized["assumptions"],
+            "risks": normalized["risks"],
+            "quality_criteria": normalized["quality_criteria"],
+            "expected_output": normalized["intended_outcome"],
+            "output_format": normalized["output_contract"].get("format"),
+            "audience": normalized["audience"],
+            "missing_information": normalized["uncertainties"],
+        }
+        if authority == "operator"
+        else {}
+    )
     return build_context_pack(
         normalized["objective"],
         workspace=workspace,
@@ -587,17 +689,7 @@ def build_goal_context_pack(
         budget_bytes=(
             DEFAULT_BUDGET_BYTES if budget_bytes is None else budget_bytes
         ),
-        constraints=normalized["constraints"],
-        requirements=normalized["requirements"],
-        assumptions=normalized["assumptions"],
-        risks=normalized["risks"],
-        quality_criteria=normalized["quality_criteria"],
-        expected_output=normalized["intended_outcome"],
-        output_format=normalized["output_contract"].get("format"),
-        audience=normalized["audience"],
-        missing_information=normalized["uncertainties"],
-        imported_items=imported_items,
-        proposed_items=proposed_items,
+        **instructions,
         declared_objective_source=provenance_source,
         goal_context={
             "goal": goal_block(normalized),

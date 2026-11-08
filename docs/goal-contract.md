@@ -196,13 +196,24 @@ exclusive-creation policy as Aperio's run artifacts:
 - Published files are created owner-readable/writable only (`0600`); a pack
   may contain operator material, so it is not world-readable by default.
 
-Platform note: hard-link publication is atomic on POSIX filesystems that
-support links. Where links are unavailable (`EPERM`, `EOPNOTSUPP`, `EXDEV`,
-…), Aperio falls back to a last-moment existence check followed by
-`os.replace`; that path is not atomic against a hostile racer and is
-documented rather than claimed as safe. Windows replacement fails cleanly if
-the destination is open elsewhere. Aperio's local test evidence is macOS and
-Linux only; no Windows behaviour is claimed beyond that clean-failure path.
+Platform support and limits:
+
+- Without `--force`, publication uses `os.link` only. Hard-link creation is
+  atomic on POSIX filesystems that support links, so a concurrent creator can
+  never lose its file to Aperio.
+- If hard links are unavailable or refused — `ENOTSUP`, `EOPNOTSUPP`,
+  `ENOSYS`, `EXDEV`, `EMLINK`, `NotImplementedError` — publication **fails
+  closed** with an actionable error that names `--force`. There is
+  deliberately **no** check-then-replace fallback: a non-atomic fallback
+  could silently overwrite a concurrently created file.
+- `EPERM`, `EACCES`, and `EROFS` are reported as a permission failure;
+  other I/O errors are reported as write failures. Neither path overwrites
+  anything, and neither is retried with a weaker mechanism.
+- `--force` uses `os.replace`, which is an atomic replacement on POSIX and
+  fails cleanly on Windows when the destination is open in another process.
+- Local test evidence is macOS and Linux only. Windows is supported through
+  the same code paths, but no Windows-specific behaviour (permissions,
+  replacement semantics, antivirus interference) is claimed as tested.
 
 ## Project-backed mode (Mode B)
 
@@ -236,7 +247,9 @@ reviews, or the portable archive.
 | `output_contract.format` | goal `output_contract.format` |
 | `output_contract.audience` | goal `audience` |
 | `missing_information` | goal `uncertainties` |
-| `content.goal` | identity, hash, trust, deliverables, acceptance criteria, evidence requirements, full output contract, work graph, completeness |
+| `content.goal` | identity, hash, trust, authority, declared source, completeness |
+| `content.goal.deliverables`, `.acceptance_criteria`, `.evidence_requirements`, `.output_contract`, `.work` | only for operator-declared goals |
+| `content.goal.untrusted_instructions` | agent/import-declared goals: every instruction-bearing field, verbatim, with attribution |
 | `content.profile_suggestions` | advisory profile suggestions |
 
 Consequences of this mapping:
@@ -247,6 +260,17 @@ Consequences of this mapping:
 - Requirements and constraints keep their own caps and their own rendering.
   A pack produced without `requirements` (every M1 caller) is byte-identical
   to before.
+- **Instruction authority follows the declared source.** Only an
+  operator-declared goal may populate the pack's authoritative instruction
+  sections (requirements, constraints, assumptions, risks, quality criteria,
+  expected output/format/audience, missing information). An `agent` or
+  `imported` goal contributes nothing to those sections; its instructions are
+  preserved verbatim under `content.goal.untrusted_instructions` and rendered
+  under "Proposed goal instructions (not operator-approved)", after the
+  authoritative sections. The objective stays visible but its heading and
+  body are labelled with the declared source. `content.goal.authority` is
+  `operator` or `untrusted`, so JSON and Markdown agree without prose
+  parsing.
 - The pack keeps M1's reproducible content hash, whole-item byte budget,
   trust labels, and Markdown/JSON agreement. `goal-pack` output verifies
   against its own hash.
@@ -264,8 +288,19 @@ Consequences of this mapping:
 - Trust labels are the M1 set: `authoritative`, `verified`, `attested`,
   `proposed`, `imported`. A goal's provenance only selects the tier; it never
   upgrades project evidence.
+- **Instruction authority is separate from mere visibility.** An
+  agent-origin (`proposed`) or imported goal is still transferred and
+  inspectable, but its requirements, constraints, intended outcome,
+  assumptions, uncertainties, risks, audience, deliverables, quality and
+  acceptance criteria, evidence requirements, output contract, and work
+  decomposition never appear as operator instructions. They render as
+  attributed proposals, and no field is labelled an "explicit operator ask".
 - Untrusted goal text cannot override operator instructions: the pack states
   that non-authoritative goal text is data.
+- There is no promotion mechanism: converting an agent/imported goal more
+  often never raises its authority, and no command turns a proposal into
+  operator instruction. Promotion is future work (M3+), and the declared
+  source remains attribution, not authenticated identity.
 - Sensitive material stays out: no environment variables, credentials, raw
   provider output, machine-local logs, absolute paths, or `.aperio/local/`
   content enters a goal-derived pack. Filenames of imported/proposed context
@@ -281,6 +316,10 @@ Consequences of this mapping:
   file, no auto-migration, no archive v2.
 - New module `aperio/goals.py` (goal-schema v1) and `aperio/profiles.py`
   (profile registry v1), both owned by the universal layer and stdlib-only.
+- The M2 goal block gained two additive informational keys (`authority`,
+  `declared_source`) and, for non-operator goals, `untrusted_instructions`.
+  Operator-origin pack behavior is otherwise unchanged, and M1 packs without
+  a goal are byte-identical to earlier releases.
 - `context_pack` gains one optional keyword (`goal_context`) and derives its
   profile ID/version/guidance from the registry; existing M1 output is
   unchanged when no goal is attached.

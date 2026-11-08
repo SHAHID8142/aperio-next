@@ -36,6 +36,7 @@ workspace.
 
 from __future__ import annotations
 
+import errno
 import os
 import tempfile
 from pathlib import Path, PurePosixPath
@@ -44,6 +45,22 @@ from aperio.errors import PathError, StateError
 
 _O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 _CREATE_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW
+
+
+def _errno_set(*names: str) -> frozenset[int]:
+    """Codes present on this platform only (errno constants are not portable)."""
+    return frozenset(
+        getattr(errno, name) for name in names if hasattr(errno, name)
+    )
+
+
+#: "This filesystem/platform cannot hard-link" — atomic no-clobber is simply
+#: unavailable, so publication must fail closed rather than degrade.
+_LINK_UNSUPPORTED_ERRNOS = _errno_set(
+    "ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EXDEV", "EMLINK"
+)
+#: The link was refused by permissions/ownership rules.
+_LINK_PERMISSION_ERRNOS = _errno_set("EPERM", "EACCES", "EROFS")
 
 
 def check_artifact_dir(
@@ -253,6 +270,15 @@ def publish_text_atomic(
 
 
 def _publish_temp(temp: Path, path: Path, *, force: bool, what: str) -> None:
+    """Publish ``temp`` at ``path``.
+
+    ``force`` uses ``os.replace`` (an explicit, atomic overwrite). Without
+    ``force`` the only accepted mechanism is ``os.link``, which fails
+    atomically when the destination exists. If hard links are unavailable or
+    refused, publication **fails closed**: there is deliberately no
+    check-then-replace fallback, because that would let a concurrent creator
+    lose its file to us. ``--force`` remains the explicit way to overwrite.
+    """
     if force:
         os.replace(temp, path)
         return
@@ -264,23 +290,45 @@ def _publish_temp(temp: Path, path: Path, *, force: bool, what: str) -> None:
             "(it was created after this command started); pass --force to "
             "overwrite it"
         ) from None
-    except OSError:
-        # Filesystems or platforms without hard links: fall back to a
-        # last-moment existence check plus replace. Not atomic, so it is
-        # documented in docs/goal-contract.md rather than presented as safe
-        # under a hostile racer.
-        if path.exists():
+    except NotImplementedError:
+        raise StateError(_no_overwrite_unavailable(what, path)) from None
+    except OSError as exc:
+        if exc.errno == errno.EEXIST:
             raise StateError(
                 f"cannot write {what} at {path}: the destination already "
                 "exists (it was created after this command started); pass "
                 "--force to overwrite it"
             ) from None
-        os.replace(temp, path)
-        return
+        if exc.errno in _LINK_UNSUPPORTED_ERRNOS:
+            raise StateError(_no_overwrite_unavailable(what, path)) from None
+        if exc.errno in _LINK_PERMISSION_ERRNOS:
+            raise StateError(
+                f"cannot write {what} at {path}: no-overwrite publication is "
+                "not permitted here "
+                f"({exc.strerror or exc}); nothing was written. Choose a "
+                "writable directory, or pass --force to overwrite explicitly"
+            ) from None
+        raise StateError(
+            f"cannot write {what} at {path}: {exc.strerror or exc}; nothing "
+            "was written. Aperio does not fall back to a non-atomic "
+            "publication, so an existing file is never replaced here; "
+            "pass --force to overwrite explicitly"
+        ) from None
     try:
         temp.unlink()
     except OSError:  # pragma: no cover - published copy already exists
         pass
+
+
+def _no_overwrite_unavailable(what: str, path: Path) -> str:
+    return (
+        f"cannot write {what} at {path}: this filesystem does not support "
+        "no-overwrite publication (hard links are unavailable or refused "
+        f"with {os.name!r} semantics), and Aperio will not risk overwriting a "
+        "concurrently created file. Nothing was written. Choose a directory "
+        "on a filesystem with hard-link support, or pass --force to overwrite "
+        "explicitly"
+    )
 
 
 def discard_created_file(path: Path, handle) -> None:

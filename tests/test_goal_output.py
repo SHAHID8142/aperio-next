@@ -12,6 +12,7 @@ These tests are written to fail against the pre-fix implementation
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor
@@ -164,24 +165,137 @@ def test_destination_appearing_after_validation_is_not_overwritten(
     assert _temp_occupants(tmp_path) == []
 
 
-def test_fallback_without_atomic_link_still_refuses_to_overwrite(
+# --------------------------------------------------------------------------
+# P1-01: no-clobber publication must fail closed, never check-then-replace
+# --------------------------------------------------------------------------
+
+
+def _unsupported_link(_src, _dst, **_kwargs):
+    raise OSError(getattr(errno, "EOPNOTSUPP", errno.ENOSYS), os.strerror(
+        getattr(errno, "EOPNOTSUPP", errno.ENOSYS)
+    ))
+
+
+def test_unsupported_link_with_absent_destination_fails_closed(
     tmp_path, monkeypatch
 ):
-    """On filesystems without hard links, a raced destination is still safe."""
+    """No hard links => refuse. Never a fallback replace that can clobber."""
 
     target = tmp_path / "pack.md"
+    monkeypatch.setattr(artifacts.os, "link", _unsupported_link)
+    replaced: list[tuple[str, str]] = []
     real_replace = artifacts.os.replace
 
-    def sneaky_link(src, dst, **_kwargs):
-        Path(dst).write_text("raced", encoding="utf-8")
-        raise OSError(95, "Operation not supported")
+    def spy_replace(src, dst, **_kwargs):
+        replaced.append((str(src), str(dst)))
+        return real_replace(src, dst)
 
-    monkeypatch.setattr(artifacts.os, "link", sneaky_link)
-    monkeypatch.setattr(artifacts.os, "replace", real_replace)
-    with pytest.raises(StateError, match="already exists"):
+    monkeypatch.setattr(artifacts.os, "replace", spy_replace)
+    with pytest.raises(StateError, match="no-overwrite publication"):
+        artifacts.publish_text_atomic(target, "new content", force=False)
+    assert replaced == [], "publication must not fall back to os.replace"
+    assert not target.exists()
+    assert _temp_occupants(tmp_path) == []
+
+
+def test_unsupported_link_with_destination_created_during_handling(
+    tmp_path, monkeypatch
+):
+    """A destination created inside the failing link call is never lost."""
+
+    target = tmp_path / "pack.md"
+
+    def racing_link(_src, dst, **_kwargs):
+        Path(dst).write_text("raced", encoding="utf-8")
+        raise OSError(getattr(errno, "EOPNOTSUPP", errno.ENOSYS), "unsupported")
+
+    monkeypatch.setattr(artifacts.os, "link", racing_link)
+    with pytest.raises(StateError, match="no-overwrite publication"):
         artifacts.publish_text_atomic(target, "new content", force=False)
     assert target.read_text(encoding="utf-8") == "raced"
     assert _temp_occupants(tmp_path) == []
+
+
+@pytest.mark.parametrize(
+    "code,expected",
+    [
+        (getattr(errno, "EOPNOTSUPP", errno.ENOSYS), "no-overwrite publication"),
+        (errno.ENOSYS, "no-overwrite publication"),
+        (errno.EXDEV, "no-overwrite publication"),
+        (getattr(errno, "EMLINK", errno.EXDEV), "no-overwrite publication"),
+        (errno.EPERM, "not permitted here"),
+        (errno.EACCES, "not permitted here"),
+        (errno.EIO, "cannot write"),
+    ],
+)
+def test_link_failures_are_classified_and_never_overwrite(
+    tmp_path, monkeypatch, code, expected
+):
+    target = tmp_path / "pack.md"
+
+    def failing_link(_src, _dst, **_kwargs):
+        raise OSError(code, os.strerror(code))
+
+    monkeypatch.setattr(artifacts.os, "link", failing_link)
+    with pytest.raises(StateError, match=expected):
+        artifacts.publish_text_atomic(target, "new content", force=False)
+    assert not target.exists()
+    assert _temp_occupants(tmp_path) == []
+
+
+def test_link_unsupported_does_not_overwrite_existing_destination(
+    tmp_path, monkeypatch
+):
+    target = tmp_path / "pack.md"
+    target.write_text("previous", encoding="utf-8")
+    monkeypatch.setattr(artifacts.os, "link", _unsupported_link)
+    with pytest.raises(StateError, match="already exists"):
+        artifacts.publish_text_atomic(target, "new content", force=False)
+    assert target.read_text(encoding="utf-8") == "previous"
+    assert _temp_occupants(tmp_path) == []
+
+
+def test_force_publishes_even_when_links_are_unsupported(tmp_path, monkeypatch):
+    target = tmp_path / "pack.md"
+    target.write_text("old", encoding="utf-8")
+    monkeypatch.setattr(artifacts.os, "link", _unsupported_link)
+    artifacts.publish_text_atomic(target, "new", force=True)
+    assert target.read_text(encoding="utf-8") == "new"
+    assert _temp_occupants(tmp_path) == []
+
+
+def test_link_not_implemented_platform_is_also_fail_closed(tmp_path, monkeypatch):
+    target = tmp_path / "pack.md"
+
+    def not_implemented(_src, _dst, **_kwargs):
+        raise NotImplementedError("hard links unsupported")
+
+    monkeypatch.setattr(artifacts.os, "link", not_implemented)
+    with pytest.raises(StateError, match="no-overwrite publication"):
+        artifacts.publish_text_atomic(target, "new content", force=False)
+    assert not target.exists()
+    assert _temp_occupants(tmp_path) == []
+
+
+def test_cli_reports_unsupported_no_overwrite_with_actionable_error(
+    run_cli, tmp_path, monkeypatch
+):
+    goal = _write_goal(tmp_path)
+    target = tmp_path / "pack.md"
+    monkeypatch.setattr(artifacts.os, "link", _unsupported_link)
+    code, _out, err = run_cli("goal-pack", str(goal), "--output", str(target))
+    assert code == 1
+    assert "aperio: error:" in err
+    assert "--force" in err
+    assert "Traceback" not in err
+    assert not target.exists()
+    assert _temp_occupants(tmp_path) == []
+
+    code, _out, err = run_cli(
+        "goal-pack", str(goal), "--output", str(target), "--force"
+    )
+    assert code == 0, err
+    assert target.read_text(encoding="utf-8").startswith("# Aperio Context Pack")
 
 
 def test_publish_refuses_symlink_destination_with_force(tmp_path):

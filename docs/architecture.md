@@ -188,12 +188,22 @@ Key contracts:
   their own ≤ 50-item caps and are rendered as distinct subsections; M1
   callers that pass only `constraints` get byte-identical output, so no
   historic pack changes and no requirement is merged, truncated, or dropped.
+- **Instruction authority follows provenance.** Only operator-declared goals
+  fill the pack's authoritative instruction sections. Agent/imported goals
+  are preserved verbatim in `content.goal.untrusted_instructions` and
+  rendered after the authoritative sections under "Proposed goal
+  instructions (not operator-approved)"; `content.goal.authority`
+  (`operator` | `untrusted`) keeps JSON and Markdown aligned. Nothing
+  promotes a proposal automatically.
 - **Safe output publication.** `--output` goes through
   `artifacts.publish_text_atomic`: exclusive `mkstemp` temporary creation
-  (never follows or truncates a planted temporary path), atomic
-  no-clobber publication via `os.link`, atomic replacement only with
-  `--force`, cleanup restricted to this call's own temporary file, and
-  refusal of `.aperio/` state paths and of the goal document itself.
+  (never follows or truncates a planted temporary path), atomic no-clobber
+  publication via `os.link`, atomic replacement only with `--force`,
+  cleanup restricted to this call's own temporary file, and refusal of
+  `.aperio/` state paths and of the goal document itself. When hard links are
+  unsupported or refused, publication **fails closed** with an actionable
+  error; there is no check-then-replace fallback, so a concurrent creator can
+  never lose its file.
 - **One canonical pack.** `build_goal_context_pack` feeds the M1 builder, so
   budget, trust, hashing, and Markdown/JSON agreement are inherited rather
   than reimplemented. Goal-only material lives in `content.goal`; profile
