@@ -17,6 +17,9 @@ Commands:
                                       export selected memories portably
     aperio mem-import STORE FILE      import memories as proposals
     aperio goal-pack <goal.json> ...  build a context pack from a goal
+    aperio preflight <goal.json> ...  mistake-prevention checks before work
+    aperio quality-check <goal.json> --deliverable FILE ...
+                                      evaluate a deliverable against the goal
     aperio decision-add <dir> ...     append a decision (append-only)
     aperio handoff-write <dir> --file <handoff.json>
                                       replace the handoff with a validated one
@@ -107,6 +110,15 @@ from aperio.memrecall import (
     RECALL_LIMITATION,
     memory_context_items,
     recall_memories,
+)
+from aperio.quality import (
+    QUALITY_REPORT_FORMAT,
+    QUALITY_REPORT_VERSION,
+    load_quality_request_file,
+    render_quality_report_markdown,
+    run_preflight,
+    run_quality_check,
+    validate_quality_request,
 )
 from aperio.memportable import (
     export_memories,
@@ -402,6 +414,100 @@ def build_parser() -> argparse.ArgumentParser:
         help="write the pack to a file instead of stdout",
     )
     goal_pack_parser.add_argument(
+        "--force", action="store_true",
+        help="overwrite an existing --output file",
+    )
+
+    # --- universal mistake prevention and quality evaluation (M4) --------
+    preflight_parser = subparsers.add_parser(
+        "preflight",
+        help="run mistake-prevention checks on a goal before work begins",
+        description=(
+            "Inspect a validated goal for what could go wrong before any "
+            "work starts: unclear objectives, missing expectations, "
+            "conflicting or duplicated instructions, untrusted "
+            "instructions, unvalidated assumptions, and — with "
+            "--memory-store — expired, unreviewed, or conflicting memory. "
+            "Deterministic and read-only: it never executes content, "
+            "writes memory, or alters the goal."
+        ),
+    )
+    preflight_parser.add_argument(
+        "goal_file", metavar="GOAL_FILE", help="path to a goal JSON file",
+    )
+    _add_memory_store_options(preflight_parser)
+    preflight_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit the quality report as JSON",
+    )
+    preflight_parser.add_argument(
+        "--output", metavar="FILE",
+        help="write the report to a file instead of stdout",
+    )
+    preflight_parser.add_argument(
+        "--force", action="store_true",
+        help="overwrite an existing --output file",
+    )
+
+    quality_check_parser = subparsers.add_parser(
+        "quality-check",
+        help="evaluate a candidate deliverable against a goal",
+        description=(
+            "Check a candidate deliverable against what the goal "
+            "explicitly, objectively requires: operator-named sections and "
+            "texts, modal constraint phrases ('must include X', 'must not "
+            "contain Y'), stated length bounds, output-format "
+            "expectations, deliverable coverage, and source attribution "
+            "when the goal demands evidence. Findings are labelled "
+            "confirmed, warning, unknown, or recommendation — the tool "
+            "never claims to judge truth or taste. Read-only."
+        ),
+    )
+    quality_check_parser.add_argument(
+        "goal_file", metavar="GOAL_FILE", help="path to a goal JSON file",
+    )
+    quality_check_parser.add_argument(
+        "--deliverable", required=True, metavar="FILE",
+        help="path to the candidate deliverable (UTF-8 text, at most 1 MiB)",
+    )
+    quality_check_parser.add_argument(
+        "--request", metavar="FILE",
+        help="optional quality-request JSON file (request-schema v1) with "
+             "required_sections/required_texts/forbidden_texts/word bounds",
+    )
+    quality_check_parser.add_argument(
+        "--require-section", action="append", default=[], metavar="NAME",
+        help="a section/heading the deliverable must contain; repeatable",
+    )
+    quality_check_parser.add_argument(
+        "--require-text", action="append", default=[], metavar="TEXT",
+        help="text the deliverable must contain verbatim; repeatable",
+    )
+    quality_check_parser.add_argument(
+        "--forbid-text", action="append", default=[], metavar="TEXT",
+        help="text the deliverable must not contain; repeatable",
+    )
+    quality_check_parser.add_argument(
+        "--min-words", type=int, metavar="N",
+        help="minimum word count for the deliverable",
+    )
+    quality_check_parser.add_argument(
+        "--max-words", type=int, metavar="N",
+        help="maximum word count for the deliverable",
+    )
+    quality_check_parser.add_argument(
+        "--no-output-contract", action="store_true",
+        help="ignore the goal's output_contract when deriving checks",
+    )
+    quality_check_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit the quality report as JSON",
+    )
+    quality_check_parser.add_argument(
+        "--output", metavar="FILE",
+        help="write the report to a file instead of stdout",
+    )
+    quality_check_parser.add_argument(
         "--force", action="store_true",
         help="overwrite an existing --output file",
     )
@@ -1397,6 +1503,104 @@ def _cmd_profiles(args) -> None:
         print(f"  Usually specified: {', '.join(profile['focus_fields'])}")
         print()
     print("Inspect one profile: aperio profiles --json")
+
+
+def _write_report_output(path: str, text: str, *, force: bool) -> None:
+    target = Path(path)
+    publish_text_atomic(target, text, force=force, what="quality report")
+
+
+def _preflight_memory_selection(args, *, objective: str, profile: str):
+    """Recall a memory selection for preflight inspection (read-only)."""
+
+    if not getattr(args, "memory_store", None):
+        return None
+    store = MemoryStore(args.memory_store)
+    selection = recall_memories(
+        store.snapshots(as_of=getattr(args, "memory_as_of", None))["memories"],
+        objective=objective,
+        profile=profile,
+        tags=getattr(args, "memory_tag", []) or [],
+        max_sensitivity=getattr(
+            args, "memory_max_sensitivity", MEMORY_DEFAULT_SENSITIVITY
+        ),
+        as_of=getattr(args, "memory_as_of", None),
+        scope_values=(
+            {"workspace": args.memory_workspace}
+            if getattr(args, "memory_workspace", None)
+            else None
+        ),
+    )
+    return selection
+
+
+def _emit_report(report: dict, *, as_json: bool, output: str | None,
+                 force: bool) -> None:
+    if as_json:
+        text = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
+    else:
+        text = render_quality_report_markdown(report)
+    if output:
+        _write_report_output(output, text, force=force)
+        print(f"Wrote quality report to {output}")
+        return
+    sys.stdout.write(text)
+
+
+def _cmd_preflight(args) -> None:
+    goal = load_goal_file(args.goal_file)
+    memory = _preflight_memory_selection(
+        args, objective=goal["objective"], profile=goal["profile"]
+    )
+    report = run_preflight(goal, memory=memory)
+    _emit_report(report, as_json=args.as_json, output=args.output,
+                 force=args.force)
+
+
+def _cmd_quality_check(args) -> None:
+    goal = load_goal_file(args.goal_file)
+    deliverable_path = Path(args.deliverable)
+    if deliverable_path.is_symlink():
+        raise ValidationError(
+            "refusing to follow a symlink for the deliverable file; pass "
+            "the real path so the bytes match what you inspected"
+        )
+    try:
+        raw = deliverable_path.read_bytes()
+    except OSError as exc:
+        raise ValidationError(
+            f"cannot read deliverable file: {exc.strerror or exc}"
+        ) from None
+    try:
+        deliverable_text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise ValidationError("deliverable file must be valid UTF-8") from None
+
+    if args.request:
+        request = load_quality_request_file(args.request)
+    else:
+        request = {}
+    if args.require_section:
+        request["required_sections"] = list(args.require_section)
+    if args.require_text:
+        request["required_texts"] = list(args.require_text)
+    if args.forbid_text:
+        request["forbidden_texts"] = list(args.forbid_text)
+    if args.min_words is not None:
+        request["min_words"] = args.min_words
+    if args.max_words is not None:
+        request["max_words"] = args.max_words
+    if args.no_output_contract:
+        request["use_output_contract"] = False
+
+    report = run_quality_check(
+        goal,
+        deliverable_text=deliverable_text,
+        request=request or {},
+        deliverable_source="operator-supplied file",
+    )
+    _emit_report(report, as_json=args.as_json, output=args.output,
+                 force=args.force)
 
 
 def _cmd_goal_check(args) -> None:
@@ -2963,6 +3167,10 @@ def main(argv: list[str] | None = None) -> int:
             _cmd_goal_check(args)
         elif args.command == "goal-pack":
             _cmd_goal_pack(args)
+        elif args.command == "preflight":
+            _cmd_preflight(args)
+        elif args.command == "quality-check":
+            _cmd_quality_check(args)
         elif args.command == "mem-propose":
             _cmd_mem_propose(args)
         elif args.command == "mem-review":

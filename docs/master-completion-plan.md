@@ -38,7 +38,7 @@ criteria are §16 of the directive and are re-verified in Chunk 08.
 | Chunk | Deliverable | Status | Commit |
 |---|---|---|---|
 | 00 | Existing code audit + M3 final trust stabilization | COMPLETE | 4997fe9 |
-| 01 | M4 — universal mistake prevention + quality evaluation | PENDING | — |
+| 01 | M4 — universal mistake prevention + quality evaluation | COMPLETE | see Chunk 01 note |
 | 02 | M5 — controlled feedback and improvement | PENDING | — |
 | 03 | M6 — universal portable exchange v2 | PENDING | — |
 | 04 | M7 — optional integration + domain adaptation | PENDING | — |
@@ -68,8 +68,8 @@ Recorded as they are confirmed; each closed defect lists its regression test.
 
 ## Exact next action
 
-Maintained at the end of the "Status" section per chunk. Current: **Chunk 01
-— M4 universal mistake prevention and quality evaluation.**
+Maintained at the end of the "Status" section per chunk. Current: **Chunk 02
+— M5 controlled feedback and improvement.**
 
 ## Chunk notes (evidence log)
 
@@ -120,3 +120,54 @@ README + docs/universal-memory.md + docs/roadmap.md, version 0.13.1.
 
 **Tests:** 1093 baseline → **1111 passed** locally (0 failures), Python
 3.14.7. GitHub Actions: not run (billing lock — see Blockers).
+
+### Chunk 01 — COMPLETE (0.14.0)
+
+**Delivered (M4).** New module `src/aperio/quality.py`: one deterministic
+engine over a declarative rule registry (quality-rules v1), a stable
+11-category mistake taxonomy (taxonomy v1), and honest finding statuses
+(`confirmed` / `warning` / `unknown` / `recommendation`). Two read-only
+reports from one canonical payload with reproducible `content_sha256` and
+content-derived issue ids:
+
+- `aperio preflight GOAL [--memory-store F] [--json] [--output F]` — unclear
+  objective, missing acceptance/deliverables/quality criteria, duplicate
+  instructions, conflicting stated length bounds, untrusted goal
+  provenance, unvalidated assumptions, unaddressed risks, oversized
+  instruction lists, and (read-only) expired/unreviewed/conflicting memory.
+- `aperio quality-check GOAL --deliverable FILE [--request F]
+  [--require-section/--require-text/--forbid-text/--min-words/--max-words/
+  --no-output-contract]` — operator-required sections/texts, forbidden
+  text, modal constraint extraction ("must include X" / "must not … Y" with
+  a negation-context guard), stated length bounds (leading and trailing
+  phrasing; 10% tolerance band for approximate targets; pages/characters
+  reported, never converted), output-format expectations (JSON parse =
+  confirmed), deliverable coverage (warning-only signal), source
+  attribution + absolute-claim warnings under evidence requirements, an
+  explicit `unknown` status for source support, limitation language, and a
+  software-profile verification-evidence rule.
+- New versioned `quality-request` (request-schema v1) contract; deliverable
+  bounded at 1 MiB UTF-8; `--output` uses the shared atomic publication
+  path; reports never contain absolute paths.
+
+**Safety.** No untrusted content executed, no memory writes (byte-identical
+store proven by test), no goal/deliverable alteration, no governance
+authority — Feature 06 completion gates untouched (asserted by the full
+suite). CLI prints via the standard single-line `aperio: error:` failures
+for malformed input (goal, deliverable, request all covered).
+
+**Acceptance evidence.** Tests demonstrate at least one real detected error
+in each of the six domains (general, design, research, writing, business,
+software) at both engine and CLI level, a passing deliverable with zero
+confirmed findings per domain pair, unknown-status handling, determinism
+(same inputs → same issue ids and content hash), false-positive guards
+(negated prohibitions, token coverage, request/file agreement), malformed
+inputs, and compatibility (full suite green).
+
+**Sources changed:** `src/aperio/quality.py` (new), `src/aperio/cli.py`
+(two subparsers + handlers + dispatch), `tests/test_quality.py` (28),
+`tests/test_quality_cli.py` (17), `docs/quality.md` (new), README,
+docs/architecture.md, docs/roadmap.md, version 0.14.0.
+
+**Tests:** 1111 → **1160 passed** locally (0 failures). GitHub Actions: not
+run (billing lock).

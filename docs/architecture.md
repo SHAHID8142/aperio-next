@@ -66,6 +66,8 @@ src/aperio/
 ├── goals.py       universal goal contract: validate, identity, work graph,
 │                  goal → context pack (M2, goal-schema v1)
 ├── profiles.py    data-only task-profile registry (M2, profile v1)
+├── quality.py     mistake prevention + deliverable quality reports (M4,
+│                  quality-report v1, taxonomy v1, quality-rules v1)
 ├── memstore.py    universal memory records + append-only store (M3,
 │                  memory-schema v1): validation, identity, review states
 ├── memrecall.py   deterministic memory retrieval (M3, memory-recall v1)
@@ -279,6 +281,15 @@ Key contracts:
   module (asserted by test), and no goal feature launches anything.
 
 See [goal-contract.md](goal-contract.md) for the field-by-field contract.
+
+## Universal quality evaluation (M4)
+
+`aperio preflight` and `aperio quality-check` are read-only deterministic
+reports over the goal contract. One declarative rule registry, one engine,
+a stable taxonomy, and four honest finding statuses (`confirmed`,
+`warning`, `unknown`, `recommendation`). No memory writes, no content
+alteration, no governance authority; the completion gate is untouched.
+See `docs/quality.md`.
 
 ## Safe path policy (implemented)
 

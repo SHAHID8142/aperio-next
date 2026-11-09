@@ -302,6 +302,27 @@ one — although an `attested` record can have at most one review event, so a
 history-less attested entry is always forged) and always imports as
 `proposed`; nothing is promoted either way.
 
+## M4 — universal mistake prevention and quality evaluation (implemented in 0.14.0)
+
+`aperio preflight goal.json` and `aperio quality-check goal.json
+--deliverable FILE` deliver the quality engine as one deterministic engine
+over a declarative rule registry (quality-rules v1) and a stable mistake
+taxonomy (taxonomy v1). Findings carry rule id, category, severity, status
+(`confirmed` / `warning` / `unknown` / `recommendation`), the requirement
+they came from, bounded evidence, an explanation, and a corrective action;
+issue identity and the report's `content_sha256` are reproducible from the
+inputs. Preflight covers unclear/missing expectations, conflicting or
+duplicated instructions, untrusted goal provenance, unvalidated
+assumptions, oversized instruction lists, and — with `--memory-store` —
+expired, unreviewed, or conflicting memory (read-only). Deliverable checks
+cover operator-named sections/texts, modal constraint phrases, stated
+length bounds, output-format expectations, deliverable coverage, source
+attribution under evidence requirements, limitation language, and a
+software-profile verification-evidence rule. Statuses are honest: absence
+of a mention is a warning, never a confirmed failure; cited sources are
+reported as `unknown` support, never verified. No memory writes, no
+content alteration, no governance authority. See `docs/quality.md`.
+
 ## Next (requires independent review and explicit instruction)
 
 - Remaining M3 hardening whatever the review confirms (for example goal

@@ -33,6 +33,7 @@ Anything not listed below is **planned, not implemented**. See
 - Implemented (Feature 07): `codex-cli` and `claude-cli` through `aperio agent-list`, `agent-doctor`, `run-preview`, and `run-start --authorize-exec [--authorize-write]` (documented non-interactive CLIs; read-only by default; no GUI-app automation)
 - Implemented (M1): `aperio context-pack [workspace]` with `general` (default) and optional `software` profiles, Markdown/JSON output, deterministic byte budgeting, trust/provenance labels, imported/proposed context labels, and strict read-only operation
 - Implemented (M2): `aperio profiles`, `aperio goal-check`, and `aperio goal-pack` — a versioned universal goal contract (goal-schema v1), six data-only task profiles, optional work decomposition, and goal→context-pack conversion that works with no project, provider, or model API
+- Implemented (M4): `aperio preflight <goal.json>` and `aperio quality-check <goal.json> --deliverable FILE` — deterministic mistake-prevention and deliverable-quality reports (quality-report v1) with a stable issue taxonomy; read-only, standalone, honest about what only a human can judge
 - Implemented (M3): `aperio mem-propose`, `mem-review`, `mem-list`, `mem-show`, `mem-recall`, `mem-export`, `mem-import` — a standalone universal memory store (memory-schema v1) with explicit review states, deterministic retrieval, optional context-pack integration (`--memory-store`), and a versioned portable exchange format
 - Not implemented (by design, yet): autonomous loops, sandboxed execution, Cursor/ZCode GUI integrations, cloud sync, automatic learning
 
@@ -506,6 +507,34 @@ it, packs are byte-identical to the previous release.
 
 See [docs/universal-memory.md](docs/universal-memory.md) for the contract,
 trust model, retrieval rules, portability format, and limitations.
+
+### Mistake prevention and quality evaluation (M4)
+
+Two deterministic, read-only reports around any goal:
+
+```sh
+aperio preflight goal.json                       # what could go wrong before work
+aperio quality-check goal.json --deliverable draft.md
+aperio quality-check goal.json --deliverable draft.md \
+  --require-section "Results" --min-words 300 --json
+```
+
+`preflight` inspects the goal: unclear or missing expectations, conflicting
+or duplicated instructions, untrusted (agent/import-declared) instructions,
+unvalidated assumptions, and — with `--memory-store` — expired, unreviewed,
+or conflicting memory. `quality-check` compares a candidate deliverable
+with what the goal explicitly requires: operator-named sections and texts,
+"must include / must not" constraint phrases, stated length bounds,
+output-format expectations, deliverable coverage, and source attribution
+when the goal demands evidence.
+
+Every finding is labelled `confirmed` (a deterministic rule proved it),
+`warning`, `unknown` (the tool says it cannot judge), or `recommendation`,
+with category from a stable taxonomy, the exact requirement it came from,
+evidence, and a suggested corrective action. The tool never judges truth or
+taste, never writes to a memory store, never alters the goal or the
+deliverable, and is not a governance gate. See
+[docs/quality.md](docs/quality.md) for the full contract and rule list.
 
 ### `aperio memory` (Feature 02)
 
