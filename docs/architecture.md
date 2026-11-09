@@ -70,6 +70,8 @@ src/aperio/
 │                  quality-report v1, taxonomy v1, quality-rules v1)
 ├── feedback.py    controlled feedback + improvement proposals + report
 │                  comparison (M5, feedback-schema v1)
+├── exchange.py    universal portable exchange (M6,
+│                  aperio-universal-exchange v1)
 ├── memstore.py    universal memory records + append-only store (M3,
 │                  memory-schema v1): validation, identity, review states
 ├── memrecall.py   deterministic memory retrieval (M3, memory-recall v1)
@@ -301,6 +303,15 @@ rejects it, an accepted lesson enters the M3 store as a *proposed* memory
 (never promoted by the feedback layer), and `feedback-compare` measures
 before/after quality reports for the same goal with regressions reported.
 Improvement proposals apply to new copies only. See `docs/feedback.md`.
+
+## Universal portable exchange (M6)
+
+`aperio exchange-export` / `exchange-import` wrap selected already-
+versioned artifacts (goals, context packs, quality reports, feedback,
+memories via the M3 exchange format, operator notes) in one digest-checked
+`aperio-universal-exchange` v1 document. Imports preview by default,
+write `imported-*` files without overwriting, and bring memories in as
+`proposed`. See `docs/exchange.md`.
 
 ## Safe path policy (implemented)
 

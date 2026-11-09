@@ -302,6 +302,26 @@ one — although an `attested` record can have at most one review event, so a
 history-less attested entry is always forged) and always imports as
 `proposed`; nothing is promoted either way.
 
+## M6 — universal portable exchange (implemented in 0.16.0)
+
+`aperio exchange-export` and `aperio exchange-import` add the second-
+generation exchange facility: one `aperio-universal-exchange` v1 document
+whose sections are already-versioned contracts (goal-schema v1,
+`aperio-context-pack` v1, `aperio-quality-report` v1, feedback-schema v1,
+`aperio-memory-export` v1, bounded operator notes), each validated by its
+owning contract at export AND import, each carrying a content digest, the
+whole document digest-checked and deterministically ordered. Selection is
+explicit (named files; memories need `--memory-id`/`--memory-tag`).
+Imports preview by default, write `imported-<kind>-<digest>.json` files
+that never overwrite existing bytes (identical content reports
+`already-present`; a different-content occupant is a refused conflict),
+bring memories in as `proposed` through the ordinary M3 import rules
+(duplicates, conflicts, and unsupported trust claims all reported), and
+warn on every imported goal that it is untrusted input pending review and
+provenance re-declaration. A newer format version or unknown section kind
+fails closed. The Feature 05 project archive v1 and the standalone M3
+memory exchange v1 are unchanged. See `docs/exchange.md`.
+
 ## M5 — controlled feedback and improvement (implemented in 0.15.0)
 
 `aperio feedback-check`, `feedback-review`, `feedback-lesson`,

@@ -33,6 +33,7 @@ Anything not listed below is **planned, not implemented**. See
 - Implemented (Feature 07): `codex-cli` and `claude-cli` through `aperio agent-list`, `agent-doctor`, `run-preview`, and `run-start --authorize-exec [--authorize-write]` (documented non-interactive CLIs; read-only by default; no GUI-app automation)
 - Implemented (M1): `aperio context-pack [workspace]` with `general` (default) and optional `software` profiles, Markdown/JSON output, deterministic byte budgeting, trust/provenance labels, imported/proposed context labels, and strict read-only operation
 - Implemented (M2): `aperio profiles`, `aperio goal-check`, and `aperio goal-pack` — a versioned universal goal contract (goal-schema v1), six data-only task profiles, optional work decomposition, and goal→context-pack conversion that works with no project, provider, or model API
+- Implemented (M6): `aperio exchange-export` and `exchange-import` — one provider-neutral universal exchange document (selected goals, context packs, quality reports, feedback, memories, operator notes) with per-section validation, digest-checked integrity, dry-run imports, `imported-*` file naming, and memories that always enter as proposed
 - Implemented (M5): `aperio feedback-check`, `feedback-review`, `feedback-lesson`, `feedback-compare`, and `improvement-apply` — controlled feedback with explicit review, approved lessons stored through the M3 memory contract (always as proposed), deterministic before/after comparison with regressions reported, and reviewable improvement proposals applied only to new files
 - Implemented (M4): `aperio preflight <goal.json>` and `aperio quality-check <goal.json> --deliverable FILE` — deterministic mistake-prevention and deliverable-quality reports (quality-report v1) with a stable issue taxonomy; read-only, standalone, honest about what only a human can judge
 - Implemented (M3): `aperio mem-propose`, `mem-review`, `mem-list`, `mem-show`, `mem-recall`, `mem-export`, `mem-import` — a standalone universal memory store (memory-schema v1) with explicit review states, deterministic retrieval, optional context-pack integration (`--memory-store`), and a versioned portable exchange format
@@ -558,6 +559,27 @@ ones; improvement proposals apply to a **new copy** of a goal or quality
 request, never the original, and cannot change the code-owned profile
 registry. Agent self-reports are flagged as not independent. See
 [docs/feedback.md](docs/feedback.md).
+
+### Universal portable exchange (M6)
+
+```sh
+aperio exchange-export --goal goal.json --context-pack pack.json \
+  --quality-report report.json --note "Event date not fixed" \
+  --output exchange.json
+aperio exchange-import exchange.json --dest-dir ./work        # preview
+aperio exchange-import exchange.json --dest-dir ./work --apply \
+  --memory-store ~/notes/brand.mem
+```
+
+One provider-neutral document carries a selected set of work material to
+the next agent: validated goal, context pack, quality report, feedback
+documents, selected memories (embedded in the M3 exchange format), and
+operator notes. Every section is validated against its own contract and
+digest-checked; imports preview by default, write `imported-*.json` files
+(never overwriting), bring memories in as `proposed`, and mark imported
+goals as untrusted input pending review. The Feature 05 project archive
+and the standalone M3 memory exchange are unchanged. See
+[docs/exchange.md](docs/exchange.md).
 
 ### `aperio memory` (Feature 02)
 

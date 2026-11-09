@@ -30,6 +30,11 @@ Commands:
                                       compare two quality reports (same goal)
     aperio improvement-apply --file P --target-file F --output NEW
                                       apply an improvement proposal to a copy
+    aperio exchange-export [--goal F] [--context-pack F] ...
+                                      build a universal portable exchange (M6)
+    aperio exchange-import FILE --dest-dir DIR [--apply]
+                                      preview a universal exchange import
+                                      (add --apply to write)
     aperio decision-add <dir> ...     append a decision (append-only)
     aperio handoff-write <dir> --file <handoff.json>
                                       replace the handoff with a validated one
@@ -146,6 +151,21 @@ from aperio.feedback import (
     render_comparison_markdown,
     validate_feedback,
     validate_improvement_proposal,
+)
+from aperio.exchange import (
+    EXCHANGE_FORMAT,
+    EXCHANGE_FORMAT_VERSION,
+    apply_import,
+    build_exchange,
+    context_pack_section_from_file,
+    feedback_section_from_file,
+    goal_section_from_file,
+    load_exchange_file as load_universal_exchange_file,
+    memory_section,
+    notes_section,
+    plan_import,
+    quality_report_section_from_file,
+    render_import_report_markdown,
 )
 from aperio.memportable import (
     export_memories,
@@ -691,6 +711,113 @@ def build_parser() -> argparse.ArgumentParser:
     improvement_parser.add_argument(
         "--json", dest="as_json", action="store_true",
         help="emit the applied document as JSON instead of a summary",
+    )
+
+    # --- universal portable exchange (M6) --------------------------------
+    exchange_export_parser = subparsers.add_parser(
+        "exchange-export",
+        help="build one portable universal exchange document",
+        description=(
+            "Assemble a selected set of work material — a goal, its "
+            "context pack, a quality report, feedback documents, selected "
+            "universal memories, and operator notes — into one "
+            "provider-neutral JSON document (aperio-universal-exchange "
+            "v1) that another agent or machine can import without losing "
+            "provenance. Every section is validated against its own "
+            "contract; memories keep the M3 exchange rules. Read-only "
+            "except for the --output file."
+        ),
+    )
+    exchange_export_parser.add_argument(
+        "--goal", metavar="FILE",
+        help="include this goal document (goal-schema v1)",
+    )
+    exchange_export_parser.add_argument(
+        "--context-pack", metavar="FILE",
+        help="include this context pack JSON (from 'goal-pack --json')",
+    )
+    exchange_export_parser.add_argument(
+        "--quality-report", metavar="FILE",
+        help="include this quality report JSON",
+    )
+    exchange_export_parser.add_argument(
+        "--feedback", action="append", default=[], metavar="FILE",
+        help="include this feedback document; repeatable",
+    )
+    exchange_export_parser.add_argument(
+        "--memory-store", metavar="FILE",
+        help="include memories from this store (selection below)",
+    )
+    exchange_export_parser.add_argument(
+        "--memory-id", action="append", default=[], metavar="MEM-ID",
+        help="export this memory id; repeatable",
+    )
+    exchange_export_parser.add_argument(
+        "--memory-tag", action="append", default=[], metavar="TAG",
+        help="export memories carrying this tag; repeatable",
+    )
+    exchange_export_parser.add_argument(
+        "--memory-as-of", metavar="YYYY-MM-DD",
+        help="evaluate memory validity against this date",
+    )
+    exchange_export_parser.add_argument(
+        "--include-private", action="store_true",
+        help="allow private memories into the exchange (deliberate)",
+    )
+    exchange_export_parser.add_argument(
+        "--note", action="append", default=[], metavar="TEXT",
+        help="operator note: an outstanding uncertainty or instruction "
+             "for the receiving agent; repeatable",
+    )
+    exchange_export_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit the exchange document as JSON on stdout",
+    )
+    exchange_export_parser.add_argument(
+        "--output", metavar="FILE", help="write the exchange document here",
+    )
+    exchange_export_parser.add_argument(
+        "--force", action="store_true",
+        help="overwrite an existing --output file",
+    )
+
+    exchange_import_parser = subparsers.add_parser(
+        "exchange-import",
+        help="preview or apply a universal exchange import",
+        description=(
+            "Import an aperio-universal-exchange document: imported files "
+            "are written as 'imported-*.json' into the destination "
+            "directory (existing files are never overwritten), and memory "
+            "sections enter the destination store as PROPOSED — nothing "
+            "is promoted, nothing executes. Preview is the default; pass "
+            "--apply to write."
+        ),
+    )
+    exchange_import_parser.add_argument(
+        "exchange_file", metavar="EXCHANGE_FILE",
+        help="path to the exchange JSON document",
+    )
+    exchange_import_parser.add_argument(
+        "--dest-dir", required=True, metavar="DIR",
+        help="directory that receives imported files (must exist)",
+    )
+    exchange_import_parser.add_argument(
+        "--memory-store", metavar="FILE",
+        help="destination memory store for memory sections (required to "
+             "import them)",
+    )
+    exchange_import_parser.add_argument(
+        "--max-sensitivity",
+        choices=MEMORY_SENSITIVITY_LEVELS, default=MEMORY_DEFAULT_SENSITIVITY,
+        help="highest memory sensitivity to import (default: internal)",
+    )
+    exchange_import_parser.add_argument(
+        "--apply", action="store_true",
+        help="write the import (default: preview only)",
+    )
+    exchange_import_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit the import report as JSON",
     )
 
     # --- universal memory (M3) -------------------------------------------
@@ -1927,6 +2054,83 @@ def _cmd_improvement_apply(args) -> None:
         )
         return
     sys.stdout.write(text)
+
+
+def _cmd_exchange_export(args) -> None:
+    from aperio.memportable import export_memories
+    from aperio.memstore import MemoryStore
+
+    sections = []
+    if args.goal:
+        sections.append(goal_section_from_file(args.goal))
+    if args.context_pack:
+        sections.append(context_pack_section_from_file(args.context_pack))
+    if args.quality_report:
+        sections.append(quality_report_section_from_file(args.quality_report))
+    for path in args.feedback:
+        sections.append(feedback_section_from_file(path))
+    if args.memory_store:
+        if not args.memory_id and not args.memory_tag:
+            raise ValidationError(
+                "exchange-export: select memories explicitly with "
+                "--memory-id or --memory-tag; an exchange carries a "
+                "deliberate selection, not a whole store"
+            )
+        document = export_memories(
+            MemoryStore(args.memory_store),
+            memory_ids=list(args.memory_id) or None,
+            tags=list(args.memory_tag) or None,
+            as_of=args.memory_as_of,
+            include_private=args.include_private,
+        )
+        sections.append(memory_section(document))
+    if args.note:
+        sections.append(
+            notes_section([{"text": note} for note in args.note])
+        )
+    if not sections:
+        raise ValidationError(
+            "exchange-export: select at least one section "
+            "(--goal/--context-pack/--quality-report/--feedback/"
+            "--memory-store/--note)"
+        )
+    exchange = build_exchange(sections)
+    text = json.dumps(exchange, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    if args.output:
+        publish_text_atomic(Path(args.output), text, force=args.force,
+                            what="exchange document")
+        print(f"Wrote universal exchange to {args.output} "
+              f"({len(exchange['sections'])} section(s): "
+              f"{', '.join(exchange['manifest']['includes'])})")
+        return
+    if not args.as_json:
+        raise ValidationError(
+            "exchange-export: choose --output FILE (or --json to print the "
+            "document); stdout prose output does not exist for exchanges"
+        )
+    sys.stdout.write(text)
+
+
+def _cmd_exchange_import(args) -> None:
+    exchange = load_universal_exchange_file(args.exchange_file)
+    if args.apply:
+        report = apply_import(
+            exchange,
+            args.dest_dir,
+            memory_store_path=args.memory_store,
+            max_sensitivity=args.max_sensitivity,
+        )
+    else:
+        report = plan_import(
+            exchange,
+            args.dest_dir,
+            memory_store_path=args.memory_store,
+            max_sensitivity=args.max_sensitivity,
+        )
+    if args.as_json:
+        sys.stdout.write(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+        return
+    sys.stdout.write(render_import_report_markdown(report))
 
 
 def _cmd_goal_check(args) -> None:
@@ -3507,6 +3711,10 @@ def main(argv: list[str] | None = None) -> int:
             _cmd_feedback_compare(args)
         elif args.command == "improvement-apply":
             _cmd_improvement_apply(args)
+        elif args.command == "exchange-export":
+            _cmd_exchange_export(args)
+        elif args.command == "exchange-import":
+            _cmd_exchange_import(args)
         elif args.command == "mem-propose":
             _cmd_mem_propose(args)
         elif args.command == "mem-review":

@@ -40,7 +40,7 @@ criteria are §16 of the directive and are re-verified in Chunk 08.
 | 00 | Existing code audit + M3 final trust stabilization | COMPLETE | 4997fe9 |
 | 01 | M4 — universal mistake prevention + quality evaluation | COMPLETE | 4d158fd |
 | 02 | M5 — controlled feedback and improvement | COMPLETE | 247d4f3 |
-| 03 | M6 — universal portable exchange v2 | PENDING | — |
+| 03 | M6 — universal portable exchange v2 | COMPLETE | see Chunk 03 note |
 | 04 | M7 — optional integration + domain adaptation | PENDING | — |
 | 05 | Feature 07 provider reliability closure | PENDING | — |
 | 06 | M8 — cross-domain benchmark + evaluation | PENDING | — |
@@ -68,8 +68,8 @@ Recorded as they are confirmed; each closed defect lists its regression test.
 
 ## Exact next action
 
-Maintained at the end of the "Status" section per chunk. Current: **Chunk 03
-— M6 universal portable exchange v2.**
+Maintained at the end of the "Status" section per chunk. Current: **Chunk 04
+— M7 optional agent/provider integration and domain adaptation.**
 
 ## Chunk notes (evidence log)
 
@@ -208,4 +208,48 @@ conflict behavior, and malformed-input refusals.
 version 0.15.0.
 
 **Tests:** 1160 → **1179 passed** locally (0 failures). GitHub Actions: not
+run (billing lock).
+
+### Chunk 03 — COMPLETE (0.16.0)
+
+**Delivered (M6).** New module `src/aperio/exchange.py` + `exchange-export`
+/ `exchange-import` CLI. One `aperio-universal-exchange` v1 document whose
+sections are already-versioned contracts (goal-schema v1, context-pack v1
+envelope with re-verified hash, quality-report v1 envelope, feedback-schema
+v1, `aperio-memory-export` v1 for memories, bounded operator notes),
+validated by their owning contracts at BOTH export and import,
+digest-checked per section and for the whole document, deterministically
+ordered, and capped. Selection is explicit (named files; memories need
+--memory-id/--memory-tag; private memory needs the deliberate opt-in).
+Imports preview by default (`--apply` to write), write
+`imported-<kind>-<digest>.json` files that never overwrite existing bytes
+(identical → `already-present`; different content at the digest-derived
+name → refused conflict), bring memories in as `proposed` through the
+ordinary M3 import (duplicates/conflicts/unsupported trust claims
+reported), warn on every imported goal as untrusted pending review and
+provenance re-declaration, and skip memory sections with a reason when no
+--memory-store is given. Newer format versions and unknown section kinds
+fail closed. Feature 05 archive v1 and M3 memory-exchange v1 unchanged
+(asserted by test).
+
+**Acceptance evidence.** tests/test_exchange.py walks ChatGPT → Aperio →
+Claude → Aperio → Gemini/GLM entirely through CLI-produced portable
+payloads: the receiving machine's store holds only `proposed` memories,
+the unsupported claim (hand-appended unproven verify) arrives declared
+`verified` but reads `proposed` with `declared_state` preserved, the
+accepted lesson travels and stays proposed, re-import reports duplicate +
+already-present, tampering (payload/digest/format_version/unknown kind) is
+refused, and determinism holds regardless of build order.
+
+**Fixed during the chunk:** a CLI name collision (`load_exchange_file`
+from memportable shadowing the exchange module's loader — aliased) and a
+build-side gap (export now runs the same per-section owning-contract
+validation import applies).
+
+**Sources changed:** `src/aperio/exchange.py` (new), `src/aperio/cli.py`
+(2 subparsers + handlers + dispatch + alias), `tests/test_exchange.py`
+(11), `docs/exchange.md` (new), README, docs/architecture.md,
+docs/roadmap.md, version 0.16.0.
+
+**Tests:** 1179 → **1189 passed** locally (0 failures). GitHub Actions: not
 run (billing lock).
