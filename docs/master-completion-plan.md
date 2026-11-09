@@ -41,7 +41,7 @@ criteria are §16 of the directive and are re-verified in Chunk 08.
 | 01 | M4 — universal mistake prevention + quality evaluation | COMPLETE | 4d158fd |
 | 02 | M5 — controlled feedback and improvement | COMPLETE | 247d4f3 |
 | 03 | M6 — universal portable exchange v2 | COMPLETE | 57fff8b |
-| 04 | M7 — optional integration + domain adaptation | PENDING | — |
+| 04 | M7 — optional integration + domain adaptation | COMPLETE | see Chunk 04 note |
 | 05 | Feature 07 provider reliability closure | PENDING | — |
 | 06 | M8 — cross-domain benchmark + evaluation | PENDING | — |
 | 07 | Integration, security, usability | PENDING | — |
@@ -68,8 +68,8 @@ Recorded as they are confirmed; each closed defect lists its regression test.
 
 ## Exact next action
 
-Maintained at the end of the "Status" section per chunk. Current: **Chunk 04
-— M7 optional agent/provider integration and domain adaptation.**
+Maintained at the end of the "Status" section per chunk. Current: **Chunk 05
+— Feature 07 provider reliability closure.**
 
 ## Chunk notes (evidence log)
 
@@ -252,4 +252,37 @@ validation import applies).
 docs/roadmap.md, version 0.16.0.
 
 **Tests:** 1179 → **1189 passed** locally (0 failures). GitHub Actions: not
+run (billing lock).
+
+### Chunk 04 — COMPLETE (0.17.0)
+
+**Delivered (M7).** New module `src/aperio/guidance.py` + `agent-brief`
+CLI: the paste-ready instruction package (aperio-agent-brief v1) assembled
+only from operator-declared goals (agent/import goals refused with an
+actionable message), carrying objective/outcome/audience, requirements,
+constraints, deliverables, acceptance criteria, evidence requirements,
+output contract, operator quality criteria, profile suggested self-checks
+(advisory), reviewed memory (attested/verified) plus accepted lessons,
+unverified proposals listed separately, conflicts, uncertainties, and the
+trust boundary text. Private memory never enters a brief (own filter in
+addition to recall defaults + CLI cap with stderr note). Deterministic
+payload + Markdown; safe --output publication. Profiles strengthened with
+data-only `suggested_checks` for all six domains (rendered under an
+explicit advisory heading, never gating). docs/agent-workflows.md
+documents tested manual copy/paste workflows for text agents — the exact
+command sequence is executed by
+test_manual_workflow_commands_run_end_to_end. docs/providers.md
+consolidates the adapter support matrix, capability detection, safe
+failure, and the plain statement that live provider end-to-end execution
+is NOT verified (no credentials); provider adapters remain optional and
+fail closed (their safety tests already exist in
+tests/test_provider_adapters.py and stay green).
+
+**Sources changed:** `src/aperio/guidance.py` (new), `src/aperio/profiles.py`
+(suggested_checks), `src/aperio/cli.py` (agent-brief + private cap),
+`tests/test_guidance.py` (9), `docs/agent-workflows.md` (new),
+`docs/providers.md` (new), README, docs/architecture.md, docs/roadmap.md,
+version 0.17.0.
+
+**Tests:** 1189 → **1198 passed** locally (0 failures). GitHub Actions: not
 run (billing lock).

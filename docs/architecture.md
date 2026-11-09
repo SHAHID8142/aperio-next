@@ -72,6 +72,8 @@ src/aperio/
 │                  comparison (M5, feedback-schema v1)
 ├── exchange.py    universal portable exchange (M6,
 │                  aperio-universal-exchange v1)
+├── guidance.py    agent-ready instruction packages (M7,
+│                  aperio-agent-brief v1)
 ├── memstore.py    universal memory records + append-only store (M3,
 │                  memory-schema v1): validation, identity, review states
 ├── memrecall.py   deterministic memory retrieval (M3, memory-recall v1)
@@ -312,6 +314,16 @@ memories via the M3 exchange format, operator notes) in one digest-checked
 `aperio-universal-exchange` v1 document. Imports preview by default,
 write `imported-*` files without overwriting, and bring memories in as
 `proposed`. See `docs/exchange.md`.
+
+## Agent-ready guidance (M7)
+
+`aperio agent-brief` renders a concise, paste-ready instruction package
+from an operator-declared goal: assignment, requirements, constraints,
+acceptance, output contract, quality criteria plus advisory profile
+self-checks, reviewed memory and accepted lessons (labelled, never
+overriding), uncertainties, and trust boundaries. No provider contact;
+private memory never enters; untrusted goals are refused. See
+`docs/agent-workflows.md` and `docs/providers.md`.
 
 ## Safe path policy (implemented)
 

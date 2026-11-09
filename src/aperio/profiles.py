@@ -33,6 +33,7 @@ _PROFILE_FIELDS = (
     "focus_fields",
     "suggested_quality_criteria",
     "suggested_evidence",
+    "suggested_checks",
     "output_expectations",
 )
 
@@ -60,6 +61,10 @@ PROFILES: dict[str, dict] = {
         ],
         "suggested_evidence": [
             "Name the basis for factual claims (or mark them as unverified).",
+        ],
+        "suggested_checks": [
+            "Restate the objective in one sentence before answering.",
+            "List any information you would need but do not have.",
         ],
         "output_expectations": [
             "A direct response that satisfies the stated outcome.",
@@ -97,6 +102,10 @@ PROFILES: dict[str, dict] = {
             "Reference the brand rules, assets, or specifications relied on.",
             "Describe verification steps (contrast, legibility, export sizes).",
         ],
+        "suggested_checks": [
+            "Check contrast and legibility at the sizes the audience will see.",
+            "Confirm every named deliverable has a usable specification.",
+        ],
         "output_expectations": [
             "A rationale, the proposed direction, and per-deliverable specs.",
             "Known unknowns (assets, fonts, brand rules) stated explicitly.",
@@ -133,6 +142,10 @@ PROFILES: dict[str, dict] = {
             "Record source identity, retrieval date, and why the source is credible.",
             "Note recency limits for time-sensitive claims.",
         ],
+        "suggested_checks": [
+            "Attach a source or an 'unverified' label to every factual claim.",
+            "List contradicting evidence instead of averaging it away.",
+        ],
         "output_expectations": [
             "Findings separated from interpretation.",
             "An explicit list of open questions and unresolved conflicts.",
@@ -167,6 +180,10 @@ PROFILES: dict[str, dict] = {
         ],
         "suggested_evidence": [
             "List the references behind factual claims.",
+        ],
+        "suggested_checks": [
+            "Re-read for tone and register consistency against the audience.",
+            "Confirm no quote, source, or statistic was invented.",
         ],
         "output_expectations": [
             "Ready-to-publish prose unless drafting was requested.",
@@ -203,6 +220,10 @@ PROFILES: dict[str, dict] = {
         "suggested_evidence": [
             "Reference the input data and its date.",
             "Show the calculation path rather than only its result.",
+        ],
+        "suggested_checks": [
+            "Reproduce every calculation from the stated inputs.",
+            "Name the decision each key assumption would change.",
         ],
         "output_expectations": [
             "A recommendation, the evidence behind it, and its limits.",
@@ -241,6 +262,10 @@ PROFILES: dict[str, dict] = {
         "suggested_evidence": [
             "Name the checks that were run and what they covered.",
             "State what was not verified.",
+        ],
+        "suggested_checks": [
+            "Map each acceptance criterion to a check that was actually run.",
+            "State what the verification did not cover.",
         ],
         "output_expectations": [
             "What changed, why, and how it was verified.",
@@ -295,6 +320,7 @@ def profile_suggestions(profile_id: str) -> dict:
     for key in (
         "suggested_quality_criteria",
         "suggested_evidence",
+        "suggested_checks",
         "output_expectations",
         "focus_fields",
     ):

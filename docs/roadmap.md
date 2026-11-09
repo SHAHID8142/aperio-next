@@ -302,6 +302,27 @@ one — although an `attested` record can have at most one review event, so a
 history-less attested entry is always forged) and always imports as
 `proposed`; nothing is promoted either way.
 
+## M7 — optional agent/provider integration and domain adaptation (implemented in 0.17.0)
+
+`aperio agent-brief GOAL [--memory-store F]` assembles the portable
+guidance package from the validated operator objective, explicit
+requirements, relevant reviewed memory (attested/verified only — proposed
+memory is listed separately as unverified, private memory never enters),
+accepted lessons, applicable quality criteria plus the profile's new
+advisory `suggested_checks`, unresolved uncertainties, the output
+contract, and the trust boundaries. Only an operator-declared goal can
+become a brief — agent/import-declared goals are refused with an
+actionable message until the operator re-declares them. No provider is
+contacted; pasting is the transport. Domain adaptation is strengthened as
+data: all six profiles now carry advisory suggested self-checks rendered
+under an explicit advisory heading, still never gating anything. The
+manual copy/paste workflows for ChatGPT/Claude/Gemini/GLM-class agents
+are documented and machine-tested (docs/agent-workflows.md), and provider
+adapter support, safety model, and the explicit statement that live
+provider end-to-end execution is NOT verified are consolidated in
+docs/providers.md. Provider integrations stay optional, fail closed
+before any mutation, and never bypass trust or governance.
+
 ## M6 — universal portable exchange (implemented in 0.16.0)
 
 `aperio exchange-export` and `aperio exchange-import` add the second-

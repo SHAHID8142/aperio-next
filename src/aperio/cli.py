@@ -35,6 +35,8 @@ Commands:
     aperio exchange-import FILE --dest-dir DIR [--apply]
                                       preview a universal exchange import
                                       (add --apply to write)
+    aperio agent-brief <goal.json> ...  assemble an agent-ready instruction
+                                      package for pasting into any agent
     aperio decision-add <dir> ...     append a decision (append-only)
     aperio handoff-write <dir> --file <handoff.json>
                                       replace the handoff with a validated one
@@ -166,6 +168,10 @@ from aperio.exchange import (
     plan_import,
     quality_report_section_from_file,
     render_import_report_markdown,
+)
+from aperio.guidance import (
+    build_agent_brief,
+    render_agent_brief_markdown,
 )
 from aperio.memportable import (
     export_memories,
@@ -818,6 +824,43 @@ def build_parser() -> argparse.ArgumentParser:
     exchange_import_parser.add_argument(
         "--json", dest="as_json", action="store_true",
         help="emit the import report as JSON",
+    )
+
+    # --- universal agent guidance (M7) ------------------------------------
+    brief_parser = subparsers.add_parser(
+        "agent-brief",
+        help="assemble an agent-ready instruction package",
+        description=(
+            "Assemble a concise, paste-ready instruction package for any "
+            "text agent: the validated objective, explicit requirements "
+            "and constraints, deliverables and acceptance criteria, the "
+            "output contract, quality criteria plus advisory profile "
+            "self-checks, reviewed memory and accepted lessons (labelled, "
+            "never overriding the brief), known uncertainties, and the "
+            "trust boundaries. Only an operator-declared goal can become a "
+            "brief. Read-only; no provider is contacted — pasting is the "
+            "transport."
+        ),
+    )
+    brief_parser.add_argument(
+        "goal_file", metavar="GOAL_FILE", help="path to a goal JSON file",
+    )
+    brief_parser.add_argument(
+        "--task-reference", metavar="TEXT",
+        help="optional task label to carry into the brief",
+    )
+    _add_memory_store_options(brief_parser)
+    brief_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit the brief as JSON",
+    )
+    brief_parser.add_argument(
+        "--output", metavar="FILE",
+        help="write the brief to a file instead of stdout",
+    )
+    brief_parser.add_argument(
+        "--force", action="store_true",
+        help="overwrite an existing --output file",
     )
 
     # --- universal memory (M3) -------------------------------------------
@@ -2131,6 +2174,34 @@ def _cmd_exchange_import(args) -> None:
         sys.stdout.write(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
         return
     sys.stdout.write(render_import_report_markdown(report))
+
+
+def _cmd_agent_brief(args) -> None:
+    goal = load_goal_file(args.goal_file)
+    if getattr(args, "memory_max_sensitivity", "internal") == "private":
+        # A brief is a shareable artifact: private memory never enters,
+        # whatever the flag says.
+        print(
+            "warning: private memory is never written into an agent brief; "
+            "the selection is capped at internal",
+            file=sys.stderr,
+        )
+        args.memory_max_sensitivity = "internal"
+    memory = _preflight_memory_selection(
+        args, objective=goal["objective"], profile=goal["profile"]
+    )
+    brief = build_agent_brief(
+        goal, memory_selection=memory, task_reference=args.task_reference
+    )
+    if args.as_json:
+        text = json.dumps(brief, ensure_ascii=False, indent=2) + "\n"
+    else:
+        text = render_agent_brief_markdown(brief)
+    if args.output:
+        _write_report_output(args.output, text, force=args.force)
+        print(f"Wrote agent brief to {args.output}")
+        return
+    sys.stdout.write(text)
 
 
 def _cmd_goal_check(args) -> None:
@@ -3715,6 +3786,8 @@ def main(argv: list[str] | None = None) -> int:
             _cmd_exchange_export(args)
         elif args.command == "exchange-import":
             _cmd_exchange_import(args)
+        elif args.command == "agent-brief":
+            _cmd_agent_brief(args)
         elif args.command == "mem-propose":
             _cmd_mem_propose(args)
         elif args.command == "mem-review":
