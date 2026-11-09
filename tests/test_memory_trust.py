@@ -378,3 +378,28 @@ def test_legacy_v1_file_claiming_verified_still_imports_as_proposed(
     assert imported["trust"] == "proposed"
     assert imported["verification"]["basis"] == "not-verified"
     assert memory_id in report["unsupported_trust_claims"]
+
+
+def test_raw_record_without_snapshot_cannot_rank_as_verified(tmp_path: Path) -> None:
+    """Defence in depth: ranking never trusts a bare ``verified`` state name."""
+
+    store = store_at(tmp_path)
+    memory = propose(store)
+    raw = {
+        "memory_id": memory["memory_id"],
+        "type": "observation",
+        "title": "Retention claim",
+        "content": "Retention is 40 percent.",
+        "scope": {"kind": "global"},
+        "tags": ["retention"],
+        "state": "verified",
+        "sensitivity": "internal",
+        "content_sha256": memory["content_sha256"],
+        "created_at": memory["created_at"],
+        "updated_at": memory["updated_at"],
+    }
+    selection = recall_memories(
+        {memory["memory_id"]: raw}, objective="retention claim"
+    )
+    assert [m["trust"] for m in selection["selected"]] == ["attested"]
+    assert selection["selected"][0]["verification_basis"] == "not-verified"

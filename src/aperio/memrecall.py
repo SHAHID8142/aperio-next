@@ -270,6 +270,8 @@ def recall_memories(
                 "scope_rank": entry["scope_rank"],
                 "score": entry["score"],
                 "content_bytes": content_bytes,
+                "trust": _trust(memory, memory["state"]),
+                "verification_basis": _verification_basis(memory),
             }
         )
         used_bytes += content_bytes
@@ -345,11 +347,19 @@ def recall_memories(
 
 
 def _trust(memory: Mapping, state: str) -> str:
-    """Snapshot trust when the reader supplied it, else the state's tier."""
+    """The trust label used for ranking; never more than the record proves.
+
+    A snapshot's own label wins. Without one, a ``verified`` state is only
+    ranked as verified when the record carries an evidence-backed
+    verification, so a caller that passes raw records cannot rank a claim
+    higher than a reviewed snapshot would.
+    """
 
     trust = memory.get("trust")
     if isinstance(trust, str) and trust in STATE_TRUST.values():
         return trust
+    if state == "verified":
+        return "verified" if _verification_basis(memory) == "evidence" else "attested"
     return memory_trust(state)
 
 
@@ -383,6 +393,17 @@ def _conflicts(selected: list[dict]) -> list[dict]:
                 }
             )
     return conflicts
+
+
+def _verification_basis(memory: Mapping) -> str:
+    """The basis a reader sees next to a record's trust label."""
+
+    verification = memory.get("verification")
+    if isinstance(verification, Mapping):
+        basis = verification.get("basis")
+        if isinstance(basis, str):
+            return basis
+    return "not-verified"
 
 
 def memory_context_items(selected: Sequence[dict]) -> list[ContextItem]:
