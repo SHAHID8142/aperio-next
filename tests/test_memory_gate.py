@@ -133,6 +133,7 @@ def test_verify_records_reviewer_and_evidence(tmp_path: Path) -> None:
     assert verified["trust"] == "verified"
     assert verified["verification"] == {
         "basis": "evidence",
+        "replayed_state": "verified",
         "evidence": ["Q1 cohort report", "finance reconciliation"],
         "reviewer": "bob",
         "reviewer_distinct_from_proposer": True,

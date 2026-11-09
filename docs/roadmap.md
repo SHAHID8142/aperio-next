@@ -264,6 +264,44 @@ claim stand where only a recorded transition should:
   transitions and that hashes are integrity checks, not authentication of the
   producer.
 
+## M3 state-proof closure (0.13.1)
+
+The final-master audit of the M3 trust boundary found that the 0.12/0.13 rule
+("authority comes from recorded review events") was enforced for `verified`
+but not one tier lower:
+
+- **An `attested` claim needed no `accept` event.** A caller-built record
+  with `state: "attested"` and an empty (or accept-free) history received
+  attested authority everywhere: the derivation mapped the state to its label
+  unconditionally, retrieval ranked it above proposed and let it use the
+  reviewed-memory global-scope bypass, and both pack builders labelled it
+  attested. The derivation now requires the recorded transition that
+  produces every active state: an unsupported `attested` claim is downgraded
+  to `proposed` with `verification.basis: unrecorded` and the reason stated,
+  consistently in `resolve_trust`, retrieval, context items, both pack
+  builders and the effective-trust rule. A declared `attested` label over
+  that history is refused, like any other self-promoting claim. Genuine
+  store records are unaffected — replay always carries the transition — and
+  the documented `verified`-without-proof → `attested` legacy behaviour is
+  unchanged.
+- **A claimed state its own history contradicts is no longer supportable.**
+  The derivation now reports `verification.replayed_state` (the state the
+  record's event log ends in). A claimed recorded state that disagrees with
+  it is reported as `unrecorded` with the contradiction named; retrieval
+  excludes a record whose replay ends retracted/superseded regardless of the
+  claimed state, and context-item conversion refuses it — the pack's
+  `memory_state_inconsistent` drop already covered packs.
+- Recall's `memory_verification_unrecorded` warning and the pack's
+  `memory_item_trust_downgraded` warning were generalised to cover state
+  claims, and `memory_context_items` derives its `reviewed` flag from the
+  derived trust instead of the claimed state name.
+
+Exchange files are unchanged: an `attested`-claiming entry is still accepted
+as data (a truncated genuine export cannot be distinguished from a forged
+one — although an `attested` record can have at most one review event, so a
+history-less attested entry is always forged) and always imports as
+`proposed`; nothing is promoted either way.
+
 ## Next (requires independent review and explicit instruction)
 
 - Remaining M3 hardening whatever the review confirms (for example goal

@@ -481,8 +481,10 @@ a reviewer identical to the declared proposer; identifiers are attribution,
 not authentication. Effective trust is derived from what the recorded event
 proves: a `verified` state lacking evidence, a reviewer, or a distinct
 reviewer keeps its history intact but is labelled `attested` with the exact
-reasons, in retrieval, JSON, Markdown, packs and exchange files alike.
-Effective trust is *derived*, never declared: one derivation
+reasons, and an `attested` state whose history does not contain the recorded
+`accept` transition (or whose history ends somewhere else entirely) is
+labelled `proposed` — in retrieval, JSON, Markdown, packs and exchange files
+alike. Effective trust is *derived*, never declared: one derivation
 (`memstore.derive_verification`) replays the record's own review events, and
 every entry point (store snapshots, the recall API, context items, packs,
 exchange import) uses it, so a `trust`, `verification` or "reviewer differed"

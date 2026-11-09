@@ -551,16 +551,53 @@ def validate_memory_record(record: object, *, require_id: bool = True) -> dict:
 
 
 def _verification(record: dict, events: list[dict], state: str) -> dict:
-    """How a ``verified`` state was reached, without inventing confidence.
+    """How a claimed state was reached, without inventing confidence.
 
-    Effective trust is derived from what the recorded transition actually
-    proves, not from the state name alone. A verification counts as
-    evidence-backed only when the event recorded **both** a supporting
+    Effective trust is derived from what the recorded transitions actually
+    prove, not from the state name alone. A ``verified`` state counts as
+    evidence-backed only when a recorded event carries **both** a supporting
     reference and a reviewer identifier, and that reviewer is not the
-    memory's declared proposer. Anything else stays exactly as recorded in
+    memory's declared proposer; anything else stays exactly as recorded in
     history but is reported as ``unrecorded``, downgraded to ``attested``,
-    and carries the precise reason.
+    and carries the precise reason. The same rule one tier lower: an
+    ``attested`` state is only supported when the history contains the
+    ``accept`` transition that produces it — a record that claims acceptance
+    without that transition is downgraded to ``proposed``. Store records are
+    replayed from their events, so a genuine snapshot always proves its own
+    state; only records that arrive from outside a store can claim a state
+    their history does not show.
     """
+
+    if state == "attested":
+        if not any(event["to_state"] == "attested" for event in events):
+            return {
+                "basis": "unrecorded",
+                "evidence": [],
+                "reviewer": None,
+                "reviewer_distinct_from_proposer": None,
+                "independence": "not-applicable",
+                "downgraded": True,
+                "reasons": [
+                    "the recorded review history does not contain the "
+                    "acceptance transition"
+                ],
+                "detail": (
+                    "this record is marked attested without a recorded "
+                    "acceptance transition; it is not treated as accepted "
+                    "and is shown as proposed. Record the acceptance with "
+                    "'aperio mem-review --accept' on the store that owns "
+                    "this memory."
+                ),
+                "note": VERIFICATION_INDEPENDENCE_NOTE,
+            }
+        return {
+            "basis": "not-verified",
+            "evidence": [],
+            "reviewer": None,
+            "reviewer_distinct_from_proposer": None,
+            "independence": "not-applicable",
+            "note": VERIFICATION_INDEPENDENCE_NOTE,
+        }
 
     if state != "verified":
         return {
@@ -665,13 +702,41 @@ def derive_verification(record: Mapping) -> dict:
     This is the authoritative derivation: it never reads the record's
     ``verification`` field, so a caller cannot grant itself an evidence-backed
     label by writing one.
+
+    The result carries ``replayed_state``: the state the record's own event
+    log ends in (``proposed`` when there is no history). A claimed recorded
+    state that disagrees with that replay is not supported: the derivation
+    reports ``unrecorded`` with the contradiction named, and every reader
+    falls back to the state the history actually proves.
     """
 
     # ``state`` may be a derived value ("expired"), which says nothing about
     # how the record was reviewed; the recorded state is the authority.
     recorded_state = record.get("recorded_state") or record.get("state")
     events = _history_events(record.get("history"))
-    return _verification(dict(record), events, recorded_state)
+    verification = _verification(dict(record), events, recorded_state)
+    replayed = events[-1]["to_state"] if events else "proposed"
+    verification["replayed_state"] = replayed
+    if (
+        isinstance(recorded_state, str)
+        and recorded_state in MEMORY_STATES
+        and recorded_state != replayed
+        and not (recorded_state == "proposed" and replayed == "proposed")
+    ):
+        verification["basis"] = "unrecorded"
+        verification["downgraded"] = True
+        reasons = verification.setdefault("reasons", [])
+        reasons.append(
+            f"the recorded review history ends in {replayed!r}, not the "
+            f"claimed state {recorded_state!r}"
+        )
+        verification.setdefault(
+            "detail",
+            "this record's claimed review state is contradicted by its own "
+            "recorded history; it is treated at the level that history "
+            "proves, never higher.",
+        )
+    return verification
 
 
 def resolve_trust(record: Mapping, *, label: str = "memory") -> dict:
@@ -686,8 +751,10 @@ def resolve_trust(record: Mapping, *, label: str = "memory") -> dict:
     There is no exception for a truncated or absent history. A ``verified``
     state whose retained events do not include the verification transition is
     reported as ``unrecorded`` — uncertainty, never promotion — and the reason
-    says so. Snapshots keep the whole review history so that a real store
-    record can always prove what it recorded. This function validates internal
+    says so; an ``attested`` state whose history does not contain the
+    acceptance transition is likewise downgraded to ``proposed``. Snapshots
+    keep the whole review history so that a real store record can always prove
+    what it recorded. This function validates internal
     consistency; it does not authenticate a record's producer, and a caller
     that fabricates a complete review transition is indistinguishable from a
     store that recorded one (documented limitation).
@@ -761,15 +828,22 @@ def effective_trust(state: str, verification: dict | None = None) -> str:
     """Trust label a reader must use for a recorded state.
 
     ``verified`` is only reported as ``verified`` when the verification is
-    evidence-backed; every other combination falls back to the state's own
-    tier. This is the single rule used by stores, retrieval, packs, and the
-    exchange validator.
+    evidence-backed, and ``attested`` only as ``attested`` when the
+    derivation found its acceptance transition; each unsupported claim falls
+    back one tier with the reason stated. Called without a derivation (an
+    exchange validator checking which labels a state *could* produce) the
+    state's own tier applies. This is the single rule used by stores,
+    retrieval, packs, and the exchange validator.
     """
 
     _choice(state, MEMORY_STATES, "memory state")
     if state == "verified":
         if (verification or {}).get("basis") == "evidence":
             return "verified"
+        return "attested"
+    if state == "attested":
+        if (verification or {}).get("basis") == "unrecorded":
+            return "proposed"
         return "attested"
     return STATE_TRUST.get(state, "proposed")
 

@@ -29,6 +29,23 @@ def snapshot(
     verified_by: str | None = None,
 ) -> dict:
     history: list[dict] = []
+    if state == "attested":
+        # The recorded state must be derivable from the history the record
+        # carries: attested exists only through a recorded accept transition.
+        history.append(
+            {
+                "memory_id": memory_id,
+                "revision": 2,
+                "at": updated_at or created_at,
+                "actor": verified_by or "ops-lead",
+                "action": "accept",
+                "from_state": "proposed",
+                "to_state": "attested",
+                "note": None,
+                "evidence": [],
+                "reason": None,
+            }
+        )
     if verified_by:
         history.append(
             {
@@ -574,6 +591,20 @@ def test_workspace_scoped_memory_needs_an_explicit_workspace_label() -> None:
             "content_sha256": "a" * 64,
             "created_at": "2026-01-01T00:00:00Z",
             "updated_at": "2026-01-01T00:00:00Z",
+            "history": [
+                {
+                    "memory_id": "MEM-000000000001",
+                    "revision": 2,
+                    "at": "2026-01-01T00:00:00Z",
+                    "actor": "ops-lead",
+                    "action": "accept",
+                    "from_state": "proposed",
+                    "to_state": "attested",
+                    "note": None,
+                    "evidence": [],
+                    "reason": None,
+                }
+            ],
         }
     }
 

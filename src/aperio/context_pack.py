@@ -475,6 +475,12 @@ def _validate_memory_item(
     downgraded = claimed_rank > _MEMORY_TRUST_RANK[derived_trust]
     if basis == "evidence" and derived_verification["basis"] != "evidence":
         downgraded = True
+    if derived_verification.get("downgraded"):
+        # The state claim itself is above what the carried history proves
+        # (verified without its verification, or attested without its
+        # acceptance transition): surface it even when the labels are
+        # already honest.
+        downgraded = True
 
     recorded_state = resolved["recorded_state"]
     inconsistent = False
@@ -1378,8 +1384,8 @@ def build_context_pack(
             warnings,
             "memory_item_trust_downgraded",
             "memory",
-            "these items claimed a verified label their recorded support does "
-            "not justify; they are shown as attested: "
+            "these items claimed a review level their recorded support does "
+            "not justify; they are shown at the level their history proves: "
             + ", ".join(sorted(memory_downgraded)[:5]),
         )
     if memory_reevaluated:

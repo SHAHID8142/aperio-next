@@ -74,6 +74,23 @@ def raw_record(**overrides) -> dict:
     ).hexdigest()
     record["memory_id"] = "MEM-" + record["content_sha256"][:12]
     record.update(overrides)
+    if record["state"] == "attested" and "history" not in overrides:
+        # A claimed state must be derivable from the history the record
+        # carries: attested exists only through a recorded accept transition.
+        record["history"] = [
+            {
+                "memory_id": record["memory_id"],
+                "revision": 2,
+                "at": record["updated_at"],
+                "actor": "ops-lead",
+                "action": "accept",
+                "from_state": "proposed",
+                "to_state": "attested",
+                "note": None,
+                "evidence": [],
+                "reason": None,
+            }
+        ]
     return record
 
 

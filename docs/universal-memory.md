@@ -107,17 +107,27 @@ Its **effective trust** is what that history actually proves, and every reader
 | Recorded state | Verification basis | Effective trust |
 | --- | --- | --- |
 | `proposed` | `not-verified` | `proposed` |
-| `attested` | `not-verified` | `attested` |
+| `attested` — with a recorded `accept` transition in its history | `not-verified` | `attested` |
+| `attested` — **without** a recorded `accept` transition, or with a history that ends elsewhere | `unrecorded` | `proposed` |
 | `verified` | `evidence` — an evidence reference **and** a reviewer identifier, and the reviewer is not the declared proposer | `verified` |
 | `verified` | `unrecorded` — any of those three is missing | `attested` |
 | `retracted`, `superseded`, derived `expired` | `not-verified` | `proposed` |
 
+Genuine store records always carry the transition that produced their state
+(state is replayed from the events), so the second row of the `attested` pair
+can only arise for records that arrive from outside a store — a caller-built
+raw record, or an item handed to a pack directly. That is the point: a record
+that claims acceptance without the recorded event is shown at the level its
+history proves.
+
 A downgraded record is never edited and never hidden: `state` still reads
-`verified`, `history` still shows the original event, and the snapshot adds
-`verification.basis: unrecorded`, `verification.downgraded: true`,
-`verification.reasons` naming the exact deficiency, and a trust label of
-`attested`. Retrieval ranks it as attested, packs label it attested and raise
-`memory_verification_unrecorded`, and a re-run of `--verify` with evidence and
+`verified` (or `attested`), `history` still shows the original event, and the
+snapshot adds `verification.basis: unrecorded`,
+`verification.replayed_state` (the state the record's own event log ends in),
+`verification.downgraded: true`,
+`verification.reasons` naming the exact deficiency, and the matching lower
+trust label. Retrieval ranks it at the derived level, packs label it there and
+raise `memory_verification_unrecorded`, and a re-run of `--verify` with evidence and
 a different reviewer records a new transition that restores `basis: evidence`.
 
 **Acceptance is not factual verification.** Accepting a preference or an
@@ -165,7 +175,10 @@ Known limitations, stated honestly:
 
 Every entry point that can receive memory-shaped data resolves trust the same
 way, through one auditable rule: read the recorded review events, derive the
-verification basis from them, and only then label the record. A supplied
+verification basis from them, and only then label the record. The rule also
+covers the state claim itself: the recorded state must be the state the
+record's own event log ends in (`verification.replayed_state`), and an
+`attested` claim must have its `accept` transition. A supplied
 `trust` string may agree with that derivation or honestly downgrade it; it can
 never raise it.
 

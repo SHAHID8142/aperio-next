@@ -182,6 +182,12 @@ def recall_memories(
         # malformed or self-promoting record is refused, not quietly skipped.
         resolved = resolve_trust(memory, label="memory")
         state = resolved["state"]
+        if (resolved["verification"].get("replayed_state")
+                in INACTIVE_STATES):
+            # The record's own event log ends in a withdrawal; a claimed
+            # active state cannot keep it selectable.
+            exclude("state")
+            continue
         validity = memory_validity(memory, as_of=evaluated_on)
         if validity["reason"] == "expired" or state == "expired":
             exclude("expired")
@@ -223,14 +229,15 @@ def recall_memories(
             + len(objective_terms & memory_tags) * 2
             + len(objective_terms & content_terms)
         )
+        trust = resolved["trust"]
         if relevance == 0 and scope_rank < _SCOPE_RANK["profile"]:
             # A global-scope memory only enters on explicit relevance unless
             # the operator has reviewed it, in which case it is a deliberate
-            # standing preference rather than noise.
-            if not (scope_rank == _SCOPE_RANK["global"] and state != "proposed"):
+            # standing preference rather than noise. The *derived* trust
+            # decides, never the claimed state name.
+            if not (scope_rank == _SCOPE_RANK["global"] and trust != "proposed"):
                 exclude("no-match")
                 continue
-        trust = resolved["trust"]
         candidates.append(
             {
                 "memory": memory,
@@ -323,9 +330,11 @@ def recall_memories(
             {
                 "code": "memory_verification_unrecorded",
                 "detail": (
-                    "these memories were marked verified without recorded "
-                    "supporting evidence; they are shown as attested, not as "
-                    "evidence-backed: " + ", ".join(unrecorded[:5])
+                    "these memories carry a review state their recorded "
+                    "history does not prove (verified without recorded "
+                    "supporting evidence, or attested without a recorded "
+                    "acceptance); they are shown at the level their history "
+                    "supports, not higher: " + ", ".join(unrecorded[:5])
                 ),
             }
         )
@@ -423,10 +432,20 @@ def memory_context_items(
         if not isinstance(memory, Mapping):
             raise ValidationError("selected memories must be memory objects")
         resolved = resolve_trust(memory, label="memory")
-        if resolved["recorded_state"] in INACTIVE_STATES:
+        inactive = sorted(
+            {
+                state
+                for state in (
+                    resolved["recorded_state"],
+                    resolved["verification"].get("replayed_state"),
+                )
+                if state in INACTIVE_STATES
+            }
+        )
+        if inactive:
             raise ValidationError(
                 f"memory {memory.get('memory_id')!r} is "
-                f"{resolved['recorded_state']}; a retracted or superseded "
+                f"{inactive[0]}; a retracted or superseded "
                 "memory cannot be offered as context"
             )
         validity = memory_validity(memory, as_of=evaluated_on)
@@ -458,7 +477,7 @@ def memory_context_items(
             "validity": validity,
             "sensitivity": memory.get("sensitivity", "internal"),
             "content_sha256": memory["content_sha256"],
-            "reviewed": resolved["state"] in ("attested", "verified"),
+            "reviewed": resolved["trust"] in ("attested", "verified"),
             "verification_basis": resolved["verification"]["basis"],
         }
         items.append(
