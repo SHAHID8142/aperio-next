@@ -38,7 +38,7 @@ criteria are §16 of the directive and are re-verified in Chunk 08.
 | Chunk | Deliverable | Status | Commit |
 |---|---|---|---|
 | 00 | Existing code audit + M3 final trust stabilization | COMPLETE | 4997fe9 |
-| 01 | M4 — universal mistake prevention + quality evaluation | COMPLETE | see Chunk 01 note |
+| 01 | M4 — universal mistake prevention + quality evaluation | COMPLETE | 4d158fd |
 | 02 | M5 — controlled feedback and improvement | PENDING | — |
 | 03 | M6 — universal portable exchange v2 | PENDING | — |
 | 04 | M7 — optional integration + domain adaptation | PENDING | — |
@@ -121,7 +121,7 @@ README + docs/universal-memory.md + docs/roadmap.md, version 0.13.1.
 **Tests:** 1093 baseline → **1111 passed** locally (0 failures), Python
 3.14.7. GitHub Actions: not run (billing lock — see Blockers).
 
-### Chunk 01 — COMPLETE (0.14.0)
+### Chunk 01 — COMPLETE (0.14.0, commit 4d158fdfabf5396ab4fec7260b84686c5ed1db2b)
 
 **Delivered (M4).** New module `src/aperio/quality.py`: one deterministic
 engine over a declarative rule registry (quality-rules v1), a stable
