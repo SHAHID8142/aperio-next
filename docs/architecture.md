@@ -181,14 +181,19 @@ accepts that honest pair and rejects combinations the recorded state could
 not produce.
 
 Governing rule: **memory authority is derived from recorded review events and
-nothing else.** Every entry point that can accept memory-shaped data — store
+nothing else — and the derivation is the same function everywhere.** Every entry point that can accept memory-shaped data — store
 snapshots, the recall API, `memory_context_items()`, `build_context_pack()`,
 `build_goal_context_pack()` and exchange import — calls
 `memstore.resolve_trust()`, which replays the record's own history, derives
 the verification basis, and refuses a supplied trust or verification claim the
 history does not support. Hand-built context items are re-validated in the
-packer (identity, recomputed content hash, label, sensitivity, support), so the
-boundary does not depend on which function a caller invokes first. Validity is
+packer (identity, recomputed content hash, label, memory type, scope, source,
+tags, sensitivity) and their trust is re-derived from the review transitions
+they carry, so the boundary does not depend on which function a caller invokes
+first, and a label that no transition supports is rewritten down with an
+explicit diagnostic. Snapshots keep the record's whole review history, so a
+real review is always provable; a record whose history lacks the proving
+transition is reported as uncertainty (`unrecorded`), never promoted. Validity is
 likewise owned by the reader: one pack evaluates every item against one date
 (`--memory-as-of`, default today UTC), records it in
 `content.memory.validity`, and re-derives expiry rather than trusting a cached

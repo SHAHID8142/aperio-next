@@ -145,12 +145,18 @@ Known limitations, stated honestly:
   (`actor`, `source`) is a declaration, not proof of identity.
 - Aperio does not verify the content of evidence references; it records that
   the operator supplied them.
-- A store snapshot keeps the last 32 review events, so a verification older
-  than that cannot be re-derived. In that one case a snapshot's own
-  verification is kept when it is internally coherent; a caller that claims
-  the same fields without ever having the history is indistinguishable from
-  one that did. Aperio does not authenticate records or callers — it refuses
-  unfounded promotions, and it cannot prove a record's past.
+- A store snapshot keeps the record's **whole** review history (the store caps
+  how much can be appended, so nothing is dropped for display). A record whose
+  history genuinely lacks the verification transition reads as `attested` with
+  `basis: unrecorded` — uncertainty, never promotion. There is no "truncated
+  history" escape: declaring that the proof was cut off never substitutes for
+  the proof.
+- Aperio validates internal consistency; it does not authenticate a record's
+  producer. A caller that fabricates a complete, self-consistent review
+  transition is indistinguishable from a store that genuinely recorded one.
+  Packs therefore state where their labels came from
+  (`content.memory.trust_derivation: recorded-review-history` plus a note), and
+  nothing in a pack should be read as proof of who wrote a memory.
 - A caller that supplies a memory item without `valid_from`/`valid_until` is
   describing a record with no window; the pack cannot expire knowledge the
   item does not mention.
@@ -168,8 +174,8 @@ never raise it.
 | Store snapshot (`MemoryStore.snapshots()`) | recorded state, review events, chain-verified lines | full: `verified` when the events prove evidence plus a distinct declared reviewer |
 | Legacy snapshot (pre-gate `verify`) | same, plus the honest downgrade rules | `attested`, `basis: unrecorded`, reasons kept |
 | Recall output fed back in | the record is re-derived, not re-read | same as the snapshot it came from |
-| Caller-built raw record (`recall_memories`, `memory_context_items`) | shape, known state, known trust label, internal consistency | at most `attested`; a `verified` claim without recorded proof is refused |
-| Hand-built `ContextItem` in a pack | source/kind, `memory_id` ↔ `source_ref`, recomputed `content_sha256`, label enum, sensitivity, verification support | at most `attested` unless the item carries the full evidence contract; `verified` without it is downgraded with a warning |
+| Caller-built raw record (`recall_memories`, `memory_context_items`) | shape, known state, key ↔ `memory_id`, internal consistency, review transitions | whatever the record's own transitions prove; a label or `verification` block above that is refused |
+| Hand-built `ContextItem` in a pack | source/kind, `memory_id` ↔ `source_ref`, recomputed `content_sha256`, label enum, memory type, scope, source, tags, sensitivity, **review transitions** | re-derived from the item's `review_history` with the same function the store uses; any higher label is rewritten down with `memory_item_trust_downgraded` |
 | Exchange file entry | content digest, entry shape, state/trust combination, imported history | always `proposed` in the destination |
 
 A record whose `trust` disagrees with its own history is **refused**, not
@@ -181,9 +187,34 @@ not from a label that says one happened. Records supplied directly are still
 supported as *data* — they are ranked and rendered, just never promoted.
 
 Sensitivity and identity are re-checked at the same time: a private record is
-always marked local-only inside a pack (a pack is a shareable artifact), and a
-memory item whose content no longer matches its `content_sha256` is rejected
-as altered after selection.
+always marked local-only inside a pack (a pack is a shareable artifact, and
+anything that is not `shareable` is excluded), and a memory item whose content
+no longer matches its `content_sha256` is rejected as altered after selection.
+Retracted and superseded memory is excluded as `memory_not_active`; an item
+whose claimed state disagrees with the transitions it carries is excluded as
+`memory_state_inconsistent` rather than guessed at.
+
+### Raw data, validated snapshots, and context items
+
+Three shapes reach these functions, and they are not interchangeable:
+
+| Shape | Produced by | What it means |
+| --- | --- | --- |
+| **Snapshot** | `MemoryStore.snapshots()` | derived from a chain-verified store file: recorded state, whole review history, content identity |
+| **Raw record** | any caller | *data* in the snapshot shape; trust is derived from whatever transitions it carries, and nothing about it is authenticated |
+| **Context item** | `memory_context_items()` | a snapshot converted for a pack: identity, content hash, review history, proposer and validity, so the pack can re-derive rather than believe |
+
+`memory_context_items(selected, *, as_of=None)` takes snapshots (or raw
+records in that shape) and refuses retracted or superseded memory outright —
+offering a withdrawn decision as context is a mistake no caller should be able
+to make silently. Pass `as_of` when you want the items evaluated against a
+historical date; the pack then re-evaluates against its own `--memory-as-of`
+anyway and records the date it used.
+
+Hash values in this layer are **integrity checks**: they show that content did
+not change after it was recorded or selected. They are not authentication and
+they are not secrecy — anybody who can read the file can read the content, and
+anybody who can write it can recompute the hashes.
 
 ### What `verify` actually requires
 
@@ -202,8 +233,8 @@ state in the append-only history. A record's snapshot then carries a
 
 | `verification.basis` | Meaning |
 | --- | --- |
-| `evidence` | a `verify` transition recorded at least one evidence reference |
-| `unrecorded` | marked verified without evidence (always pre-gate history) |
+| `evidence` | a `verify` transition in the record's history recorded at least one evidence reference **and** a reviewer identifier distinct from the declared proposer |
+| `unrecorded` | marked verified without proof the transitions support: no verification transition retained, no evidence reference, no reviewer, or the reviewer is the declared proposer |
 | `not-verified` | the record is proposed or attested, not verified |
 
 Acceptance is **not** verification: `--accept` records that the operator

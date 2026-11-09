@@ -60,7 +60,6 @@ MAX_EVIDENCE_BYTES = 300
 MAX_EVIDENCE_ITEMS = 12
 MAX_SCOPE_VALUE_BYTES = 120
 MAX_MEMORIES_PER_STORE = 2000
-MAX_HISTORY_ENTRIES = 32
 MAX_NOTE_BYTES = 1000
 MAX_ACTOR_BYTES = 64
 MAX_REASON_BYTES = 300
@@ -91,6 +90,9 @@ MEMORY_STATES = (
 )
 ACTIVE_STATES = ("proposed", "attested", "verified")
 INACTIVE_STATES = ("superseded", "retracted", "expired")
+_BASIS_RANK = {"not-verified": 0, "unrecorded": 1, "evidence": 2}
+_TRUST_RANK = {"proposed": 0, "attested": 1, "verified": 2}
+
 STATE_TRUST = {
     "proposed": "proposed",
     "attested": "attested",
@@ -577,6 +579,14 @@ def _verification(record: dict, events: list[dict], state: str) -> dict:
     reviewer = verify_event.get("actor") if verify_event else None
     proposer = record.get("actor")
     reasons: list[str] = []
+    if verify_event is None:
+        # Either the transition was never recorded, or the history no longer
+        # reaches back to it. Both mean the same thing to a reader: this
+        # record's own history does not prove the claim.
+        reasons.append(
+            "the recorded review history does not contain the verification "
+            "transition"
+        )
     if not evidence:
         reasons.append("no supporting evidence reference was recorded")
     if not reviewer:
@@ -664,22 +674,6 @@ def derive_verification(record: Mapping) -> dict:
     return _verification(dict(record), events, recorded_state)
 
 
-def _coherent_declared_verification(declared: Mapping) -> bool:
-    """Is a store-derived verification claim internally consistent at all?"""
-
-    if declared.get("basis") != "evidence":
-        return False
-    evidence = declared.get("evidence")
-    reviewer = declared.get("reviewer")
-    return (
-        isinstance(evidence, list)
-        and any(isinstance(item, str) and item.strip() for item in evidence)
-        and isinstance(reviewer, str)
-        and bool(reviewer.strip())
-        and declared.get("reviewer_distinct_from_proposer") is True
-    )
-
-
 def resolve_trust(record: Mapping, *, label: str = "memory") -> dict:
     """The authoritative trust resolution for one memory-shaped record.
 
@@ -689,13 +683,14 @@ def resolve_trust(record: Mapping, *, label: str = "memory") -> dict:
     does not support is refused rather than silently ignored, so a forged
     record fails loudly instead of being quietly rewritten.
 
-    One honest exception: a store snapshot keeps only the last
-    ``MAX_HISTORY_ENTRIES`` review events, so a verification that happened
-    earlier cannot be re-derived. When the history is truncated *and* the
-    record carries a ``recorded_state`` marker *and* the declared verification
-    is internally coherent, that store-derived claim is kept. A record that
-    merely invents the same fields cannot prove it ever had that history;
-    Aperio does not authenticate records, and this limit is documented.
+    There is no exception for a truncated or absent history. A ``verified``
+    state whose retained events do not include the verification transition is
+    reported as ``unrecorded`` — uncertainty, never promotion — and the reason
+    says so. Snapshots keep the whole review history so that a real store
+    record can always prove what it recorded. This function validates internal
+    consistency; it does not authenticate a record's producer, and a caller
+    that fabricates a complete review transition is indistinguishable from a
+    store that recorded one (documented limitation).
     """
 
     if not isinstance(record, Mapping):
@@ -719,34 +714,22 @@ def resolve_trust(record: Mapping, *, label: str = "memory") -> dict:
         trust = "proposed"
     else:
         trust = effective_trust(recorded_state, verification)
-    history = record.get("history")
-    truncated = isinstance(history, list) and len(history) >= MAX_HISTORY_ENTRIES
     declared_verification = record.get("verification")
     if declared_verification is not None:
         if not isinstance(declared_verification, Mapping):
             _fail(f"{label} {record.get('memory_id')!r} verification must be an object")
         declared_basis = declared_verification.get("basis")
-        if declared_basis not in (None, verification["basis"]):
-            recoverable = (
-                truncated
-                and record.get("recorded_state") is not None
-                and _coherent_declared_verification(declared_verification)
+        if declared_basis is not None and _BASIS_RANK.get(
+            declared_basis, len(_BASIS_RANK)
+        ) > _BASIS_RANK[verification["basis"]]:
+            # A declared basis may repeat or honestly understate what history
+            # proves, but it may never claim more. The derivation stands.
+            _fail(
+                f"{label} {record.get('memory_id')!r} declares verification "
+                f"basis {declared_basis!r} but its recorded history "
+                f"supports only {verification['basis']!r}; authority comes "
+                "from recorded review events, not from a declared field"
             )
-            if recoverable:
-                verification = {
-                    key: value
-                    for key, value in declared_verification.items()
-                    if isinstance(key, str)
-                }
-                verification["basis"] = "evidence"
-                trust = effective_trust(state, verification)
-            else:
-                _fail(
-                    f"{label} {record.get('memory_id')!r} declares verification "
-                    f"basis {declared_basis!r} but its recorded history "
-                    f"supports only {verification['basis']!r}; authority comes "
-                    "from recorded review events, not from a declared field"
-                )
     declared_trust = record.get("trust")
     if declared_trust is not None:
         if (
@@ -758,8 +741,9 @@ def resolve_trust(record: Mapping, *, label: str = "memory") -> dict:
                 "label; expected one of: "
                 + ", ".join(sorted(set(STATE_TRUST.values())))
             )
-        allowed = {trust} | ({"attested"} if trust == "verified" else set())
-        if declared_trust not in allowed:
+        # A label may repeat the derivation or honestly understate it (a
+        # reader that only shows part of the review). It may never raise it.
+        if _TRUST_RANK[declared_trust] > _TRUST_RANK[trust]:
             _fail(
                 f"{label} {record.get('memory_id')!r} trust label "
                 f"{declared_trust!r} disagrees with its recorded history, "
@@ -822,11 +806,13 @@ def _snapshot(record: dict, events: list[dict], *, as_of: str | None) -> dict:
         "trust": memory_trust(state),
         "content_sha256": memory_content_sha256(record),
         "declared_state": declared_state,
-        "history": history[-MAX_HISTORY_ENTRIES:],
+        "history": history,
         "history_entries": len(events),
     }
     snapshot["recorded_state"] = state
-    verification = _verification(record, events, state)
+    # One derivation for every reader: the snapshot asks the same function the
+    # retrieval, pack and exchange layers ask, so they cannot disagree.
+    verification = derive_verification(snapshot)
     snapshot["verification"] = verification
     snapshot["trust"] = effective_trust(state, verification)
     validity = memory_validity(record, as_of=as_of)

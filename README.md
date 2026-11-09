@@ -482,10 +482,13 @@ not authentication. Effective trust is derived from what the recorded event
 proves: a `verified` state lacking evidence, a reviewer, or a distinct
 reviewer keeps its history intact but is labelled `attested` with the exact
 reasons, in retrieval, JSON, Markdown, packs and exchange files alike.
-Effective trust is *derived*, never declared: every entry point (store
-snapshots, the recall API, context items, packs, exchange import) replays the
-record's own review events and refuses a `trust` or `verification` claim that
-history does not support. Acceptance is not factual proof, imports never raise
+Effective trust is *derived*, never declared: one derivation
+(`memstore.derive_verification`) replays the record's own review events, and
+every entry point (store snapshots, the recall API, context items, packs,
+exchange import) uses it, so a `trust`, `verification` or "reviewer differed"
+claim that the transitions do not support is rewritten down or refused. A pack
+re-derives the trust of items a caller builds by hand, and says so in
+`content.memory.trust_derivation`. Acceptance is not factual proof, imports never raise
 trust, and nothing is promoted automatically. Retrieval is deterministic
 keyword + scope + review state ranking with explicit exclusion reasons and
 whole-item budgeting — no embeddings, no model scores, no network. Validity

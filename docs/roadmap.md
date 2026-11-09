@@ -229,6 +229,41 @@ and closed them with one rule rather than four patches:
   sensitivity and evidence are unchanged, and the record still enters as
   `proposed`.
 
+## M3 trust-consumption completion (0.13.0)
+
+A second review of the trust boundary found that two entry points still let a
+claim stand where only a recorded transition should:
+
+- **The pack believed metadata.** `context_pack` accepted a memory item's
+  `verification_basis`, `verification_evidence` and
+  `reviewer_distinct_from_proposer` as the evidence contract. A caller-built
+  item with those three fields set therefore entered a pack as `verified`
+  without any review transition. Items now carry their review history, and the
+  pack re-derives trust from it with the same function the store uses; a label
+  above the derivation is rewritten down with `memory_item_trust_downgraded`,
+  and the display facts (basis, evidence, reviewer, reasons) are taken from
+  the derivation rather than from the claim.
+- **A declaration could stand in for a lost history.** `resolve_trust()`
+  accepted "the history was truncated" plus a coherent-looking verification
+  block as proof. Snapshots now keep the whole history, so a real review can
+  always be re-derived, and the substitution path is gone: a `verified` state
+  whose transitions do not include the verification reads `unrecorded` /
+  `attested` with the reason stated. Declared bases and labels may only repeat
+  or understate the derivation, never exceed it.
+- **One derivation, one contract.** `_verification()` is no longer called from
+  three places with three notions of proof: `derive_verification()` is the only
+  entry, used by snapshots, recall, `memory_context_items()`, both pack
+  builders and the exchange validator. Exchange entries still import as
+  `proposed`, with claimed trust never applied.
+- **Conflicting and withdrawn memory is excluded, not interpreted.** A pack
+  drops an item whose claimed state disagrees with its transitions
+  (`memory_state_inconsistent`), and retracted or superseded memory
+  (`memory_not_active`); `memory_context_items()` refuses the latter outright.
+- **Packs say where trust came from.** `content.memory.trust_derivation` and
+  `trust_note` state that labels are re-derived from recorded review
+  transitions and that hashes are integrity checks, not authentication of the
+  producer.
+
 ## Next (requires independent review and explicit instruction)
 
 - Remaining M3 hardening whatever the review confirms (for example goal

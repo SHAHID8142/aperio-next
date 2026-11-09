@@ -20,7 +20,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from aperio import __version__
 from aperio.decisions import decisions_path, read_decisions
@@ -28,6 +28,7 @@ from aperio.errors import AperioError, PathError, ValidationError
 from aperio.handoff import handoff_path, read_handoff
 from aperio.memstore import (
     MEMORY_STATES,
+    resolve_trust,
     MEMORY_TYPES,
     normalize_scope,
     normalize_source,
@@ -280,11 +281,14 @@ def _warn(warnings: list[dict], code: str, source: str, detail: str) -> None:
 
 _MEMORY_ID_RE = re.compile(r"^MEM-[0-9a-f]{12}$")
 _MEMORY_TRUST_LABELS = tuple(sorted(set(STATE_TRUST.values())))
+_MEMORY_TRUST_RANK = {"proposed": 0, "attested": 1, "verified": 2}
 _MEMORY_DETAIL_KEYS = (
     "memory_id",
     "memory_type",
     "state",
+    "recorded_state",
     "trust",
+    "review_history",
     "scope",
     "source",
     "tags",
@@ -312,6 +316,43 @@ def _memory_content_sha256(item: "ContextItem", detail: dict) -> str:
         raise ValidationError(
             f"memory item {item.source_ref!r} cannot be canonicalised: {error}"
         ) from error
+
+
+def _memory_review_history(detail: dict, index: int) -> list[dict]:
+    """The review transitions a memory item carries, structurally checked."""
+
+    history = detail.get("review_history")
+    if history is None:
+        return []
+    if not isinstance(history, list):
+        raise ValidationError(
+            f"memory item {index} review_history must be a list of transitions"
+        )
+    events = []
+    for entry in history:
+        if not isinstance(entry, Mapping):
+            raise ValidationError(
+                f"memory item {index} review_history entries must be objects"
+            )
+        to_state = entry.get("to_state")
+        if not isinstance(to_state, str) or to_state not in MEMORY_STATES:
+            raise ValidationError(
+                f"memory item {index} review_history has an unknown review state"
+            )
+        evidence = entry.get("evidence")
+        actor = entry.get("actor")
+        events.append(
+            {
+                "to_state": to_state,
+                "evidence": (
+                    [ref for ref in evidence if isinstance(ref, str)]
+                    if isinstance(evidence, list)
+                    else []
+                ),
+                "actor": actor if isinstance(actor, str) else None,
+            }
+        )
+    return events
 
 
 def _validate_memory_item(
@@ -400,19 +441,50 @@ def _validate_memory_item(
         raise ValidationError(
             f"memory item {index} has an invalid verification basis"
         )
-    evidence_refs = detail.get("verification_evidence") or []
-    supported = (
-        detail["state"] == "verified"
-        and basis == "evidence"
-        and isinstance(evidence_refs, list)
-        and any(isinstance(ref, str) and ref.strip() for ref in evidence_refs)
-        and detail.get("reviewer_distinct_from_proposer") is True
+    if detail["recorded_state"] not in MEMORY_STATES:
+        raise ValidationError(
+            f"memory item {index} has an unknown recorded review state"
+        )
+    proposer = detail.get("proposer")
+    if proposer is not None and not isinstance(proposer, str):
+        raise ValidationError(f"memory item {index} proposer must be a string")
+
+    # Authority is re-derived here, from the review transitions the item
+    # carries, with the same function the store uses. No label, flag,
+    # evidence list or "reviewer is different" boolean can raise a memory's
+    # review level by itself.
+    history = _memory_review_history(detail, index)
+    resolved = resolve_trust(
+        {
+            "memory_id": memory_id,
+            "state": detail["state"],
+            "recorded_state": detail["recorded_state"],
+            "history": history,
+            "actor": proposer,
+        },
+        label="memory item",
     )
-    trust = item.trust
-    downgraded = False
-    if trust == "verified" and not supported:
-        trust = "attested"
+    derived_trust = resolved["trust"]
+    derived_verification = resolved["verification"]
+
+    # Only real trust labels are compared as labels; a verification basis is
+    # a different vocabulary ("not-verified" is not a trust level).
+    claimed_rank = max(
+        _MEMORY_TRUST_RANK[label] for label in (item.trust, detail["trust"])
+    )
+    downgraded = claimed_rank > _MEMORY_TRUST_RANK[derived_trust]
+    if basis == "evidence" and derived_verification["basis"] != "evidence":
         downgraded = True
+
+    recorded_state = resolved["recorded_state"]
+    inconsistent = False
+    if history and history[-1]["to_state"] != recorded_state:
+        inconsistent = True
+    elif detail["state"] not in (recorded_state, "expired"):
+        inconsistent = True
+    not_active = recorded_state in ("retracted", "superseded") or detail[
+        "state"
+    ] in ("retracted", "superseded")
 
     validity = memory_validity(
         {
@@ -428,8 +500,19 @@ def _validate_memory_item(
     )
     normalised_detail = {
         **detail,
-        "trust": trust,
-        "verification_basis": basis if supported else "unrecorded",
+        "recorded_state": recorded_state,
+        "trust": derived_trust,
+        "verification_basis": derived_verification["basis"],
+        "verification_evidence": list(derived_verification.get("evidence") or []),
+        "verification_reviewer": derived_verification.get("reviewer"),
+        "reviewer_distinct_from_proposer": derived_verification.get(
+            "reviewer_distinct_from_proposer"
+        ),
+        "independence": derived_verification.get("independence"),
+        "verification_reasons": list(
+            derived_verification.get("reasons") or []
+        ),
+        "review_history": history,
         "validity": validity,
     }
     normalised = ContextItem(
@@ -438,7 +521,7 @@ def _validate_memory_item(
         kind=item.kind,
         title=item.title,
         content=item.content,
-        trust=trust,
+        trust=derived_trust,
         origin=item.origin,
         method=item.method,
         observed_at=item.observed_at,
@@ -449,6 +532,8 @@ def _validate_memory_item(
     )
     return normalised, {
         "not_current": not validity["current"],
+        "not_active": not_active,
+        "inconsistent": inconsistent,
         "downgraded": downgraded,
         "reevaluated": reevaluated,
         "memory_id": memory_id,
@@ -1268,6 +1353,16 @@ def build_context_pack(
         normalised, facts = _validate_memory_item(
             item, index, evaluated_on=memory_evaluated_on
         )
+        if facts["inconsistent"]:
+            # The claimed state and the recorded transitions disagree; there
+            # is no safe interpretation, so the item is dropped with a reason.
+            _exclude(excluded, "memory_state_inconsistent")
+            continue
+        if facts["not_active"]:
+            # Retracted or superseded memory is recorded as no longer
+            # knowledge: it cannot be offered as current context.
+            _exclude(excluded, "memory_not_active")
+            continue
         if facts["not_current"]:
             # Re-evaluated here, not inherited from an earlier read: stale
             # knowledge cannot enter a pack through any entry point.
@@ -1432,6 +1527,15 @@ def build_context_pack(
             "evaluated_on": memory_evaluated_on,
             "rule": VALIDITY_RULE,
         }
+        # Say plainly where the labels came from. Trust is re-derived from each
+        # record's own review transitions; Aperio validates consistency and
+        # integrity, not the identity of whoever produced the record.
+        block["trust_derivation"] = "recorded-review-history"
+        block["trust_note"] = (
+            "memory trust is re-derived from each record's recorded review "
+            "transitions; hashes and labels are integrity checks, not "
+            "authentication of the producer"
+        )
         content["memory"] = block
     if requirements_list:
         content["requirements"] = requirements_list

@@ -35,7 +35,7 @@ from aperio.errors import StateError, ValidationError
 from aperio.memstore import (
     MEMORY_SCHEMA_VERSION,
     MEMORY_STATES,
-    _verification,
+    derive_verification,
     effective_trust,
     MemoryStore,
     SENSITIVITY_LEVELS,
@@ -331,30 +331,13 @@ def validate_exchange_document(document: object) -> dict:
 
 
 def _recorded_verification(memory: dict, record: dict) -> dict:
-    """Rebuild the verification basis from the exported history, if present."""
+    """The verification basis the exported review history actually proves.
 
-    history = memory.get("history")
-    events = []
-    if isinstance(history, list):
-        for entry in history:
-            if not isinstance(entry, dict):
-                continue
-            if entry.get("to_state") != "verified":
-                continue
-            evidence = entry.get("evidence")
-            actor = entry.get("actor")
-            events.append(
-                {
-                    "to_state": "verified",
-                    "evidence": (
-                        [item for item in evidence if isinstance(item, str)]
-                        if isinstance(evidence, list)
-                        else []
-                    ),
-                    "actor": actor if isinstance(actor, str) else None,
-                }
-            )
-    return _verification(record, events, memory.get("state"))
+    Same derivation as the store, the retrieval layer and the pack builder:
+    an exported file cannot claim more than its own transitions show.
+    """
+
+    return derive_verification(memory)
 
 
 def _trust_claim_is_possible(memory: dict, record: dict) -> bool:
@@ -386,8 +369,9 @@ def _unsupported_trust_claim(
         return None
     history = memory.get("history")
     if isinstance(history, list) and len(history) >= MAX_TRANSFER_HISTORY:
-        # The history was truncated for transfer, so the absence of a verify
-        # event proves nothing. The claim is still never applied on import.
+        # The history was cut down to travel, so the absence of a verify event
+        # proves nothing. The claim is never applied on import either way, so
+        # this stays a note-free case rather than a false accusation.
         return None
     verification = _recorded_verification(memory, record)
     if verification["basis"] == "evidence":

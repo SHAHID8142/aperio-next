@@ -135,7 +135,13 @@ filesystem does not provide. Validity windows are evaluated on every read
 (today in **UTC** by default, an explicit `--as-of` for history) and both
 bounds are inclusive; the stored record is never rewritten as time passes.
 
-No supplied field may raise a memory's authority. Trust is derived from
+No supplied field may raise a memory's authority, and one derivation serves
+every reader. `memstore.derive_verification()` is the only function that turns
+recorded review events into a verification basis; snapshots, recall, context
+items, both pack builders and exchange validation all call it (directly or via
+`resolve_trust()`). A second, private copy of the rule is a defect even if it
+agrees today. A memory item must carry the review transitions it claims, not
+just the conclusions. Trust is derived from
 recorded review events by `memstore.resolve_trust()`; a `trust` or
 `verification` claim that the history does not support is refused, and any
 reader that accepts memory-shaped data (recall, context items, packs, imports)

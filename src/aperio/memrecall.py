@@ -24,6 +24,8 @@ from aperio.context_pack import (
 from aperio.errors import ValidationError
 from aperio.memstore import (
     ACTIVE_STATES,
+    INACTIVE_STATES,
+    MEMORY_STATES,
     SENSITIVITY_LEVELS,
     SENSITIVITY_RANK,
     VALIDITY_RULE,
@@ -402,6 +404,17 @@ def memory_context_items(
     against ``as_of`` (today in UTC by default) instead of carrying whatever
     the caller last computed. A private memory is always marked local-only,
     because a pack is a shareable artifact.
+
+    The item carries the record's **whole review history** and its declared
+    proposer, so the pack can re-derive the same authority from the same
+    evidence instead of believing a label. Passing more than ``as_of`` is not
+    needed: the state, its history and its trust contract are the record's.
+
+    Records that were retracted or superseded are refused: they are recorded
+    as no longer knowledge, so offering one as context would be a mistake no
+    caller should be able to make silently. A record that is merely outside
+    its validity window is still converted; the pack excludes it with an
+    explicit reason so the exclusion stays visible.
     """
 
     evaluated_on = evaluate_on(as_of)
@@ -410,6 +423,12 @@ def memory_context_items(
         if not isinstance(memory, Mapping):
             raise ValidationError("selected memories must be memory objects")
         resolved = resolve_trust(memory, label="memory")
+        if resolved["recorded_state"] in INACTIVE_STATES:
+            raise ValidationError(
+                f"memory {memory.get('memory_id')!r} is "
+                f"{resolved['recorded_state']}; a retracted or superseded "
+                "memory cannot be offered as context"
+            )
         validity = memory_validity(memory, as_of=evaluated_on)
         detail = {
             "memory_id": memory["memory_id"],
@@ -417,6 +436,8 @@ def memory_context_items(
             "state": resolved["state"],
             "recorded_state": resolved["recorded_state"],
             "trust": resolved["trust"],
+            "proposer": memory.get("actor"),
+            "review_history": _review_history(memory),
             "scope": memory["scope"],
             "source": memory.get("source"),
             "tags": list(memory.get("tags", ())),
@@ -460,6 +481,40 @@ def memory_context_items(
             )
         )
     return items
+
+
+def _review_history(memory: Mapping) -> list[dict]:
+    """The review events a reader needs, in the shape the pack re-derives from.
+
+    Only the three fields that carry meaning are copied: the transition, its
+    evidence and who recorded it. The pack validates them again with the same
+    derivation the store uses.
+    """
+
+    history = memory.get("history")
+    if not isinstance(history, list):
+        return []
+    events = []
+    for entry in history:
+        if not isinstance(entry, Mapping):
+            continue
+        to_state = entry.get("to_state")
+        if not isinstance(to_state, str) or to_state not in MEMORY_STATES:
+            continue
+        evidence = entry.get("evidence")
+        actor = entry.get("actor")
+        events.append(
+            {
+                "to_state": to_state,
+                "evidence": (
+                    [item for item in evidence if isinstance(item, str)]
+                    if isinstance(evidence, list)
+                    else []
+                ),
+                "actor": actor if isinstance(actor, str) else None,
+            }
+        )
+    return events
 
 
 __all__ = [
