@@ -39,7 +39,7 @@ criteria are §16 of the directive and are re-verified in Chunk 08.
 |---|---|---|---|
 | 00 | Existing code audit + M3 final trust stabilization | COMPLETE | 4997fe9 |
 | 01 | M4 — universal mistake prevention + quality evaluation | COMPLETE | 4d158fd |
-| 02 | M5 — controlled feedback and improvement | COMPLETE | this commit |
+| 02 | M5 — controlled feedback and improvement | COMPLETE | 247d4f3 |
 | 03 | M6 — universal portable exchange v2 | PENDING | — |
 | 04 | M7 — optional integration + domain adaptation | PENDING | — |
 | 05 | Feature 07 provider reliability closure | PENDING | — |
@@ -172,7 +172,7 @@ docs/architecture.md, docs/roadmap.md, version 0.14.0.
 **Tests:** 1111 → **1160 passed** locally (0 failures). GitHub Actions: not
 run (billing lock).
 
-### Chunk 02 — COMPLETE (0.15.0)
+### Chunk 02 — COMPLETE (0.15.0, commit 247d4f3ae86ab8894e0c959cef426599cc35b611)
 
 **Delivered (M5).** New module `src/aperio/feedback.py` + five CLI
 commands. Feedback documents (feedback-schema v1) start as proposals with
