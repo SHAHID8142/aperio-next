@@ -97,6 +97,29 @@ Event timestamps stay separate from reproducible content identity.
 | `retracted` | — | wrong or no longer applicable |
 | `expired` | — | `valid_until` has passed (derived, not stored) |
 
+### Recorded state vs effective trust
+
+A memory's **recorded state** is what the append-only history says happened.
+Its **effective trust** is what that history actually proves, and every reader
+— retrieval ranking, JSON, Markdown, context packs, exchange files and
+`mem-list` — uses the effective value:
+
+| Recorded state | Verification basis | Effective trust |
+| --- | --- | --- |
+| `proposed` | `not-verified` | `proposed` |
+| `attested` | `not-verified` | `attested` |
+| `verified` | `evidence` — an evidence reference **and** a reviewer identifier, and the reviewer is not the declared proposer | `verified` |
+| `verified` | `unrecorded` — any of those three is missing | `attested` |
+| `retracted`, `superseded`, derived `expired` | `not-verified` | `proposed` |
+
+A downgraded record is never edited and never hidden: `state` still reads
+`verified`, `history` still shows the original event, and the snapshot adds
+`verification.basis: unrecorded`, `verification.downgraded: true`,
+`verification.reasons` naming the exact deficiency, and a trust label of
+`attested`. Retrieval ranks it as attested, packs label it attested and raise
+`memory_verification_unrecorded`, and a re-run of `--verify` with evidence and
+a different reviewer records a new transition that restores `basis: evidence`.
+
 **Acceptance is not factual verification.** Accepting a preference or an
 instruction makes it authoritative for its scope. Accepting an external
 factual claim does not prove the claim is true; only recorded evidence and an
@@ -169,6 +192,8 @@ even from `verified`) and restores the evidence-backed label.
 aperio mem-recall ~/notes/brand.mem \
   --objective "design a spring campaign poster" --profile design
 aperio mem-recall ~/notes/brand.mem --goal goal.json --json
+# workspace-scoped memories need the label they were stored under
+aperio mem-recall ~/notes/brand.mem --objective "brand voice" --workspace brandbook
 ```
 
 Selection is deterministic and inspectable:
@@ -192,8 +217,9 @@ Every exclusion is counted with a reason: `state`, `expired`, `future`,
 
 Validity is evaluated on **every** read, not only when a date is supplied:
 
-- no `--as-of` means *today* (UTC), so `valid_until`/`valid_from` apply to
-  ordinary recall, packs, and exports without any extra flag;
+- no `--as-of` means *today in UTC* (`datetime.now(timezone.utc).date()`), not
+  the machine's local date, so a store read on the same UTC day gives the same
+  answer in every timezone;
 - `--as-of YYYY-MM-DD` makes the answer reproducible for a historical date;
   the report echoes `as_of` and the rule it applied;
 - both bounds are **inclusive**: a memory is current from the start of
@@ -205,7 +231,14 @@ Validity is evaluated on **every** read, not only when a date is supplied:
 - stored records are never rewritten as time passes: expiry is derived at
   read time, so an old store reopened later shows the same raw records and a
   different derived view. `mem-list` and `mem-show` show the derived reason
-  and the date it was evaluated against.
+  and the date it was evaluated against;
+- a context pack re-checks the window even for items handed to it directly by
+  an API caller, excluding them as `memory_not_current` rather than trusting
+  the caller's selection;
+- `--as-of` moves the **clock for validity only**. It never rewinds review
+  state: a memory accepted today still reads `attested` when evaluated at a
+  past date, so historical validity and historical review reconstruction stay
+  separate questions.
 
 Behaviour worth knowing:
 
@@ -233,6 +266,9 @@ guessed similarity, decide inclusion.
 ```sh
 aperio goal-pack goal.json --memory-store ~/notes/brand.mem
 aperio context-pack --objective "..." --memory-store ~/notes/brand.mem
+# workspace-scoped memory is matched by an explicit label, never guessed
+aperio context-pack --objective "..." --memory-store ~/notes/brand.mem \
+  --memory-workspace brandbook
 ```
 
 Memory is optional. Without `--memory-store` every pack is byte-identical to
@@ -248,7 +284,10 @@ When a store is supplied:
   memory id, and content hash, in both JSON (`detail`) and Markdown;
 - the pack reports retrieval counts, exclusion reasons, conflicts, and the
   relevance limitation in `content.memory` — never the store path;
-- the same byte budget covers goal fields, attachments, and memory.
+- the same byte budget covers goal fields, attachments, and memory;
+- the pack re-checks validity itself: a memory outside its window is excluded
+  as `memory_not_current` even if a caller hands it over directly, so stale
+  knowledge cannot enter a pack through a different entry point.
 
 Memory cannot override the current objective or the operator's constraints:
 those sections are built only from operator-provided goal fields.
@@ -312,6 +351,22 @@ separate, reviewable note, and the decision log remains the record of what was
 decided. Legacy records are never migrated, rewritten, or interpreted by the
 memory layer.
 
+### Exchange round trip
+
+Exports carry the recorded `state`, the effective `trust`, `declared_state`,
+and the last 32 review events, so a receiver can see exactly how a claim was
+reviewed. Validation therefore accepts the pair *state `verified` + trust
+`attested`* (an honest legacy downgrade) as well as *state `verified` + trust
+`verified`*, and rejects any combination the recorded state could not produce
+(for example `proposed` + `verified`, or `retracted` + `attested`).
+
+Files written before the verification rules existed are still accepted: a
+file may claim `verified` with no supporting history, because an import never
+applies a claimed state. In that case the import report lists the memory under
+`unsupported_trust_claims` with the reason, and any review evidence found in
+the transferred history appears under `transfer_evidence`. Nothing is
+promoted, and no trust label is copied into the store.
+
 ## Append safety and durability
 
 Events are appended to the existing store through a single verified
@@ -362,7 +417,7 @@ repaired by hand; the existing complete records stay readable.
 | `aperio mem-review STORE ID --accept\|--verify\|--retract\|--supersede` | record a review decision (`--verify` needs `--evidence` and `--actor`) |
 | `aperio mem-list STORE [--include-inactive] [--max-sensitivity L] [--as-of D] [--json]` | list memories and states (local inspection shows private records by default; narrow with `--max-sensitivity`) |
 | `aperio mem-show STORE MEMORY_ID [--json]` | inspect one memory and its history |
-| `aperio mem-recall STORE --objective "..." [--as-of D] [--json]` | retrieve relevant memories (validity evaluated today unless `--as-of` is given) |
+| `aperio mem-recall STORE --objective "..." [--workspace L] [--as-of D] [--json]` | retrieve relevant memories (validity evaluated today in UTC unless `--as-of` is given; `--workspace` matches workspace-scoped memories) |
 | `aperio mem-export STORE --output F [--as-of D] [--force]` | write a portable exchange file |
 | `aperio mem-import STORE FILE [--dry-run] [--json]` | import an exchange file as proposals |
 

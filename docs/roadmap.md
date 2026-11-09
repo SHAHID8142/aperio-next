@@ -164,6 +164,38 @@ excluded `sensitivity` and validity windows, so re-proposing identical text
 with a stricter classification was silently ignored. That now fails closed,
 and imports report such a mismatch as a conflict.
 
+## M3 finalization (0.11.0)
+
+The completed M3 release closes the remaining consistency gaps found while
+auditing every consumer of recorded state, trust, and validity:
+
+- **Effective trust is derived, not asserted.** A `verified` state is reported
+  as verified only when the recorded transition carries an evidence reference,
+  a reviewer identifier, and different declared identifiers for proposer and
+  reviewer. Anything else keeps its history untouched but is published as
+  `attested` with `verification.basis: unrecorded` and the exact reasons —
+  consistently in snapshots, ranking, JSON, Markdown, packs and exchange
+  files. Neither a missing reviewer nor a self-review counts as support.
+- **Exchange honesty.** Validation accepts the two combinations a real store
+  can produce (`verified`/`verified`, `verified`/`attested`) and rejects
+  forged ones; imports report `unsupported_trust_claims` and carry any
+  transferred review evidence under `transfer_evidence`; imported memories are
+  always `proposed`.
+- **UTC evaluation.** The default evaluation date comes from
+  `datetime.now(timezone.utc)`, so results no longer depend on the machine's
+  timezone; `--as-of` stays deterministic, bounds stay inclusive, and packs
+  re-check the window instead of trusting the caller.
+- **Durability and privacy re-audited:** 5 concurrent identical proposals
+  produce one record and four reported duplicates with no damage; the size cap
+  refuses rather than truncates; owner-only permissions stay in place.
+
+What this release still does **not** claim: the hash chain is corruption
+detection, not authentication; the absence of complete trailing records cannot
+be detected without an external anchor; `--actor` identifiers and evidence
+references are declarations, not proof; a reviewer may be honestly but not
+independently chosen; no write path promises crash or power-loss atomicity;
+and the Feature 07 provider metadata bound defect remains out of scope.
+
 ## Next (requires independent review and explicit instruction)
 
 - Remaining M3 hardening whatever the review confirms (for example goal

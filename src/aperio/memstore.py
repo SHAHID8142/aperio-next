@@ -36,7 +36,7 @@ import hashlib
 import json
 import os
 import stat as stat_module
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from aperio.artifacts import publish_text_atomic
@@ -260,17 +260,28 @@ def _optional_text(
     )
 
 
+def _utc_today() -> str:
+    """Today's date in UTC, independent of the machine's local timezone.
+
+    Single source for the default evaluation date, so a store read on the
+    same UTC day gives the same answer wherever the operator is.
+    """
+
+    return datetime.now(timezone.utc).date().isoformat()
+
+
 def evaluate_on(value: str | None = None) -> str:
     """Return the ISO date a validity question is evaluated against.
 
-    ``None`` means *today* (UTC), so ordinary recall applies ``valid_from``
-    and ``valid_until`` without the operator having to pass a flag. A given
-    value is validated strictly (``YYYY-MM-DD``, a real calendar date) so a
-    typo can never silently disable expiry.
+    ``None`` means *today* in UTC — not local time — so ordinary recall
+    applies ``valid_from`` and ``valid_until`` without the operator having to
+    pass a flag, and two machines on the same UTC day agree. A given value is
+    validated strictly (``YYYY-MM-DD``, a real calendar date) so a typo can
+    never silently disable expiry.
     """
 
     if value is None:
-        return date.today().isoformat()
+        return _utc_today()
     if not isinstance(value, str) or len(value) != 10:
         _fail("memory as_of must be an ISO date (YYYY-MM-DD)")
     try:
@@ -539,10 +550,13 @@ def validate_memory_record(record: object, *, require_id: bool = True) -> dict:
 def _verification(record: dict, events: list[dict], state: str) -> dict:
     """How a ``verified`` state was reached, without inventing confidence.
 
-    A ``verify`` transition recorded before verification required evidence
-    stays exactly as recorded (history is never reinterpreted), but it is
-    reported as ``unrecorded`` and its trust is downgraded to ``attested``:
-    the store knows a decision was made, not that any evidence backs it.
+    Effective trust is derived from what the recorded transition actually
+    proves, not from the state name alone. A verification counts as
+    evidence-backed only when the event recorded **both** a supporting
+    reference and a reviewer identifier, and that reviewer is not the
+    memory's declared proposer. Anything else stays exactly as recorded in
+    history but is reported as ``unrecorded``, downgraded to ``attested``,
+    and carries the precise reason.
     """
 
     if state != "verified":
@@ -561,15 +575,26 @@ def _verification(record: dict, events: list[dict], state: str) -> dict:
     evidence = list(verify_event["evidence"]) if verify_event else []
     reviewer = verify_event.get("actor") if verify_event else None
     proposer = record.get("actor")
-    if reviewer and proposer:
-        distinct: bool | None = reviewer.strip().lower() != proposer.strip().lower()
+    reasons: list[str] = []
+    if not evidence:
+        reasons.append("no supporting evidence reference was recorded")
+    if not reviewer:
+        reasons.append("no reviewer identifier was recorded for the verification")
+        distinct: bool | None = None
+        independence = "unknown"
+    elif proposer:
+        distinct = reviewer.strip().lower() != proposer.strip().lower()
         independence = (
             "declared-distinct-identifiers" if distinct else "same-identifier"
         )
+        if not distinct:
+            reasons.append(
+                "the reviewer is the same declared identifier as the proposer"
+            )
     else:
         distinct = None
         independence = "unknown"
-    basis = "evidence" if evidence else "unrecorded"
+    basis = "evidence" if not reasons else "unrecorded"
     verification = {
         "basis": basis,
         "evidence": evidence,
@@ -578,14 +603,33 @@ def _verification(record: dict, events: list[dict], state: str) -> dict:
         "independence": independence,
         "note": VERIFICATION_INDEPENDENCE_NOTE,
     }
-    if basis == "unrecorded":
+    if reasons:
         verification["downgraded"] = True
+        verification["reasons"] = reasons
         verification["detail"] = (
-            "this record was marked verified without recorded supporting "
-            "evidence; it is not treated as evidence-backed. Re-run "
-            "'aperio mem-review --verify' with --evidence to record support."
+            "this record was marked verified without proof that its claim was "
+            "supported and independently attributed; it is not treated as "
+            "evidence-backed. Re-run 'aperio mem-review --verify' with "
+            "--evidence and a different --actor to record support."
         )
     return verification
+
+
+def effective_trust(state: str, verification: dict | None = None) -> str:
+    """Trust label a reader must use for a recorded state.
+
+    ``verified`` is only reported as ``verified`` when the verification is
+    evidence-backed; every other combination falls back to the state's own
+    tier. This is the single rule used by stores, retrieval, packs, and the
+    exchange validator.
+    """
+
+    _choice(state, MEMORY_STATES, "memory state")
+    if state == "verified":
+        if (verification or {}).get("basis") == "evidence":
+            return "verified"
+        return "attested"
+    return STATE_TRUST.get(state, "proposed")
 
 
 def _snapshot(record: dict, events: list[dict], *, as_of: str | None) -> dict:
@@ -626,10 +670,7 @@ def _snapshot(record: dict, events: list[dict], *, as_of: str | None) -> dict:
     snapshot["recorded_state"] = state
     verification = _verification(record, events, state)
     snapshot["verification"] = verification
-    if verification.get("downgraded"):
-        # A pre-gate verify event asserts a decision, not support: never let
-        # it read as evidence-backed downstream.
-        snapshot["trust"] = "attested"
+    snapshot["trust"] = effective_trust(state, verification)
     validity = memory_validity(record, as_of=as_of)
     snapshot["validity"] = validity
     if state in ACTIVE_STATES and validity["reason"] == "expired":
@@ -1402,6 +1443,7 @@ __all__ = [
     "SOURCE_KINDS",
     "STATE_TRUST",
     "canonical_memory_bytes",
+    "effective_trust",
     "is_active",
     "is_current",
     "memory_content_sha256",

@@ -398,8 +398,15 @@ def memory_context_items(selected: Sequence[dict]) -> list[ContextItem]:
             "source": memory["source"],
             "tags": list(memory.get("tags", ())),
             "evidence": list(memory.get("evidence", ())),
+            "verification_evidence": list(
+                (memory.get("verification") or {}).get("evidence") or []
+            ),
+            "verification_reviewer": (
+                memory.get("verification") or {}
+            ).get("reviewer"),
             "valid_until": memory.get("valid_until"),
             "valid_from": memory.get("valid_from"),
+            "validity": memory.get("validity") or memory_validity(memory),
             "content_sha256": memory["content_sha256"],
             "reviewed": memory["state"] in ("attested", "verified"),
             "verification_basis": (memory.get("verification") or {}).get(

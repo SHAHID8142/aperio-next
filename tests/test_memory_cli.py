@@ -700,3 +700,96 @@ def test_export_cannot_overwrite_the_store_or_project_state(
     assert code == 1
     assert "project state" in err
     assert state_file.read_bytes() == saved
+
+
+def test_recall_workspace_option_selects_workspace_scoped_memory(
+    capsys, tmp_path
+) -> None:
+    store = tmp_path / "w.mem"
+    code, _, err = run_cli(
+        capsys,
+        "mem-propose",
+        "--store",
+        str(store),
+        "--type",
+        "convention",
+        "--title",
+        "Brand voice",
+        "--content",
+        "Lead with the client's own words.",
+        "--scope",
+        "workspace",
+        "--scope-value",
+        "brandbook",
+        "--tag",
+        "voice",
+    )
+    assert code == 0, err
+
+    code, out, _ = run_cli(capsys, "mem-recall", str(store), "--objective", "brand voice")
+    assert code == 0
+    assert "No memory matched" in out
+
+    code, out, err = run_cli(
+        capsys,
+        "mem-recall",
+        str(store),
+        "--objective",
+        "brand voice",
+        "--workspace",
+        "brandbook",
+    )
+    assert code == 0, err
+    assert "Brand voice" in out
+
+
+def test_pack_includes_workspace_scoped_memory_only_with_the_label(
+    capsys, tmp_path
+) -> None:
+    store = tmp_path / "w.mem"
+    code, _, err = run_cli(
+        capsys,
+        "mem-propose",
+        "--store",
+        str(store),
+        "--type",
+        "convention",
+        "--title",
+        "Brand voice",
+        "--content",
+        "Lead with the client's own words.",
+        "--scope",
+        "workspace",
+        "--scope-value",
+        "brandbook",
+        "--tag",
+        "voice",
+    )
+    assert code == 0, err
+
+    code, out, _ = run_cli(
+        capsys,
+        "context-pack",
+        "--objective",
+        "write the brand voice section",
+        "--memory-store",
+        str(store),
+        "--json",
+    )
+    assert code == 0
+    assert json.loads(out)["content"]["context_items"] == []
+
+    code, out, err = run_cli(
+        capsys,
+        "context-pack",
+        "--objective",
+        "write the brand voice section",
+        "--memory-store",
+        str(store),
+        "--memory-workspace",
+        "brandbook",
+        "--json",
+    )
+    assert code == 0, err
+    titles = [item["title"] for item in json.loads(out)["content"]["context_items"]]
+    assert titles == ["Brand voice"]

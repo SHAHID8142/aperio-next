@@ -34,8 +34,9 @@ from aperio import __version__
 from aperio.errors import StateError, ValidationError
 from aperio.memstore import (
     MEMORY_SCHEMA_VERSION,
-    STATE_TRUST,
     MEMORY_STATES,
+    _verification,
+    effective_trust,
     MemoryStore,
     SENSITIVITY_LEVELS,
     SENSITIVITY_RANK,
@@ -312,8 +313,7 @@ def validate_exchange_document(document: object) -> dict:
                 f"memory exchange entry {index} state must be one of: "
                 + ", ".join(MEMORY_STATES)
             )
-        expected_trust = STATE_TRUST.get(memory["state"], "proposed")
-        if memory.get("trust") not in (None, expected_trust):
+        if not _trust_claim_is_possible(memory, record):
             _fail(
                 f"memory exchange entry {index} trust label disagrees with "
                 "its review state"
@@ -328,6 +328,74 @@ def validate_exchange_document(document: object) -> dict:
         if history is not None and not isinstance(history, list):
             _fail(f"memory exchange entry {index} history must be a list")
     return document
+
+
+def _recorded_verification(memory: dict, record: dict) -> dict:
+    """Rebuild the verification basis from the exported history, if present."""
+
+    history = memory.get("history")
+    events = []
+    if isinstance(history, list):
+        for entry in history:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("to_state") != "verified":
+                continue
+            evidence = entry.get("evidence")
+            actor = entry.get("actor")
+            events.append(
+                {
+                    "to_state": "verified",
+                    "evidence": (
+                        [item for item in evidence if isinstance(item, str)]
+                        if isinstance(evidence, list)
+                        else []
+                    ),
+                    "actor": actor if isinstance(actor, str) else None,
+                }
+            )
+    return _verification(record, events, memory.get("state"))
+
+
+def _trust_claim_is_possible(memory: dict, record: dict) -> bool:
+    """Reject trust labels the recorded state could never produce.
+
+    A ``verified`` record may honestly be reported as ``verified`` (recorded
+    with support) or ``attested`` (recorded without it). Every other state has
+    exactly one possible label, so a file cannot claim confidence its own
+    history contradicts. Files written before the verification rules existed
+    are still accepted here — an import never applies the claimed trust, and
+    the claim itself is reported by :func:`import_memories`.
+    """
+
+    trust = memory.get("trust")
+    if trust is None:
+        return True
+    state = memory["state"]
+    if state == "verified":
+        return trust in ("verified", "attested")
+    return trust == effective_trust(state)
+
+
+def _unsupported_trust_claim(
+    memory: dict, record: dict, declared: str
+) -> str | None:
+    """Describe a file's verification claim its own history does not support."""
+
+    if memory["state"] != "verified" and declared != "verified":
+        return None
+    history = memory.get("history")
+    if isinstance(history, list) and len(history) >= MAX_TRANSFER_HISTORY:
+        # The history was truncated for transfer, so the absence of a verify
+        # event proves nothing. The claim is still never applied on import.
+        return None
+    verification = _recorded_verification(memory, record)
+    if verification["basis"] == "evidence":
+        return None
+    return (
+        "the file declares 'verified' but its recorded history does not show "
+        "evidence and a distinct reviewer; imported as proposed"
+    )
 
 
 def import_memories(
@@ -362,6 +430,8 @@ def import_memories(
         "refused": [],
         "conflicts": [],
         "declared_states": {},
+        "unsupported_trust_claims": {},
+        "transfer_evidence": {},
         "dry_run": dry_run,
         "actor_attribution": actor or "unspecified",
     }
@@ -375,6 +445,15 @@ def import_memories(
         if SENSITIVITY_RANK[record["sensitivity"]] > SENSITIVITY_RANK[max_sensitivity]:
             report["excluded_sensitivity"].append(memory_id)
             continue
+        claim = _unsupported_trust_claim(memory, record, declared)
+        if claim is not None:
+            report["unsupported_trust_claims"][memory_id] = claim
+        transferred = _recorded_verification(memory, record)["evidence"]
+        if transferred:
+            # The record's own evidence list is part of its identity and is
+            # never rewritten on import, so the supporting references travel
+            # in the report where a reviewer can read them.
+            report["transfer_evidence"][memory_id] = transferred
         if memory_id in existing:
             stored = existing[memory_id]
             if stored.get("sensitivity") != record["sensitivity"]:

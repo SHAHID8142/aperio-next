@@ -171,9 +171,14 @@ freshness, and budget — deterministic, inspectable, and explicitly
 non-semantic. Validity (`valid_from`/`valid_until`) is evaluated on every
 read against today unless an explicit date is passed, so expiry never depends
 on the caller remembering a flag and a stored record is never rewritten as
-time passes. `verify` transitions require recorded evidence and a declared
-reviewer, and a ``verified`` state without evidence is reported as
-``unrecorded`` and labelled ``attested``. `memportable` writes and validates its own versioned exchange
+time passes (default: today in UTC, never local time). `verify` transitions
+require recorded evidence and a declared reviewer, and effective trust is
+derived from what the recorded event proves: a ``verified`` state lacking
+evidence, a reviewer, or a distinct reviewer is reported as ``unrecorded``,
+carries the exact reasons, and is labelled ``attested`` everywhere —
+retrieval, JSON, Markdown, packs and exchange files. Exchange validation
+accepts that honest pair and rejects combinations the recorded state could
+not produce. `memportable` writes and validates its own versioned exchange
 document; imports always enter as `proposed` and duplicates/conflicts are
 reported, never resolved silently. Appends open the store without following
 symlinks, prove the descriptor is the validated file, re-verify the chain

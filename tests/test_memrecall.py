@@ -538,3 +538,43 @@ def test_incomplete_snapshot_is_refused_with_a_clear_error() -> None:
             {"MEM-000000000001": {"memory_id": "MEM-000000000001", "state": "proposed"}},
             objective="anything",
         )
+
+
+def test_workspace_scoped_memory_needs_an_explicit_workspace_label() -> None:
+    """A workspace scope the CLI can create must also be selectable."""
+
+    memories = {
+        "MEM-000000000001": {
+            "memory_id": "MEM-000000000001",
+            "type": "convention",
+            "title": "Brand voice",
+            "content": "Lead with the client's own words.",
+            "scope": {"kind": "workspace", "value": "brandbook"},
+            "tags": ["voice"],
+            "state": "attested",
+            "trust": "attested",
+            "sensitivity": "internal",
+            "content_sha256": "a" * 64,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        }
+    }
+
+    without = recall_memories(memories, objective="brand voice")
+    assert without["selected"] == []
+    assert without["excluded"]["by_reason"] == {"scope": 1}
+
+    with_label = recall_memories(
+        memories,
+        objective="brand voice",
+        scope_values={"workspace": "brandbook"},
+    )
+    assert [m["memory_id"] for m in with_label["selected"]] == [
+        "MEM-000000000001"
+    ]
+    other = recall_memories(
+        memories,
+        objective="brand voice",
+        scope_values={"workspace": "newsletter"},
+    )
+    assert other["selected"] == []

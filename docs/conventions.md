@@ -132,8 +132,14 @@ validated, re-verify the chain through that descriptor, retry short writes,
 and treat a zero-byte write or an I/O error as possible damage rather than a
 successful transition. Never claim crash or power-loss atomicity the
 filesystem does not provide. Validity windows are evaluated on every read
-(today by default, an explicit `--as-of` for history) and both bounds are
-inclusive; the stored record is never rewritten as time passes.
+(today in **UTC** by default, an explicit `--as-of` for history) and both
+bounds are inclusive; the stored record is never rewritten as time passes.
+
+Separate a memory's *recorded state* from its *effective trust*: anything that
+reports confidence (`trust`, ranking, JSON, Markdown, packs, exchange files)
+must use `memstore.effective_trust()` derived from the recorded verification,
+never the state name alone. A downgrade must say why (`verification.reasons`)
+and must never rewrite the historical event.
 
 ## Output publication
 

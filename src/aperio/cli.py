@@ -180,6 +180,10 @@ def _add_memory_store_options(parser) -> None:
         help="only retrieve memories carrying this tag; repeatable",
     )
     parser.add_argument(
+        "--memory-workspace", metavar="LABEL",
+        help="workspace label that workspace-scoped memories must match",
+    )
+    parser.add_argument(
         "--memory-max-sensitivity",
         choices=MEMORY_SENSITIVITY_LEVELS,
         default=MEMORY_DEFAULT_SENSITIVITY,
@@ -595,6 +599,10 @@ def build_parser() -> argparse.ArgumentParser:
     mem_recall_parser.add_argument(
         "--tag", action="append", default=[], metavar="TAG",
         help="require at least one of these tags; repeatable",
+    )
+    mem_recall_parser.add_argument(
+        "--workspace", metavar="LABEL",
+        help="workspace label that workspace-scoped memories must match",
     )
     mem_recall_parser.add_argument(
         "--budget", type=int, default=CONTEXT_DEFAULT_BUDGET_BYTES,
@@ -1495,6 +1503,11 @@ def _memory_selection(args, *, objective: str, profile: str, budget_bytes: int):
             args, "memory_max_sensitivity", MEMORY_DEFAULT_SENSITIVITY
         ),
         as_of=getattr(args, "memory_as_of", None),
+        scope_values=(
+            {"workspace": args.memory_workspace}
+            if getattr(args, "memory_workspace", None)
+            else None
+        ),
     )
     warnings = list(selection["warnings"])
     if state["damaged"]:
@@ -1727,9 +1740,14 @@ def _cmd_mem_show(args) -> None:
     verification = memory.get("verification") or {}
     if verification.get("basis") == "unrecorded":
         print(
-            "Verification: recorded without supporting evidence - treated as "
-            "attested, not evidence-backed. Re-run 'aperio mem-review "
-            "--verify --evidence ... --actor ...' to record support."
+            "Verification: recorded without proof of support - treated as "
+            "attested, not evidence-backed."
+        )
+        for reason in verification.get("reasons") or []:
+            print(f"  reason: {reason}")
+        print(
+            "  Re-run 'aperio mem-review --verify --evidence ... --actor ...' "
+            "to record support."
         )
     elif verification.get("basis") == "evidence":
         print(
@@ -1785,6 +1803,7 @@ def _cmd_mem_recall(args) -> None:
         budget_bytes=args.budget,
         max_sensitivity=args.max_sensitivity,
         as_of=args.as_of,
+        scope_values={"workspace": args.workspace} if args.workspace else None,
     )
     if args.as_json:
         sys.stdout.write(
@@ -1900,6 +1919,13 @@ def _cmd_mem_import(args) -> None:
         print(
             "  excluded by the sensitivity filter: "
             + ", ".join(report["excluded_sensitivity"])
+        )
+    for memory_id, claim in report["unsupported_trust_claims"].items():
+        print(f"  noted: {memory_id} - {claim}")
+    for memory_id, evidence in report["transfer_evidence"].items():
+        print(
+            f"  review evidence transferred for {memory_id}: "
+            + "; ".join(evidence)
         )
     for conflict in report["conflicts"]:
         print(

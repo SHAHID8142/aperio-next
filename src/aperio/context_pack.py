@@ -1071,6 +1071,12 @@ def build_context_pack(
             raise ValidationError(
                 f"memory item {index} must carry source 'memory'"
             )
+        validity = item.detail.get("validity") if item.detail else None
+        if isinstance(validity, dict) and validity.get("current") is False:
+            # Defence in depth: a caller that hands over an out-of-window
+            # memory directly still cannot put stale knowledge in a pack.
+            _exclude(excluded, "memory_not_current")
+            continue
         items.append(item)
     if memory_items:
         _warn(
