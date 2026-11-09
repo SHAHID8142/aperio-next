@@ -41,7 +41,7 @@ criteria are §16 of the directive and are re-verified in Chunk 08.
 | 01 | M4 — universal mistake prevention + quality evaluation | COMPLETE | 4d158fd |
 | 02 | M5 — controlled feedback and improvement | COMPLETE | 247d4f3 |
 | 03 | M6 — universal portable exchange v2 | COMPLETE | 57fff8b |
-| 04 | M7 — optional integration + domain adaptation | COMPLETE | see Chunk 04 note |
+| 04 | M7 — optional integration + domain adaptation | COMPLETE | 1c52acf |
 | 05 | Feature 07 provider reliability closure | PENDING | — |
 | 06 | M8 — cross-domain benchmark + evaluation | PENDING | — |
 | 07 | Integration, security, usability | PENDING | — |
@@ -254,7 +254,7 @@ docs/roadmap.md, version 0.16.0.
 **Tests:** 1179 → **1189 passed** locally (0 failures). GitHub Actions: not
 run (billing lock).
 
-### Chunk 04 — COMPLETE (0.17.0)
+### Chunk 04 — COMPLETE (0.17.0, commit 1c52acfaf1a83bfa748a6f1affacaecbf983e7c0)
 
 **Delivered (M7).** New module `src/aperio/guidance.py` + `agent-brief`
 CLI: the paste-ready instruction package (aperio-agent-brief v1) assembled
