@@ -37,7 +37,7 @@ criteria are §16 of the directive and are re-verified in Chunk 08.
 
 | Chunk | Deliverable | Status | Commit |
 |---|---|---|---|
-| 00 | Existing code audit + M3 final trust stabilization | COMPLETE | see Chunk 00 note |
+| 00 | Existing code audit + M3 final trust stabilization | COMPLETE | 4997fe9 |
 | 01 | M4 — universal mistake prevention + quality evaluation | PENDING | — |
 | 02 | M5 — controlled feedback and improvement | PENDING | — |
 | 03 | M6 — universal portable exchange v2 | PENDING | — |
@@ -75,7 +75,7 @@ Maintained at the end of the "Status" section per chunk. Current: **Chunk 01
 
 Appended per chunk: sources changed, tests added, results, decisions.
 
-### Chunk 00 — COMPLETE (0.13.1)
+### Chunk 00 — COMPLETE (0.13.1, commit 4997fe9b1321eb550322c750e595cddfab5dc5cd)
 
 **Audit findings.** Baseline `fdadf0f` (v0.13.0) reviewed against
 `docs/architecture.md`, `docs/conventions.md`, `docs/roadmap.md`,
