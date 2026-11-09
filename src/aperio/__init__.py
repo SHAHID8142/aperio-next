@@ -13,6 +13,6 @@ Anything beyond that is planned work and must not be described as
 implemented — see docs/roadmap.md.
 """
 
-__version__ = "0.14.0"
+__version__ = "0.15.0"
 
 __all__ = ["__version__"]

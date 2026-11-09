@@ -302,6 +302,27 @@ one — although an `attested` record can have at most one review event, so a
 history-less attested entry is always forged) and always imports as
 `proposed`; nothing is promoted either way.
 
+## M5 — controlled feedback and improvement (implemented in 0.15.0)
+
+`aperio feedback-check`, `feedback-review`, `feedback-lesson`,
+`feedback-compare`, and `improvement-apply` implement the controlled loop
+task → output → quality issue → feedback → approved lesson → future task →
+measurable comparison. Feedback documents (feedback-schema v1) start as
+proposals with content-derived identity; a decided document is final and
+`--replace` is a revision CAS. Only an explicit accepted decision produces
+a lesson, and the lesson is written into the operator-named M3 store as a
+NEW PROPOSED memory — the M3 review contract remains the only memory
+authority, so nothing is promoted by feedback, repetition, or agent
+self-report (which is flagged, never silent). `feedback-compare`
+deterministically compares two quality reports for the same goal: only
+confirmed/warning findings count as resolved, new confirmed/warning
+findings are potential regressions and are always reported, and the report
+states it cannot attribute causes. Improvement proposals
+(improvement-proposal v1) target goal instruction fields and
+quality-request fields, apply to a new copy through the atomic publication
+path, refuse no-ops, and cannot modify the code-owned profile registry.
+See `docs/feedback.md`.
+
 ## M4 — universal mistake prevention and quality evaluation (implemented in 0.14.0)
 
 `aperio preflight goal.json` and `aperio quality-check goal.json

@@ -39,7 +39,7 @@ criteria are §16 of the directive and are re-verified in Chunk 08.
 |---|---|---|---|
 | 00 | Existing code audit + M3 final trust stabilization | COMPLETE | 4997fe9 |
 | 01 | M4 — universal mistake prevention + quality evaluation | COMPLETE | 4d158fd |
-| 02 | M5 — controlled feedback and improvement | PENDING | — |
+| 02 | M5 — controlled feedback and improvement | COMPLETE | this commit |
 | 03 | M6 — universal portable exchange v2 | PENDING | — |
 | 04 | M7 — optional integration + domain adaptation | PENDING | — |
 | 05 | Feature 07 provider reliability closure | PENDING | — |
@@ -68,8 +68,8 @@ Recorded as they are confirmed; each closed defect lists its regression test.
 
 ## Exact next action
 
-Maintained at the end of the "Status" section per chunk. Current: **Chunk 02
-— M5 controlled feedback and improvement.**
+Maintained at the end of the "Status" section per chunk. Current: **Chunk 03
+— M6 universal portable exchange v2.**
 
 ## Chunk notes (evidence log)
 
@@ -170,4 +170,42 @@ inputs, and compatibility (full suite green).
 docs/architecture.md, docs/roadmap.md, version 0.14.0.
 
 **Tests:** 1111 → **1160 passed** locally (0 failures). GitHub Actions: not
+run (billing lock).
+
+### Chunk 02 — COMPLETE (0.15.0)
+
+**Delivered (M5).** New module `src/aperio/feedback.py` + five CLI
+commands. Feedback documents (feedback-schema v1) start as proposals with
+content-derived identity (FB-…, verified if declared), bounded fields,
+append-only review entries, calendar-valid UTC timestamps, and final
+decisions (`--replace` is a revision CAS against parallel review). Only an
+explicit accepted decision produces a lesson, and the lesson enters the
+operator-named M3 store as a NEW PROPOSED memory — the M3 review contract
+stays the only memory authority; agent-origin feedback and agent
+self-reported evaluations are flagged (`feedback_issues`, stderr), never
+silent, and never promote. `feedback-compare` deterministically compares
+two quality reports for the same goal: only confirmed/warning findings
+count as resolved; new confirmed/warning findings are reported as
+potential regressions; the outcome label (improved/regressed/mixed/
+unchanged) is computed from those sets and the report states it cannot
+attribute causes. Improvement proposals (improvement-proposal v1) target
+goal instruction fields and quality-request fields only, apply to a NEW
+copy via publish_text_atomic, refuse no-ops/duplicates, and cannot modify
+the code-owned profile registry.
+
+**Acceptance evidence.** tests/test_feedback.py walks the full directive
+loop end-to-end through the CLI (task → output → quality issue → feedback
+→ explicit review → proposed lesson memory → mem-review accept → future
+task retrieval → feedback-compare 'improved'), plus the negative case
+(worse deliverable → 'regressed' with new findings listed), rejected
+feedback refused, agent-origin lessons still enter as proposed, no-op and
+duplicate proposals refused, originals byte-identical after apply, CAS
+conflict behavior, and malformed-input refusals.
+
+**Sources changed:** `src/aperio/feedback.py` (new), `src/aperio/cli.py`
+(5 subparsers + handlers + dispatch), `tests/test_feedback.py` (19),
+`docs/feedback.md` (new), README, docs/architecture.md, docs/roadmap.md,
+version 0.15.0.
+
+**Tests:** 1160 → **1179 passed** locally (0 failures). GitHub Actions: not
 run (billing lock).

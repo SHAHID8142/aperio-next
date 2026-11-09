@@ -20,6 +20,16 @@ Commands:
     aperio preflight <goal.json> ...  mistake-prevention checks before work
     aperio quality-check <goal.json> --deliverable FILE ...
                                       evaluate a deliverable against the goal
+    aperio feedback-check <feedback.json>
+                                      validate a feedback proposal (M5)
+    aperio feedback-review <feedback.json> --decision D --actor A
+                                      record an explicit review decision
+    aperio feedback-lesson <feedback.json> --store F
+                                      store an accepted lesson as proposed memory
+    aperio feedback-compare --before F --after F
+                                      compare two quality reports (same goal)
+    aperio improvement-apply --file P --target-file F --output NEW
+                                      apply an improvement proposal to a copy
     aperio decision-add <dir> ...     append a decision (append-only)
     aperio handoff-write <dir> --file <handoff.json>
                                       replace the handoff with a validated one
@@ -119,6 +129,23 @@ from aperio.quality import (
     run_preflight,
     run_quality_check,
     validate_quality_request,
+)
+from aperio.feedback import (
+    COMPARISON_FORMAT,
+    apply_proposal_to_goal,
+    apply_proposal_to_request,
+    compare_quality_reports,
+    feedback_identity,
+    feedback_issues,
+    feedback_revision,
+    feedback_trust,
+    lesson_memory_record,
+    load_feedback_file,
+    load_proposal_file,
+    record_review,
+    render_comparison_markdown,
+    validate_feedback,
+    validate_improvement_proposal,
 )
 from aperio.memportable import (
     export_memories,
@@ -510,6 +537,160 @@ def build_parser() -> argparse.ArgumentParser:
     quality_check_parser.add_argument(
         "--force", action="store_true",
         help="overwrite an existing --output file",
+    )
+
+    # --- controlled feedback and improvement (M5) ------------------------
+    feedback_check_parser = subparsers.add_parser(
+        "feedback-check",
+        help="validate a feedback document and report its trust and warnings",
+        description=(
+            "Validate a feedback document (feedback-schema v1) and report "
+            "its identity, origin, review state, descriptive trust, and "
+            "structural warnings (untrusted origin, self-reported "
+            "evaluation, missing review, missing lesson). Read-only."
+        ),
+    )
+    feedback_check_parser.add_argument(
+        "feedback_file", metavar="FEEDBACK_FILE",
+        help="path to a feedback JSON file",
+    )
+    feedback_check_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit the validation report as JSON",
+    )
+
+    feedback_review_parser = subparsers.add_parser(
+        "feedback-review",
+        help="record an explicit accepted/rejected decision on feedback",
+        description=(
+            "Record one explicit review decision on a feedback document. "
+            "The result is written to --output, or back to the input file "
+            "with --replace plus the expected revision (a stale writer "
+            "conflicts instead of clobbering). A decided document is "
+            "final; a change of mind is a new feedback document."
+        ),
+    )
+    feedback_review_parser.add_argument(
+        "feedback_file", metavar="FEEDBACK_FILE",
+        help="path to a feedback JSON file (proposed state)",
+    )
+    feedback_review_parser.add_argument(
+        "--decision", required=True, choices=("accepted", "rejected"),
+        help="the review decision",
+    )
+    feedback_review_parser.add_argument(
+        "--actor", required=True, metavar="ID",
+        help="declared reviewer identifier (attribution, not authentication)",
+    )
+    feedback_review_parser.add_argument(
+        "--note", metavar="TEXT", help="optional review note",
+    )
+    feedback_review_parser.add_argument(
+        "--at", metavar="ISO_UTC",
+        help="review timestamp (default: now, UTC)",
+    )
+    feedback_review_parser.add_argument(
+        "--output", metavar="FILE",
+        help="write the reviewed document here instead of stdout",
+    )
+    feedback_review_parser.add_argument(
+        "--replace", action="store_true",
+        help="replace the input file (requires --expected-revision)",
+    )
+    feedback_review_parser.add_argument(
+        "--expected-revision", type=int, metavar="N",
+        help="the revision the caller read (CAS for --replace)",
+    )
+    feedback_review_parser.add_argument(
+        "--force", action="store_true",
+        help="overwrite an existing --output file",
+    )
+
+    feedback_lesson_parser = subparsers.add_parser(
+        "feedback-lesson",
+        help="store an accepted feedback's lesson as a proposed memory",
+        description=(
+            "Write the lesson of an accepted feedback document into the "
+            "operator-named M3 memory store as a NEW PROPOSED memory. The "
+            "ordinary memory review contract ('aperio mem-review accept') "
+            "remains the only way the lesson gains authority; nothing is "
+            "promoted here."
+        ),
+    )
+    feedback_lesson_parser.add_argument(
+        "feedback_file", metavar="FEEDBACK_FILE",
+        help="path to an accepted feedback JSON file",
+    )
+    feedback_lesson_parser.add_argument(
+        "--store", required=True, metavar="FILE",
+        help="operator-named memory store file",
+    )
+    feedback_lesson_parser.add_argument(
+        "--actor", metavar="ID", help="declared proposer identifier",
+    )
+
+    feedback_compare_parser = subparsers.add_parser(
+        "feedback-compare",
+        help="compare two quality reports for the same goal",
+        description=(
+            "Deterministic before/after comparison of two aperio-quality-"
+            "report documents for the SAME goal: resolved findings, new "
+            "findings (potential regressions, always reported), and "
+            "unchanged ones. The comparison reports what changed; it never "
+            "claims what caused it."
+        ),
+    )
+    feedback_compare_parser.add_argument(
+        "--before", required=True, metavar="FILE",
+        help="quality report before the change",
+    )
+    feedback_compare_parser.add_argument(
+        "--after", required=True, metavar="FILE",
+        help="quality report after the change",
+    )
+    feedback_compare_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit the comparison as JSON",
+    )
+    feedback_compare_parser.add_argument(
+        "--output", metavar="FILE", help="write the comparison to a file",
+    )
+    feedback_compare_parser.add_argument(
+        "--force", action="store_true",
+        help="overwrite an existing --output file",
+    )
+
+    improvement_parser = subparsers.add_parser(
+        "improvement-apply",
+        help="apply an improvement proposal to a NEW copy of a goal or request",
+        description=(
+            "Apply a validated improvement proposal (improvement-proposal "
+            "v1) to a COPY of its target file. The original is never "
+            "modified: the result is written to --output through the "
+            "shared atomic publication path, so the change is reviewable "
+            "and reversible. Proposals cannot target the profile registry "
+            "(code-owned data)."
+        ),
+    )
+    improvement_parser.add_argument(
+        "--file", required=True, metavar="PROPOSAL",
+        help="path to the improvement proposal JSON file",
+    )
+    improvement_parser.add_argument(
+        "--target-file", required=True, metavar="FILE",
+        help="the current goal or quality-request file",
+    )
+    improvement_parser.add_argument(
+        "--output", required=True, metavar="FILE",
+        help="where to write the updated copy (must not exist without --force)",
+    )
+    improvement_parser.add_argument(
+        "--force", action="store_true",
+        help="overwrite an existing --output file",
+    )
+    improvement_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit the applied document as JSON instead of a summary",
     )
 
     # --- universal memory (M3) -------------------------------------------
@@ -1601,6 +1782,151 @@ def _cmd_quality_check(args) -> None:
     )
     _emit_report(report, as_json=args.as_json, output=args.output,
                  force=args.force)
+
+
+def _utc_now_iso() -> str:
+    from datetime import datetime, timezone
+
+    return (
+        datetime.now(timezone.utc).replace(microsecond=0)
+        .isoformat().replace("+00:00", "Z")
+    )
+
+
+def _cmd_feedback_check(args) -> None:
+    feedback = load_feedback_file(args.feedback_file)
+    report = {
+        "feedback_id": feedback_identity(feedback),
+        "state": feedback["state"],
+        "origin": feedback["origin"],
+        "trust": feedback_trust(feedback),
+        "revision": feedback_revision(feedback),
+        "severity": feedback["severity"],
+        "warnings": feedback_issues(feedback),
+        "has_lesson": bool(feedback["lesson"]),
+        "memory_type": feedback["memory_type"],
+        "scope": feedback["scope"],
+    }
+    if args.as_json:
+        sys.stdout.write(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+        return
+    print(f"Feedback valid ({report['feedback_id']})")
+    print(f"State:     {report['state']} (revision {report['revision']})")
+    print(f"Origin:    {report['origin']} — trust {report['trust']}")
+    print(f"Severity:  {report['severity']}")
+    print(f"Lesson:    {'present' if report['has_lesson'] else 'absent'}"
+          f" ({report['memory_type']})")
+    if report["warnings"]:
+        print("Warnings:")
+        for warning in report["warnings"]:
+            print(f"  - {warning['code']}: {warning['detail']}")
+
+
+def _cmd_feedback_review(args) -> None:
+    feedback = load_feedback_file(args.feedback_file)
+    current_revision = feedback_revision(feedback)
+    if args.replace:
+        if args.expected_revision is None:
+            raise ValidationError(
+                "feedback-review: --replace requires --expected-revision N "
+                "(the revision you read); re-read the file and retry"
+            )
+        if args.expected_revision != current_revision:
+            raise ValidationError(
+                f"feedback-review: the file is at revision "
+                f"{current_revision}, not the expected {args.expected_revision}; "
+                "someone reviewed it in parallel — re-read and retry"
+            )
+    reviewed = record_review(
+        feedback,
+        decision=args.decision,
+        reviewer=args.actor,
+        at=args.at or _utc_now_iso(),
+        note=args.note,
+    )
+    text = json.dumps(reviewed, ensure_ascii=False, indent=2) + "\n"
+    if args.replace:
+        target = Path(args.feedback_file)
+        publish_text_atomic(target, text, force=True,
+                            what="reviewed feedback")
+        print(f"Reviewed feedback written to {args.feedback_file} "
+              f"(revision {feedback_revision(reviewed)})")
+        return
+    if args.output:
+        publish_text_atomic(Path(args.output), text, force=args.force,
+                            what="reviewed feedback")
+        print(f"Reviewed feedback written to {args.output}")
+        return
+    sys.stdout.write(text)
+
+
+def _cmd_feedback_lesson(args) -> None:
+    feedback = load_feedback_file(args.feedback_file)
+    for warning in feedback_issues(feedback):
+        if warning["code"] in ("feedback_not_reviewed",
+                               "evaluation_self_reported"):
+            print(f"warning: {warning['detail']}", file=sys.stderr)
+    record = lesson_memory_record(feedback, actor=args.actor)
+    store = MemoryStore(args.store)
+    appended = store.propose(record)["memory"]
+    print(f"Lesson stored as PROPOSED memory {appended['memory_id']} "
+          f"in {args.store}")
+    print("Authority is unchanged: review it explicitly with "
+          f"'aperio mem-review {args.store} {appended['memory_id']} --accept'")
+
+
+def _cmd_feedback_compare(args) -> None:
+    comparison = compare_quality_reports(args.before, args.after)
+    if args.as_json:
+        text = json.dumps(comparison, ensure_ascii=False, indent=2) + "\n"
+    else:
+        text = render_comparison_markdown(comparison)
+    if args.output:
+        _write_report_output(args.output, text, force=args.force)
+        print(f"Wrote comparison to {args.output}")
+        return
+    sys.stdout.write(text)
+
+
+def _cmd_improvement_apply(args) -> None:
+    proposal = load_proposal_file(args.file)
+    target_path = Path(args.target_file)
+    if target_path.is_symlink():
+        raise ValidationError(
+            "refusing to follow a symlink for the target file"
+        )
+    try:
+        raw = target_path.read_bytes()
+    except OSError as exc:
+        raise ValidationError(
+            f"cannot read target file: {exc.strerror or exc}"
+        ) from None
+    try:
+        target_text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise ValidationError("target file must be valid UTF-8") from None
+    try:
+        target_data = json.loads(target_text)
+    except json.JSONDecodeError as exc:
+        raise ValidationError(
+            f"target file is not valid JSON (line {exc.lineno}: {exc.msg})"
+        ) from None
+
+    if proposal["target"] == "goal":
+        applied = apply_proposal_to_goal(proposal, target_data)
+    else:
+        applied = apply_proposal_to_request(proposal, target_data)
+    text = json.dumps(applied, ensure_ascii=False, indent=2) + "\n"
+    if not args.as_json:
+        publish_text_atomic(Path(args.output), text, force=args.force,
+                            what="updated document")
+        change = proposal["change"]
+        print(
+            f"Applied {change['action']} {change['field']!r} to a copy at "
+            f"{args.output}; the original file is unchanged."
+        )
+        return
+    sys.stdout.write(text)
 
 
 def _cmd_goal_check(args) -> None:
@@ -3171,6 +3497,16 @@ def main(argv: list[str] | None = None) -> int:
             _cmd_preflight(args)
         elif args.command == "quality-check":
             _cmd_quality_check(args)
+        elif args.command == "feedback-check":
+            _cmd_feedback_check(args)
+        elif args.command == "feedback-review":
+            _cmd_feedback_review(args)
+        elif args.command == "feedback-lesson":
+            _cmd_feedback_lesson(args)
+        elif args.command == "feedback-compare":
+            _cmd_feedback_compare(args)
+        elif args.command == "improvement-apply":
+            _cmd_improvement_apply(args)
         elif args.command == "mem-propose":
             _cmd_mem_propose(args)
         elif args.command == "mem-review":

@@ -68,6 +68,8 @@ src/aperio/
 ├── profiles.py    data-only task-profile registry (M2, profile v1)
 ├── quality.py     mistake prevention + deliverable quality reports (M4,
 │                  quality-report v1, taxonomy v1, quality-rules v1)
+├── feedback.py    controlled feedback + improvement proposals + report
+│                  comparison (M5, feedback-schema v1)
 ├── memstore.py    universal memory records + append-only store (M3,
 │                  memory-schema v1): validation, identity, review states
 ├── memrecall.py   deterministic memory retrieval (M3, memory-recall v1)
@@ -290,6 +292,15 @@ a stable taxonomy, and four honest finding statuses (`confirmed`,
 `warning`, `unknown`, `recommendation`). No memory writes, no content
 alteration, no governance authority; the completion gate is untouched.
 See `docs/quality.md`.
+
+## Controlled feedback and improvement (M5)
+
+`aperio feedback-*` and `aperio improvement-apply` close the loop around
+M4: feedback starts as a proposal, an explicit review decision accepts or
+rejects it, an accepted lesson enters the M3 store as a *proposed* memory
+(never promoted by the feedback layer), and `feedback-compare` measures
+before/after quality reports for the same goal with regressions reported.
+Improvement proposals apply to new copies only. See `docs/feedback.md`.
 
 ## Safe path policy (implemented)
 

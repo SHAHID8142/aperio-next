@@ -33,6 +33,7 @@ Anything not listed below is **planned, not implemented**. See
 - Implemented (Feature 07): `codex-cli` and `claude-cli` through `aperio agent-list`, `agent-doctor`, `run-preview`, and `run-start --authorize-exec [--authorize-write]` (documented non-interactive CLIs; read-only by default; no GUI-app automation)
 - Implemented (M1): `aperio context-pack [workspace]` with `general` (default) and optional `software` profiles, Markdown/JSON output, deterministic byte budgeting, trust/provenance labels, imported/proposed context labels, and strict read-only operation
 - Implemented (M2): `aperio profiles`, `aperio goal-check`, and `aperio goal-pack` — a versioned universal goal contract (goal-schema v1), six data-only task profiles, optional work decomposition, and goal→context-pack conversion that works with no project, provider, or model API
+- Implemented (M5): `aperio feedback-check`, `feedback-review`, `feedback-lesson`, `feedback-compare`, and `improvement-apply` — controlled feedback with explicit review, approved lessons stored through the M3 memory contract (always as proposed), deterministic before/after comparison with regressions reported, and reviewable improvement proposals applied only to new files
 - Implemented (M4): `aperio preflight <goal.json>` and `aperio quality-check <goal.json> --deliverable FILE` — deterministic mistake-prevention and deliverable-quality reports (quality-report v1) with a stable issue taxonomy; read-only, standalone, honest about what only a human can judge
 - Implemented (M3): `aperio mem-propose`, `mem-review`, `mem-list`, `mem-show`, `mem-recall`, `mem-export`, `mem-import` — a standalone universal memory store (memory-schema v1) with explicit review states, deterministic retrieval, optional context-pack integration (`--memory-store`), and a versioned portable exchange format
 - Not implemented (by design, yet): autonomous loops, sandboxed execution, Cursor/ZCode GUI integrations, cloud sync, automatic learning
@@ -535,6 +536,28 @@ evidence, and a suggested corrective action. The tool never judges truth or
 taste, never writes to a memory store, never alters the goal or the
 deliverable, and is not a governance gate. See
 [docs/quality.md](docs/quality.md) for the full contract and rule list.
+
+### Controlled feedback and improvement (M5)
+
+```sh
+aperio feedback-check feedback.json
+aperio feedback-review feedback.json --decision accepted --actor editor-2 \
+  --output reviewed.json
+aperio feedback-lesson reviewed.json --store ~/notes/lessons.mem --actor editor-2
+aperio feedback-compare --before report1.json --after report2.json
+aperio improvement-apply --file proposal.json --target-file goal.json \
+  --output goal-updated.json
+```
+
+A feedback document starts as a proposal; only an explicit review decision
+accepts it; an accepted lesson enters the operator-named memory store as a
+**proposed** memory (the ordinary `mem-review` contract stays the only path
+to authority); `feedback-compare` measures two quality reports for the same
+goal, reporting resolved findings, potential regressions, and unchanged
+ones; improvement proposals apply to a **new copy** of a goal or quality
+request, never the original, and cannot change the code-owned profile
+registry. Agent self-reports are flagged as not independent. See
+[docs/feedback.md](docs/feedback.md).
 
 ### `aperio memory` (Feature 02)
 
