@@ -178,7 +178,21 @@ evidence, a reviewer, or a distinct reviewer is reported as ``unrecorded``,
 carries the exact reasons, and is labelled ``attested`` everywhere —
 retrieval, JSON, Markdown, packs and exchange files. Exchange validation
 accepts that honest pair and rejects combinations the recorded state could
-not produce. `memportable` writes and validates its own versioned exchange
+not produce.
+
+Governing rule: **memory authority is derived from recorded review events and
+nothing else.** Every entry point that can accept memory-shaped data — store
+snapshots, the recall API, `memory_context_items()`, `build_context_pack()`,
+`build_goal_context_pack()` and exchange import — calls
+`memstore.resolve_trust()`, which replays the record's own history, derives
+the verification basis, and refuses a supplied trust or verification claim the
+history does not support. Hand-built context items are re-validated in the
+packer (identity, recomputed content hash, label, sensitivity, support), so the
+boundary does not depend on which function a caller invokes first. Validity is
+likewise owned by the reader: one pack evaluates every item against one date
+(`--memory-as-of`, default today UTC), records it in
+`content.memory.validity`, and re-derives expiry rather than trusting a cached
+boolean. `memportable` writes and validates its own versioned exchange
 document; imports always enter as `proposed` and duplicates/conflicts are
 reported, never resolved silently. Appends open the store without following
 symlinks, prove the descriptor is the validated file, re-verify the chain

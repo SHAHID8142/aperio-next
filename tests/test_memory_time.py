@@ -147,10 +147,10 @@ def test_recall_is_deterministic_for_a_fixed_utc_date(monkeypatch, tmp_path: Pat
     assert first["validity"]["evaluated_on"] == "2026-05-05"
 
 
-def test_pack_refuses_an_out_of_window_memory_handed_to_it_directly(
+def test_pack_re_derives_validity_instead_of_accepting_a_stale_flag(
     tmp_path: Path,
 ) -> None:
-    """Defence in depth: the pack re-checks validity, not just the recaller."""
+    """Defence in depth: the pack evaluates the window, not a cached answer."""
 
     from aperio.context_pack import build_context_pack
     from aperio.memrecall import memory_context_items
@@ -158,18 +158,31 @@ def test_pack_refuses_an_out_of_window_memory_handed_to_it_directly(
     store = store_at(tmp_path)
     store.propose({**BASE, "valid_until": "2026-01-01"})
     stale = memory_context_items(
-        list(store.snapshots(as_of="2026-06-01")["memories"].values())
+        list(store.snapshots(as_of="2026-06-01")["memories"].values()),
+        as_of="2026-06-01",
     )
-    document = build_context_pack("pricing review", memory_items=stale)
+    # The caller re-labels the item as current at a later date; the pack
+    # ignores that opinion and re-evaluates the stored window.
+    stale[0].detail["validity"] = {
+        "evaluated_on": "2026-06-01",
+        "current": True,
+        "reason": None,
+    }
+    document = build_context_pack(
+        "pricing review", memory_items=stale, memory_as_of="2026-06-02"
+    )
     assert document["content"]["excluded"]["by_reason"] == {
         "memory_not_current": 1
     }
     assert document["content"]["context_items"] == []
 
     current = memory_context_items(
-        list(store.snapshots(as_of="2025-06-01")["memories"].values())
+        list(store.snapshots(as_of="2025-06-01")["memories"].values()),
+        as_of="2025-06-01",
     )
-    document = build_context_pack("pricing review", memory_items=current)
+    document = build_context_pack(
+        "pricing review", memory_items=current, memory_as_of="2025-06-01"
+    )
     assert [
         item["title"] for item in document["content"]["context_items"]
     ] == ["Pricing rule"]

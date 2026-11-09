@@ -196,6 +196,39 @@ references are declarations, not proof; a reviewer may be honestly but not
 independently chosen; no write path promises crash or power-loss atomicity;
 and the Feature 07 provider metadata bound defect remains out of scope.
 
+## M3 trust boundary (0.12.0)
+
+The trust/provenance review of the M3 completion found four entry-point gaps
+and closed them with one rule rather than four patches:
+
+- **Supplied labels could promote a record.** Retrieval read a caller's
+  `trust` string before checking it against the recorded history, so a record
+  claiming `state: proposed` with `trust: verified` was ranked as verified.
+  Every entry point now resolves trust through `memstore.resolve_trust()`,
+  which derives the verification basis from the record's own review events and
+  refuses a claim the history does not support. A self-declared
+  `verification.basis: evidence` is not proof of a review.
+- **Context items could manufacture a verified memory.** The packer accepted
+  any item with `source: memory` and an enumerated trust label. It now
+  re-validates identity (`memory_id` ↔ `source_ref`), recomputes the content
+  hash and rejects tampering, requires the evidence contract behind a
+  `verified` label (downgrading it otherwise with a warning), refuses
+  operator/authoritative labels on memory, and forces `private` records to
+  local-only.
+- **A cached validity answer could outlive the window.** `memory_context_items`
+  carried `validity.current` from an earlier read, and the packer only checked
+  that boolean. The packer now owns the date: `--memory-as-of` (default today
+  UTC) is validated, applied to every item, recorded in
+  `content.memory.validity`, and a differing earlier date produces
+  `memory_validity_reevaluated` instead of a silent mix.
+- **Repeated import lost the original source.** Import replaced the source
+  object, discarding the original reference. Import now keeps the immediate
+  provenance as `kind: import` while preserving the original `ref` and quoting
+  the original kind, note and declared state inside the bounded source note,
+  and reports both structurally under `transfer_provenance`. Identity, scope,
+  sensitivity and evidence are unchanged, and the record still enters as
+  `proposed`.
+
 ## Next (requires independent review and explicit instruction)
 
 - Remaining M3 hardening whatever the review confirms (for example goal

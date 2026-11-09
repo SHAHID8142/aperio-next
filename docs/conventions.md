@@ -135,6 +135,14 @@ filesystem does not provide. Validity windows are evaluated on every read
 (today in **UTC** by default, an explicit `--as-of` for history) and both
 bounds are inclusive; the stored record is never rewritten as time passes.
 
+No supplied field may raise a memory's authority. Trust is derived from
+recorded review events by `memstore.resolve_trust()`; a `trust` or
+`verification` claim that the history does not support is refused, and any
+reader that accepts memory-shaped data (recall, context items, packs, imports)
+must go through that function rather than reading the field. A reader also owns
+its own evaluation date: re-derive validity against one explicit date and
+record it, instead of trusting a cached `validity.current`.
+
 Separate a memory's *recorded state* from its *effective trust*: anything that
 reports confidence (`trust`, ranking, JSON, Markdown, packs, exchange files)
 must use `memstore.effective_trust()` derived from the recorded verification,

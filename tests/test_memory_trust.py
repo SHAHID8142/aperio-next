@@ -402,4 +402,4 @@ def test_raw_record_without_snapshot_cannot_rank_as_verified(tmp_path: Path) -> 
         {memory["memory_id"]: raw}, objective="retention claim"
     )
     assert [m["trust"] for m in selection["selected"]] == ["attested"]
-    assert selection["selected"][0]["verification_basis"] == "not-verified"
+    assert selection["selected"][0]["verification_basis"] == "unrecorded"

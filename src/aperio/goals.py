@@ -664,13 +664,15 @@ def build_goal_context_pack(
     proposed_items: Sequence[object] = (),
     memory_items: Sequence[object] = (),
     memory_report: dict | None = None,
+    memory_as_of: str | None = None,
 ) -> dict:
     """Turn a validated goal into a provider-neutral context pack.
 
     Deterministic and read-only: the same goal yields the same canonical
     content and ``content_sha256`` (generation time excluded), and no
     project file is written. Workspace context is optional and read-only,
-    exactly as in M1.
+    exactly as in M1. ``memory_as_of`` is the single date this pack evaluates
+    memory validity against; it is recorded in the pack.
     """
     from aperio.context_pack import DEFAULT_BUDGET_BYTES, build_context_pack
 
@@ -708,6 +710,7 @@ def build_goal_context_pack(
         proposed_items=proposed_items,
         memory_items=memory_items,
         memory_report=memory_report,
+        memory_as_of=memory_as_of,
         goal_context={
             "goal": goal_block(normalized),
             "profile_suggestions": goal_suggestions(normalized),

@@ -26,11 +26,10 @@ from aperio.memstore import (
     ACTIVE_STATES,
     SENSITIVITY_LEVELS,
     SENSITIVITY_RANK,
-    STATE_TRUST,
     VALIDITY_RULE,
     evaluate_on,
-    memory_trust,
     memory_validity,
+    resolve_trust,
 )
 
 MAX_RECALL_ITEMS = 8
@@ -172,7 +171,15 @@ def recall_memories(
                 f"memory {memory_id} is missing required fields: "
                 + ", ".join(missing)
             )
-        state = memory.get("state")
+        if memory.get("memory_id") != memory_id:
+            raise ValidationError(
+                f"memory {memory_id} is keyed under a different memory_id; the "
+                "map key and the record's own identity must agree"
+            )
+        # Validate the record's trust contract before any filtering: a
+        # malformed or self-promoting record is refused, not quietly skipped.
+        resolved = resolve_trust(memory, label="memory")
+        state = resolved["state"]
         validity = memory_validity(memory, as_of=evaluated_on)
         if validity["reason"] == "expired" or state == "expired":
             exclude("expired")
@@ -221,15 +228,17 @@ def recall_memories(
             if not (scope_rank == _SCOPE_RANK["global"] and state != "proposed"):
                 exclude("no-match")
                 continue
+        trust = resolved["trust"]
         candidates.append(
             {
                 "memory": memory,
                 "scope_rank": scope_rank,
                 "relevance": relevance,
-                "trust_rank": _TRUST_RANK.get(_trust(memory, state), 1),
+                "resolved": resolved,
+                "trust_rank": _TRUST_RANK.get(trust, 1),
                 "score": scope_rank * 1000
                 + relevance * 10
-                + _TRUST_RANK.get(_trust(memory, state), 1),
+                + _TRUST_RANK.get(trust, 1),
             }
         )
 
@@ -263,6 +272,7 @@ def recall_memories(
             exclude("budget")
             continue
         seen_hashes.add(memory["content_sha256"])
+        resolved = entry["resolved"]
         selected.append(
             {
                 **memory,
@@ -270,8 +280,10 @@ def recall_memories(
                 "scope_rank": entry["scope_rank"],
                 "score": entry["score"],
                 "content_bytes": content_bytes,
-                "trust": _trust(memory, memory["state"]),
-                "verification_basis": _verification_basis(memory),
+                "recorded_state": resolved["recorded_state"],
+                "trust": resolved["trust"],
+                "verification": resolved["verification"],
+                "verification_basis": resolved["verification"]["basis"],
             }
         )
         used_bytes += content_bytes
@@ -346,23 +358,6 @@ def recall_memories(
     }
 
 
-def _trust(memory: Mapping, state: str) -> str:
-    """The trust label used for ranking; never more than the record proves.
-
-    A snapshot's own label wins. Without one, a ``verified`` state is only
-    ranked as verified when the record carries an evidence-backed
-    verification, so a caller that passes raw records cannot rank a claim
-    higher than a reviewed snapshot would.
-    """
-
-    trust = memory.get("trust")
-    if isinstance(trust, str) and trust in STATE_TRUST.values():
-        return trust
-    if state == "verified":
-        return "verified" if _verification_basis(memory) == "evidence" else "attested"
-    return memory_trust(state)
-
-
 def _conflicts(selected: list[dict]) -> list[dict]:
     groups: dict[tuple, list[dict]] = {}
     for memory in selected:
@@ -395,44 +390,55 @@ def _conflicts(selected: list[dict]) -> list[dict]:
     return conflicts
 
 
-def _verification_basis(memory: Mapping) -> str:
-    """The basis a reader sees next to a record's trust label."""
+def memory_context_items(
+    selected: Sequence[dict], *, as_of: str | None = None
+) -> list[ContextItem]:
+    """Convert selected memory snapshots into pack context items.
 
-    verification = memory.get("verification")
-    if isinstance(verification, Mapping):
-        basis = verification.get("basis")
-        if isinstance(basis, str):
-            return basis
-    return "not-verified"
+    Every record is re-validated here rather than trusted because a caller
+    says so: the review state, trust label and verification must agree with
+    the record's own recorded history (see
+    :func:`aperio.memstore.resolve_trust`), and validity is evaluated again
+    against ``as_of`` (today in UTC by default) instead of carrying whatever
+    the caller last computed. A private memory is always marked local-only,
+    because a pack is a shareable artifact.
+    """
 
-
-def memory_context_items(selected: Sequence[dict]) -> list[ContextItem]:
-    """Convert selected memory snapshots into pack context items."""
-
+    evaluated_on = evaluate_on(as_of)
     items = []
     for memory in selected:
+        if not isinstance(memory, Mapping):
+            raise ValidationError("selected memories must be memory objects")
+        resolved = resolve_trust(memory, label="memory")
+        validity = memory_validity(memory, as_of=evaluated_on)
         detail = {
             "memory_id": memory["memory_id"],
-            "memory_type": memory["type"],
-            "state": memory["state"],
+            "memory_type": memory.get("type"),
+            "state": resolved["state"],
+            "recorded_state": resolved["recorded_state"],
+            "trust": resolved["trust"],
             "scope": memory["scope"],
-            "source": memory["source"],
+            "source": memory.get("source"),
             "tags": list(memory.get("tags", ())),
             "evidence": list(memory.get("evidence", ())),
             "verification_evidence": list(
-                (memory.get("verification") or {}).get("evidence") or []
+                resolved["verification"].get("evidence") or []
             ),
-            "verification_reviewer": (
-                memory.get("verification") or {}
-            ).get("reviewer"),
+            "verification_reviewer": resolved["verification"].get("reviewer"),
+            "reviewer_distinct_from_proposer": resolved["verification"].get(
+                "reviewer_distinct_from_proposer"
+            ),
+            "independence": resolved["verification"].get("independence"),
+            "verification_reasons": list(
+                resolved["verification"].get("reasons") or []
+            ),
             "valid_until": memory.get("valid_until"),
             "valid_from": memory.get("valid_from"),
-            "validity": memory.get("validity") or memory_validity(memory),
+            "validity": validity,
+            "sensitivity": memory.get("sensitivity", "internal"),
             "content_sha256": memory["content_sha256"],
-            "reviewed": memory["state"] in ("attested", "verified"),
-            "verification_basis": (memory.get("verification") or {}).get(
-                "basis", "not-verified"
-            ),
+            "reviewed": resolved["state"] in ("attested", "verified"),
+            "verification_basis": resolved["verification"]["basis"],
         }
         items.append(
             ContextItem(
@@ -441,10 +447,7 @@ def memory_context_items(selected: Sequence[dict]) -> list[ContextItem]:
                 kind="memory",
                 title=memory["title"],
                 content=memory["content"],
-                trust=(
-                    memory.get("trust")
-                    or STATE_TRUST[memory["state"]]
-                ),
+                trust=resolved["trust"],
                 origin="memory-store",
                 method="operator-selected-memory",
                 observed_at=memory.get("updated_at"),

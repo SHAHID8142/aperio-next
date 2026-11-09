@@ -26,6 +26,18 @@ from aperio import __version__
 from aperio.decisions import decisions_path, read_decisions
 from aperio.errors import AperioError, PathError, ValidationError
 from aperio.handoff import handoff_path, read_handoff
+from aperio.memstore import (
+    MEMORY_STATES,
+    MEMORY_TYPES,
+    normalize_scope,
+    normalize_source,
+    SENSITIVITY_LEVELS as MEMORY_SENSITIVITY_LEVELS,
+    STATE_TRUST,
+    VALIDITY_RULE,
+    canonical_memory_bytes,
+    evaluate_on,
+    memory_validity,
+)
 from aperio.memory import BRIEF_FILE_NAME
 from aperio.paths import resolve_target
 from aperio.profiles import (
@@ -264,6 +276,183 @@ def _warn(warnings: list[dict], code: str, source: str, detail: str) -> None:
     entry = {"code": code, "source": source, "detail": detail}
     if entry not in warnings:
         warnings.append(entry)
+
+
+_MEMORY_ID_RE = re.compile(r"^MEM-[0-9a-f]{12}$")
+_MEMORY_TRUST_LABELS = tuple(sorted(set(STATE_TRUST.values())))
+_MEMORY_DETAIL_KEYS = (
+    "memory_id",
+    "memory_type",
+    "state",
+    "trust",
+    "scope",
+    "source",
+    "tags",
+    "evidence",
+    "content_sha256",
+    "verification_basis",
+)
+
+
+def _memory_content_sha256(item: "ContextItem", detail: dict) -> str:
+    """Recompute a memory item's content identity from what it shows."""
+
+    record = {
+        "type": detail.get("memory_type"),
+        "title": item.title,
+        "content": item.content,
+        "scope": detail.get("scope"),
+        "tags": detail.get("tags"),
+        "evidence": detail.get("evidence"),
+    }
+    try:
+        return hashlib.sha256(canonical_memory_bytes(record)).hexdigest()
+    except (AperioError, KeyError, TypeError, ValueError) as error:
+        # Canonicalisation refuses malformed memory rather than hashing junk.
+        raise ValidationError(
+            f"memory item {item.source_ref!r} cannot be canonicalised: {error}"
+        ) from error
+
+
+def _validate_memory_item(
+    item: "ContextItem", index: int, *, evaluated_on: str
+) -> tuple["ContextItem", dict]:
+    """Validate one memory context item and re-derive its authority.
+
+    A pack is a shareable artifact, so it re-checks the memory contract
+    itself instead of trusting the caller: identity must match the item it
+    claims to be, the content hash must match the content shown, a
+    ``verified`` label must be backed by the evidence contract, a private
+    record can never be labelled shareable, and validity is evaluated against
+    the pack's own date rather than an earlier read's cached answer.
+    """
+
+    if item.source != "memory":
+        raise ValidationError(f"memory item {index} must carry source 'memory'")
+    if item.kind != "memory":
+        raise ValidationError(f"memory item {index} must carry kind 'memory'")
+    detail = item.detail
+    if not isinstance(detail, dict):
+        raise ValidationError(f"memory item {index} detail must be an object")
+    missing = [key for key in _MEMORY_DETAIL_KEYS if key not in detail]
+    if missing:
+        raise ValidationError(
+            f"memory item {index} is missing required memory fields: "
+            + ", ".join(missing)
+        )
+    memory_id = detail["memory_id"]
+    if not isinstance(memory_id, str) or not _MEMORY_ID_RE.match(memory_id):
+        raise ValidationError(f"memory item {index} has an invalid memory_id")
+    if item.source_ref != f"memory:{memory_id}":
+        raise ValidationError(
+            f"memory item {index} memory_id does not match its source reference"
+        )
+    if detail["state"] not in MEMORY_STATES:
+        raise ValidationError(f"memory item {index} has an unknown review state")
+    if detail["memory_type"] not in MEMORY_TYPES:
+        raise ValidationError(f"memory item {index} has an unknown memory type")
+    for key, normalise in (
+        ("scope", normalize_scope),
+        ("source", normalize_source),
+    ):
+        try:
+            normalise(detail[key])
+        except ValidationError as error:
+            raise ValidationError(
+                f"memory item {index} has an invalid {key}: {error}"
+            ) from error
+    if not isinstance(detail["tags"], list) or not all(
+        isinstance(tag, str) for tag in detail["tags"]
+    ):
+        raise ValidationError(f"memory item {index} tags must be a list of strings")
+    if detail["trust"] not in _MEMORY_TRUST_LABELS:
+        raise ValidationError(f"memory item {index} has an invalid trust label")
+    if item.trust not in TRUST_LEVELS:
+        raise ValidationError(
+            f"context item {item.source_ref!r} has invalid trust label"
+        )
+    if item.trust not in _MEMORY_TRUST_LABELS:
+        # Memory is quoted data at the lowest authority tier; it can never
+        # borrow an operator/authoritative label inside a pack.
+        raise ValidationError(
+            f"memory item {index} must carry a memory review label "
+            f"({', '.join(_MEMORY_TRUST_LABELS)}), not {item.trust!r}"
+        )
+    sensitivity = detail.get("sensitivity")
+    if sensitivity is not None and sensitivity not in MEMORY_SENSITIVITY_LEVELS:
+        raise ValidationError(f"memory item {index} has invalid sensitivity")
+    stored_hash = detail["content_sha256"]
+    if (
+        not isinstance(stored_hash, str)
+        or len(stored_hash) != 64
+        or any(char not in "0123456789abcdef" for char in stored_hash)
+    ):
+        raise ValidationError(f"memory item {index} has an invalid content_sha256")
+    actual_hash = _memory_content_sha256(item, detail)
+    if actual_hash != stored_hash:
+        raise ValidationError(
+            f"memory item {index} content_sha256 does not match the content it "
+            "carries; the item was altered after it was selected"
+        )
+
+    basis = detail["verification_basis"]
+    if basis not in ("evidence", "unrecorded", "not-verified"):
+        raise ValidationError(
+            f"memory item {index} has an invalid verification basis"
+        )
+    evidence_refs = detail.get("verification_evidence") or []
+    supported = (
+        detail["state"] == "verified"
+        and basis == "evidence"
+        and isinstance(evidence_refs, list)
+        and any(isinstance(ref, str) and ref.strip() for ref in evidence_refs)
+        and detail.get("reviewer_distinct_from_proposer") is True
+    )
+    trust = item.trust
+    downgraded = False
+    if trust == "verified" and not supported:
+        trust = "attested"
+        downgraded = True
+
+    validity = memory_validity(
+        {
+            "valid_from": detail.get("valid_from"),
+            "valid_until": detail.get("valid_until"),
+        },
+        as_of=evaluated_on,
+    )
+    previous = detail.get("validity")
+    reevaluated = (
+        isinstance(previous, dict)
+        and previous.get("evaluated_on") not in (None, evaluated_on)
+    )
+    normalised_detail = {
+        **detail,
+        "trust": trust,
+        "verification_basis": basis if supported else "unrecorded",
+        "validity": validity,
+    }
+    normalised = ContextItem(
+        source=item.source,
+        source_ref=item.source_ref,
+        kind=item.kind,
+        title=item.title,
+        content=item.content,
+        trust=trust,
+        origin=item.origin,
+        method=item.method,
+        observed_at=item.observed_at,
+        sensitivity=(
+            "local_only" if sensitivity == "private" else item.sensitivity
+        ),
+        detail=normalised_detail,
+    )
+    return normalised, {
+        "not_current": not validity["current"],
+        "downgraded": downgraded,
+        "reevaluated": reevaluated,
+        "memory_id": memory_id,
+    }
 
 
 def _exclude(excluded: dict[str, int], reason: str, count: int = 1) -> None:
@@ -900,6 +1089,7 @@ def build_context_pack(
     proposed_items: Sequence[ContextItem] = (),
     memory_items: Sequence[ContextItem] = (),
     memory_report: dict | None = None,
+    memory_as_of: str | None = None,
     goal_context: dict | None = None,
     declared_objective_source: str | None = None,
     requirements: Sequence[str] = (),
@@ -922,7 +1112,12 @@ def build_context_pack(
     an agent- or import-declared objective is never labelled operator-written.
 
     ``memory_items`` are already-selected universal memory records converted
-    by :func:`aperio.memrecall.memory_context_items`. They are appended
+    by :func:`aperio.memrecall.memory_context_items`. Every item is
+    re-validated here — identity, content hash, trust label, sensitivity and
+    validity — because a pack is a shareable artifact and must not inherit a
+    caller's opinion of what is trustworthy. ``memory_as_of`` is the single
+    date the whole pack evaluates memory validity against (default: today in
+    UTC); it is recorded in the pack. They are appended
     *after* operator-supplied context, so memory can never displace operator
     instructions or operator-selected files when the budget is tight, and
     ``memory_report`` records how they were retrieved. Both are optional and
@@ -1064,20 +1259,43 @@ def build_context_pack(
                 ),
             )
 
+    memory_evaluated_on = evaluate_on(memory_as_of)
+    memory_downgraded: list[str] = []
+    memory_reevaluated: list[str] = []
     for index, item in enumerate(memory_items, start=1):
         if not isinstance(item, ContextItem):
             raise ValidationError("memory_items must contain ContextItem values")
-        if item.source != "memory":
-            raise ValidationError(
-                f"memory item {index} must carry source 'memory'"
-            )
-        validity = item.detail.get("validity") if item.detail else None
-        if isinstance(validity, dict) and validity.get("current") is False:
-            # Defence in depth: a caller that hands over an out-of-window
-            # memory directly still cannot put stale knowledge in a pack.
+        normalised, facts = _validate_memory_item(
+            item, index, evaluated_on=memory_evaluated_on
+        )
+        if facts["not_current"]:
+            # Re-evaluated here, not inherited from an earlier read: stale
+            # knowledge cannot enter a pack through any entry point.
             _exclude(excluded, "memory_not_current")
             continue
-        items.append(item)
+        if facts["downgraded"]:
+            memory_downgraded.append(facts["memory_id"])
+        if facts["reevaluated"]:
+            memory_reevaluated.append(facts["memory_id"])
+        items.append(normalised)
+    if memory_downgraded:
+        _warn(
+            warnings,
+            "memory_item_trust_downgraded",
+            "memory",
+            "these items claimed a verified label their recorded support does "
+            "not justify; they are shown as attested: "
+            + ", ".join(sorted(memory_downgraded)[:5]),
+        )
+    if memory_reevaluated:
+        _warn(
+            warnings,
+            "memory_validity_reevaluated",
+            "memory",
+            "these items carried a validity answer from an earlier date; they "
+            f"were re-evaluated on {memory_evaluated_on}: "
+            + ", ".join(sorted(memory_reevaluated)[:5]),
+        )
     if memory_items:
         _warn(
             warnings,
@@ -1206,6 +1424,15 @@ def build_context_pack(
         if not isinstance(memory_report, dict):
             raise ValidationError("memory_report must be an object")
         content["memory"] = memory_report
+    if memory_report is not None or memory_items:
+        block = dict(content.get("memory") or {})
+        # The pack owns the date it evaluated memory against, so readers do
+        # not have to trust a number the caller passed alongside the items.
+        block["validity"] = {
+            "evaluated_on": memory_evaluated_on,
+            "rule": VALIDITY_RULE,
+        }
+        content["memory"] = block
     if requirements_list:
         content["requirements"] = requirements_list
     if goal_context is not None:
@@ -1566,6 +1793,15 @@ def render_context_pack_markdown(document: dict) -> str:
         f"- Content SHA-256: `{document['content_sha256']}`",
         f"- Context budget: {budget['used_bytes']} of {budget['limit_bytes']} "
         f"UTF-8 bytes of selected context content",
+        *(
+            [
+                f"- Memory validity evaluated on: "
+                f"{content['memory']['validity']['evaluated_on']} "
+                f"({content['memory']['validity']['rule']})",
+            ]
+            if (content.get("memory") or {}).get("validity")
+            else []
+        ),
         "",
         objective_heading,
         "",
@@ -1655,8 +1891,12 @@ def render_context_pack_markdown(document: dict) -> str:
                 *(
                     [
                         f"- Memory: `{item['detail']['memory_id']}` "
-                        f"({item['detail']['memory_type']}), review state "
-                        f"**{item['detail']['state']}**, sensitivity "
+                        f"({item['detail']['memory_type']}), recorded state "
+                        f"**{item['detail'].get('recorded_state') or item['detail']['state']}**"
+                        f", effective trust **{item['trust']}** "
+                        f"(verification basis "
+                        f"`{item['detail'].get('verification_basis')}`)"
+                        f", sensitivity "
                         f"`{item.get('sensitivity', 'shareable')}`",
                         f"- Memory source: "
                         f"`{item['detail']['source']['kind']}`"

@@ -26,7 +26,24 @@ def snapshot(
     created_at: str = "2026-01-01T00:00:00Z",
     updated_at: str | None = None,
     sha: str | None = None,
+    verified_by: str | None = None,
 ) -> dict:
+    history: list[dict] = []
+    if verified_by:
+        history.append(
+            {
+                "memory_id": memory_id,
+                "revision": 2,
+                "at": updated_at or created_at,
+                "actor": verified_by,
+                "action": "verify",
+                "from_state": "proposed",
+                "to_state": "verified",
+                "note": None,
+                "evidence": ["study.pdf"],
+                "reason": None,
+            }
+        )
     return {
         "memory_id": memory_id,
         "type": "observation",
@@ -45,7 +62,7 @@ def snapshot(
         "trust": memory_trust(state),
         "content_sha256": sha or memory_id.lower().replace("mem-", "") * 2,
         "declared_state": None,
-        "history": [],
+        "history": history,
     }
 
 
@@ -251,7 +268,7 @@ def test_verified_memory_outranks_attested_and_proposed() -> None:
         ),
         "MEM-000000000003": snapshot(
             "MEM-000000000003", state="verified", title="Brand colour",
-            content="Green."
+            content="Green.", verified_by="reviewer-b"
         ),
     }
     selection = recall_memories(memories, objective="Brand colour")

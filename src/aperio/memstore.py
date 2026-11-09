@@ -37,6 +37,7 @@ import json
 import os
 import stat as stat_module
 from datetime import date, datetime, timezone
+from collections.abc import Mapping
 from pathlib import Path
 
 from aperio.artifacts import publish_text_atomic
@@ -613,6 +614,163 @@ def _verification(record: dict, events: list[dict], state: str) -> dict:
             "--evidence and a different --actor to record support."
         )
     return verification
+
+
+def _history_events(history: object) -> list[dict]:
+    """Normalise the review events a record carries, ignoring junk.
+
+    Only structurally usable events survive: a transition to ``verified``
+    with an evidence list and an optional actor. Anything else is dropped, so
+    a malformed history can never be read as stronger proof than it is.
+    """
+
+    if not isinstance(history, list):
+        return []
+    events: list[dict] = []
+    for entry in history:
+        if not isinstance(entry, Mapping):
+            continue
+        to_state = entry.get("to_state")
+        if to_state not in MEMORY_STATES:
+            continue
+        evidence = entry.get("evidence")
+        actor = entry.get("actor")
+        events.append(
+            {
+                "to_state": to_state,
+                "evidence": (
+                    [item for item in evidence if isinstance(item, str)]
+                    if isinstance(evidence, list)
+                    else []
+                ),
+                "actor": actor if isinstance(actor, str) else None,
+            }
+        )
+    return events
+
+
+def derive_verification(record: Mapping) -> dict:
+    """Verification basis proved by the record's own recorded history.
+
+    This is the authoritative derivation: it never reads the record's
+    ``verification`` field, so a caller cannot grant itself an evidence-backed
+    label by writing one.
+    """
+
+    # ``state`` may be a derived value ("expired"), which says nothing about
+    # how the record was reviewed; the recorded state is the authority.
+    recorded_state = record.get("recorded_state") or record.get("state")
+    events = _history_events(record.get("history"))
+    return _verification(dict(record), events, recorded_state)
+
+
+def _coherent_declared_verification(declared: Mapping) -> bool:
+    """Is a store-derived verification claim internally consistent at all?"""
+
+    if declared.get("basis") != "evidence":
+        return False
+    evidence = declared.get("evidence")
+    reviewer = declared.get("reviewer")
+    return (
+        isinstance(evidence, list)
+        and any(isinstance(item, str) and item.strip() for item in evidence)
+        and isinstance(reviewer, str)
+        and bool(reviewer.strip())
+        and declared.get("reviewer_distinct_from_proposer") is True
+    )
+
+
+def resolve_trust(record: Mapping, *, label: str = "memory") -> dict:
+    """The authoritative trust resolution for one memory-shaped record.
+
+    Authority comes from recorded history, never from a field name. A
+    supplied ``trust`` may agree with the derivation or honestly downgrade it;
+    it may never raise it. A supplied ``verification`` whose basis the history
+    does not support is refused rather than silently ignored, so a forged
+    record fails loudly instead of being quietly rewritten.
+
+    One honest exception: a store snapshot keeps only the last
+    ``MAX_HISTORY_ENTRIES`` review events, so a verification that happened
+    earlier cannot be re-derived. When the history is truncated *and* the
+    record carries a ``recorded_state`` marker *and* the declared verification
+    is internally coherent, that store-derived claim is kept. A record that
+    merely invents the same fields cannot prove it ever had that history;
+    Aperio does not authenticate records, and this limit is documented.
+    """
+
+    if not isinstance(record, Mapping):
+        _fail(f"{label} must be a memory object")
+    state = record.get("state")
+    if not isinstance(state, str) or state not in MEMORY_STATES:
+        _fail(
+            f"{label} {record.get('memory_id')!r} has an unknown review state; "
+            "expected one of: " + ", ".join(MEMORY_STATES)
+        )
+    recorded_state = record.get("recorded_state") or state
+    if recorded_state not in MEMORY_STATES:
+        _fail(
+            f"{label} {record.get('memory_id')!r} has an unknown recorded "
+            "state; expected one of: " + ", ".join(MEMORY_STATES)
+        )
+    verification = derive_verification(record)
+    if state not in ACTIVE_STATES and recorded_state in ACTIVE_STATES:
+        # Derived expiry: the record is still what it was recorded as, but it
+        # is not applicable today, so it claims nothing current.
+        trust = "proposed"
+    else:
+        trust = effective_trust(recorded_state, verification)
+    history = record.get("history")
+    truncated = isinstance(history, list) and len(history) >= MAX_HISTORY_ENTRIES
+    declared_verification = record.get("verification")
+    if declared_verification is not None:
+        if not isinstance(declared_verification, Mapping):
+            _fail(f"{label} {record.get('memory_id')!r} verification must be an object")
+        declared_basis = declared_verification.get("basis")
+        if declared_basis not in (None, verification["basis"]):
+            recoverable = (
+                truncated
+                and record.get("recorded_state") is not None
+                and _coherent_declared_verification(declared_verification)
+            )
+            if recoverable:
+                verification = {
+                    key: value
+                    for key, value in declared_verification.items()
+                    if isinstance(key, str)
+                }
+                verification["basis"] = "evidence"
+                trust = effective_trust(state, verification)
+            else:
+                _fail(
+                    f"{label} {record.get('memory_id')!r} declares verification "
+                    f"basis {declared_basis!r} but its recorded history "
+                    f"supports only {verification['basis']!r}; authority comes "
+                    "from recorded review events, not from a declared field"
+                )
+    declared_trust = record.get("trust")
+    if declared_trust is not None:
+        if (
+            not isinstance(declared_trust, str)
+            or declared_trust not in STATE_TRUST.values()
+        ):
+            _fail(
+                f"{label} {record.get('memory_id')!r} has an unknown trust "
+                "label; expected one of: "
+                + ", ".join(sorted(set(STATE_TRUST.values())))
+            )
+        allowed = {trust} | ({"attested"} if trust == "verified" else set())
+        if declared_trust not in allowed:
+            _fail(
+                f"{label} {record.get('memory_id')!r} trust label "
+                f"{declared_trust!r} disagrees with its recorded history, "
+                f"which supports only {trust!r}"
+            )
+    return {
+        "state": state,
+        "recorded_state": recorded_state,
+        "trust": trust,
+        "verification": verification,
+    }
 
 
 def effective_trust(state: str, verification: dict | None = None) -> str:
@@ -1450,6 +1608,8 @@ __all__ = [
     "memory_validity",
     "evaluate_on",
     "VERIFICATION_INDEPENDENCE_NOTE",
+    "derive_verification",
+    "resolve_trust",
     "memory_identity",
     "memory_revision_sha256",
     "memory_trust",

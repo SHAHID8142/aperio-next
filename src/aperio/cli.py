@@ -1370,6 +1370,7 @@ def _cmd_context_pack(args) -> None:
         proposed_items=proposed_items,
         memory_items=memory_items,
         memory_report=memory_report,
+        memory_as_of=args.memory_as_of,
     )
     if args.as_json:
         sys.stdout.write(
@@ -1533,7 +1534,13 @@ def _memory_selection(args, *, objective: str, profile: str, budget_bytes: int):
         "limitation": RECALL_LIMITATION,
         "warnings": warnings,
     }
-    return memory_context_items(selection["selected"]), report
+    return (
+        memory_context_items(
+            selection["selected"],
+            as_of=getattr(args, "memory_as_of", None),
+        ),
+        report,
+    )
 
 
 def _cmd_mem_propose(args) -> None:
@@ -1975,6 +1982,7 @@ def _cmd_goal_pack(args) -> None:
         proposed_items=proposed_items,
         memory_items=memory_items,
         memory_report=memory_report,
+        memory_as_of=args.memory_as_of,
     )
     text = (
         json.dumps(document, ensure_ascii=False, indent=2) + "\n"

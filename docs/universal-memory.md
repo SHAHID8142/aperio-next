@@ -145,6 +145,45 @@ Known limitations, stated honestly:
   (`actor`, `source`) is a declaration, not proof of identity.
 - Aperio does not verify the content of evidence references; it records that
   the operator supplied them.
+- A store snapshot keeps the last 32 review events, so a verification older
+  than that cannot be re-derived. In that one case a snapshot's own
+  verification is kept when it is internally coherent; a caller that claims
+  the same fields without ever having the history is indistinguishable from
+  one that did. Aperio does not authenticate records or callers — it refuses
+  unfounded promotions, and it cannot prove a record's past.
+- A caller that supplies a memory item without `valid_from`/`valid_until` is
+  describing a record with no window; the pack cannot expire knowledge the
+  item does not mention.
+
+### The trust boundary: authority comes from history, not field names
+
+Every entry point that can receive memory-shaped data resolves trust the same
+way, through one auditable rule: read the recorded review events, derive the
+verification basis from them, and only then label the record. A supplied
+`trust` string may agree with that derivation or honestly downgrade it; it can
+never raise it.
+
+| Input form | What is validated | Authority granted |
+| --- | --- | --- |
+| Store snapshot (`MemoryStore.snapshots()`) | recorded state, review events, chain-verified lines | full: `verified` when the events prove evidence plus a distinct declared reviewer |
+| Legacy snapshot (pre-gate `verify`) | same, plus the honest downgrade rules | `attested`, `basis: unrecorded`, reasons kept |
+| Recall output fed back in | the record is re-derived, not re-read | same as the snapshot it came from |
+| Caller-built raw record (`recall_memories`, `memory_context_items`) | shape, known state, known trust label, internal consistency | at most `attested`; a `verified` claim without recorded proof is refused |
+| Hand-built `ContextItem` in a pack | source/kind, `memory_id` ↔ `source_ref`, recomputed `content_sha256`, label enum, sensitivity, verification support | at most `attested` unless the item carries the full evidence contract; `verified` without it is downgraded with a warning |
+| Exchange file entry | content digest, entry shape, state/trust combination, imported history | always `proposed` in the destination |
+
+A record whose `trust` disagrees with its own history is **refused**, not
+silently rewritten: `memory 'MEM-…' trust label 'verified' disagrees with its
+recorded history, which supports only 'proposed'`. A self-declared
+`verification: {basis: 'evidence'}` is likewise refused when the recorded
+events do not support it, because authority comes from evidence of a review,
+not from a label that says one happened. Records supplied directly are still
+supported as *data* — they are ranked and rendered, just never promoted.
+
+Sensitivity and identity are re-checked at the same time: a private record is
+always marked local-only inside a pack (a pack is a shareable artifact), and a
+memory item whose content no longer matches its `content_sha256` is rejected
+as altered after selection.
 
 ### What `verify` actually requires
 
@@ -285,9 +324,16 @@ When a store is supplied:
 - the pack reports retrieval counts, exclusion reasons, conflicts, and the
   relevance limitation in `content.memory` — never the store path;
 - the same byte budget covers goal fields, attachments, and memory;
-- the pack re-checks validity itself: a memory outside its window is excluded
-  as `memory_not_current` even if a caller hands it over directly, so stale
-  knowledge cannot enter a pack through a different entry point.
+- the pack owns the evaluation date. It re-derives validity from the stored
+  window against a single date (`--memory-as-of`, default today in UTC),
+  ignores any cached `validity.current` a caller passes, records the date it
+  used in `content.memory.validity`, and warns
+  (`memory_validity_reevaluated`) when an item arrived with a different date —
+  so one pack never mixes evaluation dates silently;
+- a memory outside its window is excluded as `memory_not_current` even if a
+  caller hands it over directly, and `content.memory.validity.evaluated_on` is
+  present whether or not any item survived, so a historical pack stays
+  reproducible.
 
 Memory cannot override the current objective or the operator's constraints:
 those sections are built only from operator-provided goal fields.
@@ -366,6 +412,24 @@ applies a claimed state. In that case the import report lists the memory under
 `unsupported_trust_claims` with the reason, and any review evidence found in
 the transferred history appears under `transfer_evidence`. Nothing is
 promoted, and no trust label is copied into the store.
+
+### Provenance through repeated transfer
+
+An imported record has two distinct origins, and both are kept:
+
+- **immediate provenance** is the source object: `kind: import`, plus the
+  declared importer identity in the import report;
+- **original declared source** travels with it: the original `ref` is kept as
+  the source reference (bounded to 200 bytes) and the original kind, note and
+  declared state are quoted inside the source note (bounded to 1000 bytes).
+
+The note is written as a quotation of what the earlier file declared, never as
+authenticated identity, and the import report repeats it structurally under
+`transfer_provenance` (immediate kind/actor plus the declared source). Content
+identity is unaffected — a memory keeps the same `MEM-…` id through any number
+of transfers — so memory A → export → import → memory B → export → import →
+memory C yields one record with one identity and an intact provenance chain,
+still `proposed`, with scope, sensitivity and evidence preserved.
 
 ## Append safety and durability
 

@@ -432,6 +432,7 @@ def import_memories(
         "declared_states": {},
         "unsupported_trust_claims": {},
         "transfer_evidence": {},
+        "transfer_provenance": {},
         "dry_run": dry_run,
         "actor_attribution": actor or "unspecified",
     }
@@ -487,14 +488,16 @@ def import_memories(
             report["declared_states"][memory_id] = declared
             continue
         proposed = dict(record)
+        declared_source = dict(record["source"] or {})
         proposed["source"] = {
             "kind": "import",
-            "ref": (record["source"] or {}).get("kind"),
-            "note": (
-                f"imported from an Aperio memory exchange file; the file "
-                f"declared state {declared!r}. Import does not verify the "
-                "claim and does not apply that state."
-            )[:1000],
+            "ref": _bounded_source_ref(declared_source.get("ref")),
+            "note": _import_source_note(declared_source, declared),
+        }
+        report["transfer_provenance"][memory_id] = {
+            "immediate": {"kind": "import", "actor": actor or "unspecified"},
+            "declared_source": declared_source,
+            "declared_state": declared,
         }
         proposed["declared_state"] = (
             declared if declared in MEMORY_STATES else "proposed"
@@ -505,6 +508,47 @@ def import_memories(
         report["declared_states"][memory_id] = declared
         existing[memory_id] = result["memory"]
     return report
+
+
+MAX_SOURCE_NOTE_BYTES = 1000
+
+
+def _bounded_source_ref(value: object) -> str | None:
+    """Keep the original declared reference, inside the source field limits."""
+
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    return text[:200]
+
+
+def _import_source_note(declared_source: dict, declared: str) -> str:
+    """Record both the import event and where the claim was first declared.
+
+    The source object has to hold one ``kind``, so the immediate provenance
+    (``import``) wins and the original declaration moves into the note. The
+    original note is quoted, labelled as the declaring party's words, and
+    bounded; nothing here is authenticated.
+    """
+
+    original_kind = declared_source.get("kind") or "unspecified"
+    original_ref = declared_source.get("ref")
+    original_note = declared_source.get("note")
+    parts = [
+        "imported from an Aperio memory exchange file; declared source before "
+        f"import: kind={original_kind}",
+    ]
+    if isinstance(original_ref, str) and original_ref.strip():
+        parts.append(f"ref={original_ref.strip()}")
+    if isinstance(original_note, str) and original_note.strip():
+        parts.append(f"note={original_note.strip()!r}")
+    parts.append(f"declared state {declared!r}")
+    parts.append(
+        "import does not verify the claim and does not apply that state"
+    )
+    return ("; ".join(parts))[:MAX_SOURCE_NOTE_BYTES]
 
 
 def _subject_conflict(existing: dict, record: dict) -> dict | None:

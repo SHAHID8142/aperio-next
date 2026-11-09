@@ -482,13 +482,18 @@ not authentication. Effective trust is derived from what the recorded event
 proves: a `verified` state lacking evidence, a reviewer, or a distinct
 reviewer keeps its history intact but is labelled `attested` with the exact
 reasons, in retrieval, JSON, Markdown, packs and exchange files alike.
-Acceptance is not factual proof, imports never raise trust, and nothing is
-promoted automatically. Retrieval is deterministic
+Effective trust is *derived*, never declared: every entry point (store
+snapshots, the recall API, context items, packs, exchange import) replays the
+record's own review events and refuses a `trust` or `verification` claim that
+history does not support. Acceptance is not factual proof, imports never raise
+trust, and nothing is promoted automatically. Retrieval is deterministic
 keyword + scope + review state ranking with explicit exclusion reasons and
 whole-item budgeting — no embeddings, no model scores, no network. Validity
 windows (`valid_from`/`valid_until`) are evaluated on every read against
 today in UTC (never the machine's local date) unless `--as-of` is given, so
-stale knowledge drops out of recall and packs without any extra flag.
+stale knowledge drops out of recall and packs without any extra flag. A pack
+owns its own memory date (`--memory-as-of`) and records it, so a pack can
+never mix evaluation dates or inherit a cached answer.
 
 `--memory-store` adds retrieved memory to a context pack as quoted data after
 operator context, with its trust label, review state, and identity. Without
