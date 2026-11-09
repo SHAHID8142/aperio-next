@@ -40,7 +40,7 @@ criteria are §16 of the directive and are re-verified in Chunk 08.
 | 00 | Existing code audit + M3 final trust stabilization | COMPLETE | 4997fe9 |
 | 01 | M4 — universal mistake prevention + quality evaluation | COMPLETE | 4d158fd |
 | 02 | M5 — controlled feedback and improvement | COMPLETE | 247d4f3 |
-| 03 | M6 — universal portable exchange v2 | COMPLETE | see Chunk 03 note |
+| 03 | M6 — universal portable exchange v2 | COMPLETE | 57fff8b |
 | 04 | M7 — optional integration + domain adaptation | PENDING | — |
 | 05 | Feature 07 provider reliability closure | PENDING | — |
 | 06 | M8 — cross-domain benchmark + evaluation | PENDING | — |
@@ -210,7 +210,7 @@ version 0.15.0.
 **Tests:** 1160 → **1179 passed** locally (0 failures). GitHub Actions: not
 run (billing lock).
 
-### Chunk 03 — COMPLETE (0.16.0)
+### Chunk 03 — COMPLETE (0.16.0, commit 57fff8b8207c7840edf992012d6deb8a1938a7c8)
 
 **Delivered (M6).** New module `src/aperio/exchange.py` + `exchange-export`
 / `exchange-import` CLI. One `aperio-universal-exchange` v1 document whose
