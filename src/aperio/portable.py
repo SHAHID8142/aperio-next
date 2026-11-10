@@ -102,9 +102,16 @@ from aperio.handoff import HANDOFF_LOCK_NAME, handoff_path, parse_handoff_text
 from aperio.locks import acquire_lock, release_lock
 from aperio.paths import resolve_target
 from aperio.planmodel import (
+    PLAN_SCHEMA_READ_VERSIONS,
     PLAN_SCHEMA_VERSION,
     validate_plan_document,
 )
+from aperio.roadmapmodel import (
+    ROADMAP_SCHEMA_READ_VERSIONS,
+    ROADMAP_SCHEMA_VERSION,
+    validate_roadmap_document,
+)
+from aperio.roadmapstore import roadmap_path
 from aperio.policy import (
     POLICY_LOCK_NAME,
     POLICY_SCHEMA_VERSION,
@@ -173,6 +180,7 @@ TOP_LEVEL_FILES: tuple[str, ...] = (
     "decisions.md",
     "handoff.md",
     "plan.json",
+    "roadmap.json",
     "executions.json",
     "policies.json",
     "reviews.json",
@@ -422,12 +430,13 @@ def _validate_merged_context(
     if "plan.json" in effective:
         plan = _decode_json(effective["plan.json"], "effective:plan.json")
         version = plan.get("schema_version")
-        if version != PLAN_SCHEMA_VERSION:
+        if version not in PLAN_SCHEMA_READ_VERSIONS:
             raise StateError(
                 "the effective post-import plan.json (archive or retained) "
                 f"uses schema version {version}, but this aperio supports "
-                f"{PLAN_SCHEMA_VERSION}; importing would combine incompatible "
-                "artifacts. Nothing was modified."
+                f"{', '.join(str(v) for v in PLAN_SCHEMA_READ_VERSIONS)}; "
+                "importing would combine incompatible artifacts. Nothing "
+                "was modified."
             )
         validate_plan_document(plan, Path("effective:plan.json"))
 
@@ -867,6 +876,13 @@ def export_project(
             files["plan.json"] = data
             schemas["plan"] = parsed["schema_version"]
 
+        if os.path.lexists(roadmap_path(aperio_dir)):
+            data = _read_export_file(aperio_dir, "roadmap.json")
+            parsed = _decode_json(data, "roadmap.json")
+            validate_roadmap_document(parsed, Path("archive:roadmap.json"))
+            files["roadmap.json"] = data
+            schemas["roadmap"] = parsed["schema_version"]
+
         document = read_executions(aperio_dir)
         if document is not None:
             # prepared/running runs have a live local process (or a crash
@@ -1280,7 +1296,7 @@ def _validate_payload(archive: PortableArchive) -> None:
                 f"supported version {PLAN_SCHEMA_VERSION}; this aperio will "
                 "not convert it. Upgrade aperio before importing."
             )
-        if plan_version != PLAN_SCHEMA_VERSION:
+        if plan_version not in PLAN_SCHEMA_READ_VERSIONS:
             raise StateError(
                 f"plan.json uses unsupported schema version {plan_version}; "
                 "no migration is implemented for it"
@@ -1291,6 +1307,36 @@ def _validate_payload(archive: PortableArchive) -> None:
         archive.schemas["plan"] = plan_version
     elif "plan" in schemas:
         raise _manifest_error("manifest declares a plan schema but plan.json is absent")
+
+    roadmap = None
+    if "roadmap.json" in files:
+        roadmap = _decode_json(files["roadmap.json"], "archive:roadmap.json")
+        roadmap_version = roadmap.get("schema_version")
+        if isinstance(roadmap_version, bool) or not isinstance(roadmap_version, int):
+            raise _manifest_error(
+                "roadmap.json schema_version must be an integer"
+            )
+        if roadmap_version > ROADMAP_SCHEMA_VERSION:
+            raise StateError(
+                f"roadmap.json uses schema version {roadmap_version}, newer "
+                f"than supported version {ROADMAP_SCHEMA_VERSION}; this "
+                "aperio will not convert it. Upgrade aperio before importing."
+            )
+        if roadmap_version not in ROADMAP_SCHEMA_READ_VERSIONS:
+            raise StateError(
+                f"roadmap.json uses unsupported schema version "
+                f"{roadmap_version}; no migration is implemented for it"
+            )
+        if schemas.get("roadmap") != roadmap_version:
+            raise _manifest_error(
+                "manifest schemas.roadmap does not match roadmap.json"
+            )
+        validate_roadmap_document(roadmap, Path("archive:roadmap.json"))
+        archive.schemas["roadmap"] = roadmap_version
+    elif "roadmap" in schemas:
+        raise _manifest_error(
+            "manifest declares a roadmap schema but roadmap.json is absent"
+        )
 
     runs = None
     if "executions.json" in files:

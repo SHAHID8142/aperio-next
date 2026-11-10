@@ -27,7 +27,11 @@ marked *(read-only)*.
 
 | Command | Purpose |
 | --- | --- |
-| `aperio plan-create DIR --file F` | create the plan document (plan-schema v1) |
+| `aperio roadmap-create DIR --file F` | create the LEVEL-1 master roadmap (roadmap-schema v1; draft) |
+| `aperio roadmap-show DIR [--json]` | show the roadmap, its approval state, and which milestone the current plan implements *(read-only)* |
+| `aperio roadmap-approve DIR [--revision N] [--by LABEL]` | record the roadmap approval stamp |
+| `aperio roadmap-revise DIR --file F --revises N` | progressive milestone elaboration (approval resets to draft) |
+| `aperio plan-create DIR --file F [--milestone M]` | create the LEVEL-2 detailed plan (plan-schema v3; optional `MILESTONE-<n>` master-roadmap linkage) |
 | `aperio plan-show DIR [--json]` | show plan, approval, tasks *(read-only)* |
 | `aperio plan-approve DIR [--revision N] [--by LABEL]` | record the approval stamp |
 | `aperio plan-revise DIR --file F --revises N` | full content replacement with lifecycle guards |

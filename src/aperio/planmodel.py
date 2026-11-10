@@ -22,6 +22,13 @@ Schema v1 (plan)::
       "created_at": ISO-Z, "updated_at": ISO-Z, "aperio_version": str
     }
 
+Schema v3 adds the optional plan-level ``milestone`` linkage (the
+``MILESTONE-<digits>`` id of the master roadmap milestone this plan
+implements; see :mod:`aperio.roadmapmodel`). Like the v2 ``priority``
+addition, the field is optional: v1/v2 documents remain fully readable,
+and reading a document never invents a milestone. Writing always
+produces the current version.
+
 Task (content keys are author-supplied; lifecycle keys are
 system-managed and never accepted in input documents)::
 
@@ -71,10 +78,12 @@ from aperio.inputs import check_no_foreign_line_separators
 
 # plan-schema v2 adds the optional per-task ``priority`` scheduling hint
 # (v1 plans remain fully readable: a missing priority schedules as
-# ``normal``; nothing historic is reinterpreted). Writing always produces
-# the current version.
-PLAN_SCHEMA_VERSION = 2
-PLAN_SCHEMA_READ_VERSIONS = (1, 2)
+# ``normal``; nothing historic is reinterpreted). plan-schema v3 adds the
+# optional plan-level ``milestone`` roadmap linkage (v1/v2 documents
+# remain fully readable; reading never invents a milestone). Writing
+# always produces the current version.
+PLAN_SCHEMA_VERSION = 3
+PLAN_SCHEMA_READ_VERSIONS = (1, 2, 3)
 
 TASK_PRIORITY_LEVELS = ("critical", "high", "normal", "low")
 _PRIORITY_RANK = {name: rank for rank, name in enumerate(TASK_PRIORITY_LEVELS)}
@@ -96,6 +105,20 @@ TASK_STATUSES = ("pending", "in-progress", "blocked", "completed")
 VERIFICATION_RESULTS = ("passed", "failed")
 
 _TASK_ID_RE = re.compile(r"^TASK-\d+$")
+_MILESTONE_ID_RE = re.compile(r"^MILESTONE-\d+$")
+
+
+def validate_milestone_id(value: object, *, where: str) -> str:
+    """Validate a roadmap milestone id (``MILESTONE-<digits>``).
+
+    Shared by the plan's optional ``milestone`` linkage and the roadmap
+    model itself, so both artifacts accept exactly the same id grammar.
+    """
+    if not isinstance(value, str) or not _MILESTONE_ID_RE.match(value.strip()):
+        raise ValidationError(
+            f"{where} must match 'MILESTONE-<digits>' (e.g. MILESTONE-1)"
+        )
+    return value.strip()
 
 # Author-supplied task content (the only keys accepted in input documents).
 TASK_CONTENT_KEYS = (
@@ -137,6 +160,10 @@ PLAN_CONTENT_KEYS = (
     "verification_strategy",
     "tasks",
 )
+# plan-schema v3 optional keys: accepted (and validated when present) in
+# input documents, tolerated-absent in stored documents so v1/v2 plans
+# read unchanged. Not part of the required-content check.
+PLAN_OPTIONAL_CONTENT_KEYS = ("milestone",)
 
 _PLAN_LIST_FIELDS = ("scope", "exclusions", "assumptions", "risks")
 _PLAN_STR_FIELDS = (
@@ -218,11 +245,12 @@ def validate_plan_input(data: object) -> dict:
     if not isinstance(data, dict):
         raise ValidationError("plan input must be a JSON object")
 
-    unknown = sorted(set(data) - set(PLAN_CONTENT_KEYS))
+    unknown = sorted(set(data) - set(PLAN_CONTENT_KEYS) - set(PLAN_OPTIONAL_CONTENT_KEYS))
     if unknown:
         raise ValidationError(
             f"plan input has unknown or system-managed field(s): "
-            f"{', '.join(unknown)} (allowed: {', '.join(PLAN_CONTENT_KEYS)})"
+            f"{', '.join(unknown)} (allowed: {', '.join(PLAN_CONTENT_KEYS)}; "
+            f"optional: {', '.join(PLAN_OPTIONAL_CONTENT_KEYS)})"
         )
     missing = [key for key in PLAN_CONTENT_KEYS if key not in data]
     if missing:
@@ -238,6 +266,10 @@ def validate_plan_input(data: object) -> dict:
     plan["acceptance_criteria"] = _check_str_list(
         "plan", "acceptance_criteria", data["acceptance_criteria"], min_len=1
     )
+    if "milestone" in data and data["milestone"] is not None:
+        plan["milestone"] = validate_milestone_id(
+            data["milestone"], where="plan: field 'milestone'"
+        )
 
     tasks_input = data["tasks"]
     if not isinstance(tasks_input, list):
@@ -295,20 +327,24 @@ def _check_task_id(value: object, where: str) -> str:
     return value.strip()
 
 
-def validate_dependency_graph(tasks: list[dict], *, artifact: str = "plan") -> None:
+def validate_dependency_graph(
+    tasks: list[dict], *, artifact: str = "plan", entity: str = "task"
+) -> None:
     """Uniqueness, dependency existence, self-dependency, and cycles.
 
     Pure and read-only. ``artifact`` only prefixes error messages so the
     same graph rules can serve plan-schema v1 and the universal goal work
-    graph without changing any existing message.
+    graph without changing any existing message; ``entity`` names the node
+    kind in those messages ("task", "milestone") without altering the
+    rules.
     """
     seen: dict[str, int] = {}
     for index, task in enumerate(tasks):
         task_id = task["id"]
         if task_id in seen:
             raise ValidationError(
-                f"{artifact}: duplicate task id {task_id} (tasks[{seen[task_id]}] "
-                f"and tasks[{index}])"
+                f"{artifact}: duplicate {entity} id {task_id} "
+                f"(tasks[{seen[task_id]}] and tasks[{index}])"
             )
         seen[task_id] = index
 
@@ -317,11 +353,12 @@ def validate_dependency_graph(tasks: list[dict], *, artifact: str = "plan") -> N
         for dep in task["depends_on"]:
             if dep == task["id"]:
                 raise ValidationError(
-                    f"{artifact}: task {task['id']} depends on itself"
+                    f"{artifact}: {entity} {task['id']} depends on itself"
                 )
             if dep not in ids:
                 raise ValidationError(
-                    f"{artifact}: task {task['id']} depends on unknown task {dep}"
+                    f"{artifact}: {entity} {task['id']} depends on unknown "
+                    f"{entity} {dep}"
                 )
 
     # Cycle detection with the cycle path in the error (iterative DFS).
@@ -498,6 +535,10 @@ def validate_plan_document(data: object, path) -> dict:
         _check_str_list(
             "plan", "acceptance_criteria", data["acceptance_criteria"], min_len=1
         )
+        if "milestone" in data and data["milestone"] is not None:
+            validate_milestone_id(
+                data["milestone"], where=f"{path}: plan field 'milestone'"
+            )
         content_tasks = [
             {key: task[key] for key in TASK_CONTENT_KEYS if key in task}
             for task in tasks

@@ -554,7 +554,7 @@ def test_integrity_ok_report_is_machine_readable(run_cli, project_dir):
     assert report["ok"] is True and report["errors"] == []
     assert report["schemas"]["state"] == 1
     assert report["schemas"]["handoff"] == "v1"
-    assert set(report["supported"]) == {"state", "plan", "executions"}
+    assert set(report["supported"]) == {"state", "plan", "roadmap", "executions"}
     code, out, err = main(["integrity", str(project_dir), "--json"]) or (0, "", "")
     del out, err
 
@@ -629,7 +629,7 @@ def test_upgrade_refuses_future_schema_and_changes_nothing(
     aperio_dir = _awaiting_project(run_cli, project_dir)
     plan_file = aperio_dir / "plan.json"
     document = json.loads(plan_file.read_text())
-    document["schema_version"] = 3
+    document["schema_version"] = 4
     plan_file.write_text(json.dumps(document))
     preview = plan_upgrade(str(project_dir))
     assert preview["ok"] is False

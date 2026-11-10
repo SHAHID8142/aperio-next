@@ -42,6 +42,7 @@ from aperio.errors import AperioError
 from aperio.handoff import handoff_path, read_handoff
 from aperio.paths import resolve_target
 from aperio.planmodel import PLAN_SCHEMA_VERSION, validate_plan_document
+from aperio.roadmapmodel import ROADMAP_SCHEMA_VERSION, validate_roadmap_document
 from aperio.policy import (
     PLAN_ATTRIBUTION_ACTIONS,
     POLICY_SCHEMA_VERSION,
@@ -79,6 +80,7 @@ _RESERVED_TEMP_NAMES = frozenset(
     {
         "state.json.tmp",
         "plan.json.tmp",
+        "roadmap.json.tmp",
         "executions.json.tmp",
         "handoff.md.tmp",
         "policies.json.tmp",
@@ -90,6 +92,7 @@ _RESERVED_LOCK_NAMES = frozenset(
     {
         "state.lock",
         "plan.lock",
+        "roadmap.lock",
         "executions.lock",
         "handoff.lock",
         "decisions.lock",
@@ -296,6 +299,51 @@ def check_integrity(
                         f"plan.json uses schema v{version}, newer than supported "
                         f"v{PLAN_SCHEMA_VERSION}; it is preserved, not converted",
                         "plan.json",
+                    )
+                )
+
+    # --- roadmap (optional master planning level) -----------------------
+    roadmap_file = aperio_dir / "roadmap.json"
+    if roadmap_file.exists():
+        if roadmap_file.is_symlink():
+            errors.append(
+                _finding(
+                    "symlink-file", "roadmap.json is a symlink", "roadmap.json"
+                )
+            )
+        else:
+            version = _schema_of(roadmap_file)
+            schemas["roadmap"] = version
+            try:
+                data = json.loads(roadmap_file.read_bytes().decode("utf-8"))
+                validate_roadmap_document(data, roadmap_file)
+            except (OSError, UnicodeDecodeError) as exc:
+                errors.append(
+                    _finding(
+                        "roadmap-unreadable",
+                        f"cannot read roadmap.json: {exc}",
+                        "roadmap.json",
+                    )
+                )
+            except json.JSONDecodeError as exc:
+                errors.append(
+                    _finding(
+                        "roadmap-corrupt",
+                        f"roadmap.json is not valid JSON ({exc}); aperio will "
+                        "not rewrite it. Restore it from version control.",
+                        "roadmap.json",
+                    )
+                )
+            except AperioError as exc:
+                errors.append(_finding("roadmap-invalid", str(exc), "roadmap.json"))
+            if version is not None and version > ROADMAP_SCHEMA_VERSION:
+                warnings.append(
+                    _finding(
+                        "future-roadmap-schema",
+                        f"roadmap.json uses schema v{version}, newer than "
+                        f"supported v{ROADMAP_SCHEMA_VERSION}; it is preserved, "
+                        "not converted",
+                        "roadmap.json",
                     )
                 )
     else:
@@ -728,6 +776,7 @@ def _finish(
         "supported": {
             "state": SCHEMA_VERSION,
             "plan": PLAN_SCHEMA_VERSION,
+            "roadmap": ROADMAP_SCHEMA_VERSION,
             "executions": EXECUTIONS_SCHEMA_VERSION,
         },
         "missing": missing,

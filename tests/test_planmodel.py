@@ -219,8 +219,8 @@ def test_stored_document_unknown_keys_tolerated():
 
 def test_stored_document_future_schema_rejected():
     doc = stored_plan()
-    doc["schema_version"] = 3
-    with pytest.raises(StateError, match="schema version 3"):
+    doc["schema_version"] = 4
+    with pytest.raises(StateError, match="schema version 4"):
         validate_plan_document(doc, "plan.json")
 
 

@@ -1269,6 +1269,9 @@ def plan_summary(aperio_dir: Path) -> dict | None:
         "unsupported_schema": False,
         "schema_version": PLAN_SCHEMA_VERSION,
         "plan_version": plan["plan_version"],
+        # plan-schema v3 optional roadmap linkage (None when the plan
+        # predates it or declares none — reading never invents one)
+        "milestone": plan.get("milestone"),
         "approval_status": approval["status"],
         "approved_revision": approval["approved_revision"],
         "approval_required": not approved,

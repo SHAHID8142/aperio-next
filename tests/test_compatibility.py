@@ -60,10 +60,11 @@ def test_every_legacy_command_still_exists(capsys) -> None:
 
 def test_schema_versions_unchanged() -> None:
     assert SCHEMA_VERSION == 1          # state.json
-    # plan-schema v2 (optional per-task priority); v1 documents remain
-    # fully readable — documented contract change, see planmodel.py
-    assert PLAN_SCHEMA_VERSION == 2
-    assert (1, 2) == PLAN_SCHEMA_READ_VERSIONS
+    # plan-schema v3 (optional plan-level ``milestone`` roadmap linkage);
+    # v1/v2 documents remain fully readable and v2 archives import
+    # unchanged — documented contract change, see planmodel.py
+    assert PLAN_SCHEMA_VERSION == 3
+    assert (1, 2, 3) == PLAN_SCHEMA_READ_VERSIONS
     assert GOAL_SCHEMA_VERSION == 1     # goal-schema v1
     assert PROFILE_SCHEMA_VERSION == 1  # profile v1
     from aperio.memportable import MEMORY_EXCHANGE_FORMAT_VERSION

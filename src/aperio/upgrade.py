@@ -66,11 +66,12 @@ from aperio.runtime import executions_path
 from aperio.schema import state_path, utc_now_iso
 
 # Versions this aperio can read and write, per artifact.
-# plan-schema v2 (optional per-task priority) is the current version;
-# v1 plans remain fully readable (scheduling treats a missing
-# priority as "normal") and no v1->v2 migration is required for
-# reading.
-SUPPORTED_SCHEMAS: dict[str, int] = {"state": 1, "plan": 2, "executions": 1}
+# plan-schema v3 (optional plan-level master-roadmap ``milestone``
+# linkage) is the current version; v1/v2 plans remain fully readable
+# (a missing priority schedules as "normal"; a missing milestone is no
+# linkage) and the only registered migration edge is the explicit v2→v3
+# re-stamp below — reading never requires it.
+SUPPORTED_SCHEMAS: dict[str, int] = {"state": 1, "plan": 3, "executions": 1}
 
 _JSON_ARTIFACTS: dict[str, Callable[[Path], Path]] = {
     "state": lambda aperio_dir: aperio_dir / "state.json",
@@ -96,9 +97,24 @@ class Migration:
     apply: Callable[[dict], dict]
 
 
-# No older schema exists in this release. A future migration is added here
-# with its tests; nothing is inferred.
-MIGRATIONS: tuple[Migration, ...] = ()
+# Explicit migration edges only — nothing is inferred. The v2→v3 plan
+# edge exists because v3's only delta is the optional ``milestone``
+# linkage: a v2 document is already valid v3 content, so the migration
+# re-stamps ``schema_version`` and preserves every field (extension
+# fields included). There is still no v1→v2 edge (v1 documents read
+# unchanged; scheduling treats a missing priority as "normal").
+MIGRATIONS: tuple[Migration, ...] = (
+    Migration(
+        artifact="plan",
+        from_version=2,
+        to_version=3,
+        description=(
+            "plan-schema v2→v3: optional master-roadmap milestone "
+            "linkage (no content change; re-stamps schema_version)"
+        ),
+        apply=lambda doc: {**doc, "schema_version": 3},
+    ),
+)
 
 
 def _migration_for(artifact: str, from_version: int) -> Migration | None:

@@ -62,6 +62,8 @@ ROLE_ACTIONS: dict[str, tuple[str, ...]] = {
         "plan.approve",
         "plan.adopt",
         "plan.sync",
+        "roadmap.create",
+        "roadmap.revise",
     ),
     "implementer": (
         "task.claim",
@@ -72,6 +74,7 @@ ROLE_ACTIONS: dict[str, tuple[str, ...]] = {
     ),
     "reviewer": (
         "plan.approve",
+        "roadmap.approve",
         "review.decide",
         "task.verify",
     ),
@@ -80,6 +83,14 @@ ROLE_ACTIONS: dict[str, tuple[str, ...]] = {
 ALL_ACTIONS: frozenset[str] = frozenset(
     action for actions in ROLE_ACTIONS.values() for action in actions
 )
+
+#: Roadmap actions usable by these roles even when the stored policy
+#: predates the roadmap feature (see require_action).
+_ROADMAP_INTRINSIC_ROLES: dict[str, tuple[str, ...]] = {
+    "roadmap.create": ("planner",),
+    "roadmap.revise": ("planner",),
+    "roadmap.approve": ("planner", "reviewer"),
+}
 
 _ACTOR_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
 _MAX_TEXT = 300
@@ -656,8 +667,18 @@ def require_action(
     intrinsic_recovery = (
         action in ("plan.adopt", "plan.sync") and role == "planner"
     )
+    # Roadmap actions mirror the plan actions they extend. Policies written
+    # before the master roadmap existed cannot list them, and there is no
+    # policy-editing workflow, so the roadmap feature would be unusable in
+    # every governed project created before it. They stay role-gated exactly
+    # as the defaults define; separation of duties is still enforced at the
+    # approval boundary (author != approver).
+    intrinsic_roadmap = action in _ROADMAP_INTRINSIC_ROLES and (
+        role in _ROADMAP_INTRINSIC_ROLES[action]
+    )
     if (
         not intrinsic_recovery
+        and not intrinsic_roadmap
         and action not in policy["roles"][role]["actions"]
     ):
         raise StateError(
@@ -669,23 +690,38 @@ def require_action(
 
 
 PLAN_ATTRIBUTION_ACTIONS = ("plan.create", "plan.revise", "plan.adopt")
+ROADMAP_ATTRIBUTION_ACTIONS = ("roadmap.create", "roadmap.revise", "roadmap.adopt")
 
 
 def plan_author_events(
     aperio_dir: Path, revision: int
 ) -> list[tuple[str, str]]:
-    """Attribution audit events ``(action, actor)`` for one revision.
+    """Attribution audit events ``(action, actor)`` for one plan revision.
 
     Fails closed on an unreadable/corrupt audit log: callers that make
     approval decisions must not guess authorship from damaged history.
     """
+    return _attribution_events(aperio_dir, revision, PLAN_ATTRIBUTION_ACTIONS)
+
+
+def roadmap_author_events(
+    aperio_dir: Path, revision: int
+) -> list[tuple[str, str]]:
+    """Attribution audit events ``(action, actor)`` for one roadmap
+    revision. Same fail-closed contract as :func:`plan_author_events`."""
+    return _attribution_events(aperio_dir, revision, ROADMAP_ATTRIBUTION_ACTIONS)
+
+
+def _attribution_events(
+    aperio_dir: Path, revision: int, actions: tuple[str, ...]
+) -> list[tuple[str, str]]:
     if not policy_enabled(aperio_dir):
         return []
     audit = _read_audit(aperio_dir)
     return [
         (str(event.get("action")), str(event.get("actor")))
         for event in audit["events"]
-        if event.get("action") in PLAN_ATTRIBUTION_ACTIONS
+        if event.get("action") in actions
         and event.get("revision") == revision
     ]
 

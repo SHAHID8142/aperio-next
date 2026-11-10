@@ -289,6 +289,15 @@ from aperio.planstore import (
     sync_plan_authors,
     update_task,
 )
+from aperio.roadmapmodel import derive_milestone_view
+from aperio.roadmapstore import (
+    approve_roadmap,
+    create_roadmap,
+    read_roadmap,
+    roadmap_exists,
+    roadmap_summary,
+    revise_roadmap,
+)
 from aperio.portable import export_project, import_archive
 from aperio.policy import (
     ALL_ACTIONS,
@@ -1778,6 +1787,12 @@ def build_parser() -> argparse.ArgumentParser:
         "acceptance_criteria, verification_strategy, tasks)",
     )
     plan_create_parser.add_argument(
+        "--milestone",
+        help="roadmap milestone id (MILESTONE-<digits>) this plan "
+        "implements — optional master-roadmap linkage; overrides a "
+        "milestone field in the input file",
+    )
+    plan_create_parser.add_argument(
         "--actor", help="declared actor id (required when governance is enabled)"
     )
 
@@ -1869,6 +1884,83 @@ def build_parser() -> argparse.ArgumentParser:
         help="the plan_version being revised (stale revisions are refused)",
     )
     plan_revise_parser.add_argument(
+        "--actor", help="declared actor id (required when governance is enabled)"
+    )
+
+    roadmap_create_parser = subparsers.add_parser(
+        "roadmap-create",
+        help="create the master project roadmap from a structured JSON "
+        "file (LEVEL-1 planning: lifecycle, capabilities, milestones, "
+        "risks, acceptance conditions; draft, revision 1)",
+    )
+    roadmap_create_parser.add_argument(
+        "project_directory", help="directory of an initialized Aperio project"
+    )
+    roadmap_create_parser.add_argument(
+        "--file",
+        required=True,
+        help="JSON file with the roadmap content (objective, lifecycle, "
+        "milestones)",
+    )
+    roadmap_create_parser.add_argument(
+        "--actor", help="declared actor id (required when governance is enabled)"
+    )
+
+    roadmap_show_parser = subparsers.add_parser(
+        "roadmap-show",
+        help="show the master roadmap, its approval state, and the "
+        "milestone the current plan implements",
+    )
+    roadmap_show_parser.add_argument(
+        "project_directory", help="directory of an initialized Aperio project"
+    )
+    roadmap_show_parser.add_argument(
+        "--json",
+        dest="as_json",
+        action="store_true",
+        help="emit the full roadmap document as machine-readable JSON",
+    )
+
+    roadmap_approve_parser = subparsers.add_parser(
+        "roadmap-approve",
+        help="record roadmap approval (operational marker after genuine review)",
+    )
+    roadmap_approve_parser.add_argument(
+        "project_directory", help="directory of an initialized Aperio project"
+    )
+    roadmap_approve_parser.add_argument(
+        "--revision",
+        type=int,
+        help="approve this specific roadmap_version (default: the current one)",
+    )
+    roadmap_approve_parser.add_argument(
+        "--by",
+        help="label recording who approved (not cryptographic proof)",
+    )
+    roadmap_approve_parser.add_argument(
+        "--actor", help="declared actor id (required when governance is enabled)"
+    )
+
+    roadmap_revise_parser = subparsers.add_parser(
+        "roadmap-revise",
+        help="replace the roadmap content with a new draft revision "
+        "(progressive elaboration of later milestones)",
+    )
+    roadmap_revise_parser.add_argument(
+        "project_directory", help="directory of an initialized Aperio project"
+    )
+    roadmap_revise_parser.add_argument(
+        "--file",
+        required=True,
+        help="JSON file with the new roadmap content",
+    )
+    roadmap_revise_parser.add_argument(
+        "--revises",
+        type=int,
+        required=True,
+        help="the roadmap_version being revised (stale revisions are refused)",
+    )
+    roadmap_revise_parser.add_argument(
         "--actor", help="declared actor id (required when governance is enabled)"
     )
 
@@ -3980,13 +4072,18 @@ def _cmd_phase_set(args) -> None:
 
 def _cmd_plan_create(args) -> None:
     content = _read_plan_input(args.file)
+    if args.milestone:
+        content["milestone"] = args.milestone
     target = resolve_target(args.project_directory, for_writing=True)
     document = create_plan(
         aperio_dir_for(target), content, actor=args.actor
     )
+    milestone_note = (
+        f", implements {document['milestone']}" if document.get("milestone") else ""
+    )
     print(
         f"plan created at {APERIO_DIR_NAME}/plan.json "
-        f"(revision {document['plan_version']}, draft; "
+        f"(revision {document['plan_version']}, draft{milestone_note}; "
         f"{len(document['tasks'])} task(s)). Execution tracking requires "
         "approval: aperio plan-approve"
     )
@@ -4015,6 +4112,9 @@ def _cmd_plan_show(args) -> None:
     else:
         print("Approval:    required before execution tracking")
     print(f"Objective:   {summary['objective']}")
+    if summary.get("milestone"):
+        print(f"Milestone:   {summary['milestone']} (master-roadmap linkage; "
+              "verify against the roadmap with 'aperio roadmap-show')")
     print(f"Tasks:       {summary['task_counts']}")
     print(f"Ready:       {', '.join(summary['ready_task_ids']) or '(none)'}")
     if summary["blocked_task_ids"]:
@@ -4081,6 +4181,130 @@ def _cmd_plan_revise(args) -> None:
         f"plan revised: now revision {document['plan_version']} "
         f"({len(document['tasks'])} task(s); approval reset to draft - "
         "renewed approval required before execution tracking)"
+    )
+
+
+def _read_roadmap_input(path: str) -> dict:
+    """Read a roadmap create/revise input file: strict content validation
+    happens in the model layer; here we only parse the JSON file."""
+    try:
+        raw = Path(path).read_bytes()
+    except OSError as exc:
+        raise ValidationError(
+            f"cannot read roadmap input file {path}: {exc.strerror or exc}"
+        ) from None
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise ValidationError(
+            f"roadmap input file {path} is not valid UTF-8; re-save it as UTF-8"
+        ) from None
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValidationError(
+            f"roadmap input file {path} is not valid JSON "
+            f"(line {exc.lineno}: {exc.msg})"
+        ) from None
+
+
+def _cmd_roadmap_create(args) -> None:
+    content = _read_roadmap_input(args.file)
+    target = resolve_target(args.project_directory, for_writing=True)
+    document = create_roadmap(
+        aperio_dir_for(target), content, actor=args.actor
+    )
+    print(
+        f"roadmap created at {APERIO_DIR_NAME}/roadmap.json "
+        f"(revision {document['roadmap_version']}, draft; "
+        f"{len(document['milestones'])} milestone(s)). The detailed, "
+        "executable level is the plan: 'aperio plan-create --milestone "
+        "MILESTONE-<n>' links a plan to the milestone it implements. "
+        "The roadmap must be approved after genuine review: 'aperio "
+        "roadmap-approve'"
+    )
+
+
+def _cmd_roadmap_show(args) -> None:
+    target = resolve_target(args.project_directory, for_writing=False)
+    aperio_dir = aperio_dir_for(target)
+    if args.as_json:
+        print(json.dumps(read_roadmap(aperio_dir), indent=2, ensure_ascii=False))
+        return
+    summary = roadmap_summary(aperio_dir)
+    if summary is None:
+        print(
+            "No roadmap in this project; create one with "
+            "'aperio roadmap-create' (optional master planning level)."
+        )
+        return
+    if summary.get("unsupported_schema"):
+        print(
+            f"Roadmap present but written in unsupported roadmap-schema "
+            f"version {summary.get('schema_version')}; aperio cannot "
+            "display or modify it. Inspect .aperio/roadmap.json manually."
+        )
+        return
+    roadmap = read_roadmap(aperio_dir)
+    plan = None
+    if plan_exists(aperio_dir):
+        plan = read_plan(aperio_dir)
+    print(
+        f"Roadmap:     revision {summary['roadmap_version']} "
+        f"({summary['approval_status']})"
+    )
+    if summary["approval_status"] == "approved":
+        print(
+            f"Approved:    revision {summary['approved_revision']} "
+            "(provenance stamp - see docs)"
+        )
+    else:
+        print("Approval:    required before it counts as the approved master plan")
+    print(f"Objective:   {summary['objective']}")
+    print(f"Lifecycle:   {summary['lifecycle']}")
+    print()
+    print("Milestones (no execution state is tracked here — plans execute):")
+    milestone_deps = {m["id"]: m["depends_on"] for m in roadmap["milestones"]}
+    for milestone in derive_milestone_view(roadmap, plan):
+        marker = (
+            "  <- current plan implements this"
+            if milestone["in_current_plan"]
+            else ""
+        )
+        deps = milestone_deps[milestone["id"]]
+        dep_note = f" (after {', '.join(deps)})" if deps else ""
+        print(f"  {milestone['id']}: {milestone['title']}{dep_note}{marker}")
+    print()
+    print("Full document: aperio roadmap-show <dir> --json")
+
+
+def _cmd_roadmap_approve(args) -> None:
+    target = resolve_target(args.project_directory, for_writing=True)
+    document = approve_roadmap(
+        aperio_dir_for(target), revision=args.revision, by=args.by,
+        actor=args.actor,
+    )
+    approval = document["approval"]
+    print(
+        f"roadmap approval recorded: revision {approval['approved_revision']} "
+        f"approved at {approval['approved_at']}"
+        + (f" by {approval['approved_by']}" if approval["approved_by"] else "")
+        + " (operational marker; genuine human review is the operator's "
+        "responsibility)"
+    )
+
+
+def _cmd_roadmap_revise(args) -> None:
+    content = _read_roadmap_input(args.file)
+    target = resolve_target(args.project_directory, for_writing=True)
+    document = revise_roadmap(
+        aperio_dir_for(target), content, revises=args.revises,
+        actor=args.actor,
+    )
+    print(
+        f"roadmap revised: now revision {document['roadmap_version']} "
+        f"({len(document['milestones'])} milestone(s); approval reset to "
+        "draft - renewed approval required)"
     )
 
 
@@ -4983,6 +5207,14 @@ def main(argv: list[str] | None = None) -> int:
             _cmd_plan_approve(args)
         elif args.command == "plan-revise":
             _cmd_plan_revise(args)
+        elif args.command == "roadmap-create":
+            _cmd_roadmap_create(args)
+        elif args.command == "roadmap-show":
+            _cmd_roadmap_show(args)
+        elif args.command == "roadmap-approve":
+            _cmd_roadmap_approve(args)
+        elif args.command == "roadmap-revise":
+            _cmd_roadmap_revise(args)
         elif args.command == "task-list":
             _cmd_task_list(args)
         elif args.command == "task-status":
