@@ -41,7 +41,7 @@ complete.
 | 06 | Website-delivery + 30-day SEO workflows (templates + docs) | COMPLETE (docs) | agent docs: website-delivery.md, seo-30-day.md, host-integration.md — commit with Chunk 07 |
 | 07 | UX: work-status view, read-only loopback UI, host matrix | COMPLETE | this commit (host matrix cbb1495) |
 | 08 | E2E A–Z simulation + full audit matrices | PENDING | — |
-| 09 | Packaging, docs, release readiness | COMPLETE (final count pending E2E test) | this commit |
+| 09 | Packaging, docs, release readiness | COMPLETE | 2c55593 |
 
 Statuses: PENDING / IN_PROGRESS / BLOCKED / FAILED / COMPLETE. A chunk is
 COMPLETE only when its acceptance criteria pass locally (full suite
