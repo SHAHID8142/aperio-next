@@ -45,7 +45,7 @@ criteria are §16 of the directive and are re-verified in Chunk 08.
 | 05 | Feature 07 provider reliability closure | COMPLETE | f00e656 |
 | 06 | M8 — cross-domain benchmark + evaluation | COMPLETE | bc94c75 |
 | 07 | Integration, security, usability | COMPLETE | d282c79 |
-| 08 | Final release engineering, 1.0 RC | COMPLETE | see Chunk 08 note |
+| 08 | Final release engineering, 1.0 RC | COMPLETE | d726396 |
 
 Chunk statuses: `PENDING`, `IN_PROGRESS`, `BLOCKED`, `FAILED`, `COMPLETE`.
 A chunk is marked COMPLETE only after its acceptance criteria actually pass
@@ -411,7 +411,7 @@ README, docs/architecture.md, docs/roadmap.md, version 0.19.0.
 **Tests:** 1220 -> **1248 passed** locally (0 failures). GitHub Actions:
 not run (billing lock).
 
-### Chunk 08 — COMPLETE (1.0.0rc1)
+### Chunk 08 — COMPLETE (1.0.0rc1, commit d726396287c5e45bdf86a48d7803809d596ae4db)
 
 **Packaging.** Wheel builds (`aperio_next-1.0.0rc1-py3-none-any.whl`,
 14 benchmark case files verified inside the archive as package data);
