@@ -34,7 +34,7 @@ complete.
 |---|---|---|---|
 | 00 | Baseline + architecture closure | COMPLETE | 56535e3 |
 | 01 | Brain Dump Guard + durable intake | COMPLETE | 3ce88b5 |
-| 02 | Task continuity: checkpoints + recovery | COMPLETE | this chunk |
+| 02 | Task continuity: checkpoints + recovery | COMPLETE | be0ad0f |
 | 03 | Goal→plan bridge + priority-aware scheduling | PENDING | — |
 | 04 | Controlled multi-agent orchestration (sequential-first) | PENDING | — |
 | 05 | Trust-aware portable skill packs (+ builtin packs) | PENDING | — |
