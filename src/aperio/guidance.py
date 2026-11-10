@@ -63,6 +63,19 @@ _BRIEF_LIMITS = (
 )
 
 
+def _quote_content(text: str) -> str:
+    """Structure-safe rendering of quoted knowledge.
+
+    Continuation lines are indented two spaces so quoted material can
+    never sit at column 0: a memory whose content carries ``## ``-style
+    lines cannot forge headings or list items in the brief. This is the
+    same injection defense the decision log and the context pack use.
+    """
+
+    lines = text.split("\n")
+    return "\n  ".join(line if line.strip() else "" for line in lines)
+
+
 def _canonical(payload: object) -> bytes:
     return json.dumps(
         payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
@@ -90,6 +103,17 @@ def build_agent_brief(goal: dict, *, memory_selection: dict | None = None,
             f"agent brief; this goal's declared source is "
             f"{goal['provenance']['source']!r}. Review its instructions and "
             "re-declare the goal with provenance source 'operator' first"
+        )
+    if task_reference is not None and (
+        not isinstance(task_reference, str)
+        or not task_reference.strip()
+        or "\n" in task_reference
+        or "\x00" in task_reference
+        or len(task_reference.encode("utf-8")) > 200
+    ):
+        raise ValidationError(
+            "agent-brief: task_reference must be single-line text of at "
+            "most 200 UTF-8 bytes"
         )
     profile = profile_suggestions(goal["profile"])
 
@@ -260,7 +284,8 @@ def render_agent_brief_markdown(brief: dict) -> str:
             for entry in memory["reviewed"]:
                 lines.append(
                     f"- **{entry['title']}** [{entry['trust']}] "
-                    f"(`{entry['memory_id']}`): {entry['content']}"
+                    f"(`{entry['memory_id']}`): "
+                    + _quote_content(entry["content"])
                 )
         else:
             lines.append("*no reviewed memory was selected*")
@@ -269,7 +294,10 @@ def render_agent_brief_markdown(brief: dict) -> str:
             lines.append("### Accepted lessons from earlier feedback")
             lines.append("")
             for entry in memory["accepted_lessons"]:
-                lines.append(f"- **{entry['title']}**: {entry['content']}")
+                lines.append(
+                    f"- **{entry['title']}**: "
+                    + _quote_content(entry["content"])
+                )
             lines.append("")
         if memory["unverified_proposals"]:
             lines.append("### Unverified proposals (assess; do not rely)")
@@ -277,7 +305,8 @@ def render_agent_brief_markdown(brief: dict) -> str:
             for entry in memory["unverified_proposals"]:
                 lines.append(
                     f"- **{entry['title']}** [proposed] "
-                    f"(`{entry['memory_id']}`): {entry['content']}"
+                    f"(`{entry['memory_id']}`): "
+                    + _quote_content(entry["content"])
                 )
             lines.append("")
         if memory["conflicts"]:

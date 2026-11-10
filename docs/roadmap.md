@@ -306,6 +306,29 @@ one — although an `attested` record can have at most one review event, so a
 history-less attested entry is always forged) and always imports as
 `proposed`; nothing is promoted either way.
 
+## Chunk 07 — integration, security and usability audits (implemented in 0.19.0)
+
+The complete pipeline (objective → goal validation → preflight → reviewed
+memory → agent brief → deliverable → quality evaluation → feedback →
+approved lesson → future-task improvement → cross-agent exchange →
+re-evaluation with honest unknowns) runs as one continuous CLI-only test
+with no project, provider, or network (tests/test_integration_pipeline.py).
+The security audit covered instruction hierarchy, prompt injection and
+structure forging, trust derivation, review transitions, secret leakage,
+private-context exclusion, paths and symlinks, publication, partial
+writes, concurrency, corrupted state, size limits, exchange validation,
+provider process handling, unsafe evidence promotion, and destructive
+operations; it closed one confirmed P1 — quoted memory content in agent
+briefs could forge column-0 Markdown headings (fixed with the same
+continuation-indent defense the decision log and packs use, plus
+single-line bounds for brief task references and benchmark case fields) —
+and is summarized in docs/security-model.md. The compatibility audit pins
+every Feature 01–07 command, all schema versions (state/plan/goal/
+profile/archive/memory-exchange v1; quality/feedback/exchange/benchmark
+v1), and no-project standalone operation (tests/test_compatibility.py).
+Usability is exercised per persona by the benchmark case set and the
+standalone-workflow test; one-off tasks never require `aperio init`.
+
 ## M8 — cross-domain benchmark and performance evaluation (implemented in 0.18.0)
 
 `aperio benchmark-cases` and `aperio benchmark-run` ship an offline,

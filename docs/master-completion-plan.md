@@ -44,7 +44,7 @@ criteria are §16 of the directive and are re-verified in Chunk 08.
 | 04 | M7 — optional integration + domain adaptation | COMPLETE | 1c52acf |
 | 05 | Feature 07 provider reliability closure | COMPLETE | f00e656 |
 | 06 | M8 — cross-domain benchmark + evaluation | COMPLETE | bc94c75 |
-| 07 | Integration, security, usability | PENDING | — |
+| 07 | Integration, security, usability | COMPLETE | see Chunk 07 note |
 | 08 | Final release engineering, 1.0 RC | PENDING | — |
 
 Chunk statuses: `PENDING`, `IN_PROGRESS`, `BLOCKED`, `FAILED`, `COMPLETE`.
@@ -68,8 +68,8 @@ Recorded as they are confirmed; each closed defect lists its regression test.
 
 ## Exact next action
 
-Maintained at the end of the "Status" section per chunk. Current: **Chunk 07
-— Complete system integration, security and usability.**
+Maintained at the end of the "Status" section per chunk. Current: **Chunk 08
+— Final release engineering and the 1.0 release candidate.**
 
 ## Chunk notes (evidence log)
 
@@ -356,4 +356,58 @@ uncertainty across all six domains (software one among six).
 docs/architecture.md, docs/roadmap.md, version 0.18.0.
 
 **Tests:** 1207 -> **1220 passed** locally (0 failures). GitHub Actions:
+not run (billing lock).
+
+### Chunk 07 — COMPLETE (0.19.0)
+
+**End-to-end pipeline.** tests/test_integration_pipeline.py walks the
+directive's full pipeline as ONE continuous CLI-only workflow — objective
+→ goal validation → preflight → reviewed memory → agent brief →
+(supplied) deliverable → quality evaluation → feedback → explicit review →
+approved lesson (proposed, then accepted via M3) → future-task brief
+improvement → exchange transfer to a second machine (memory stays
+proposed) → re-evaluation (missing attribution resolved, honest
+`unknown` survives) → feedback-compare 'improved'. No project init, no
+provider, no network.
+
+**Security audit.** All listed areas re-verified; one confirmed P1 found
+and fixed:
+- D-07-1 (P1, CLOSED): agent-brief rendered multi-line memory content
+  unindented, so a memory carrying '\n## forged heading' could forge
+  column-0 Markdown structure in a shareable artifact. Fixed with the
+  same continuation-indent defense the decision log and packs use
+  (guidance._quote_content), plus single-line bounds for brief
+  task_reference and benchmark case_id/scenario. Regression:
+  test_memory_content_cannot_forge_column_zero_headings asserts every
+  column-0 heading in a brief with injected content is an expected one.
+- Cleanly covered by existing + new tests: CLI error handling for every
+  M4-M8 command (single-line 'aperio: error:', no traceback), symlink
+  refusal sweep (deliverable/goal/feedback/exchange inputs), absolute-path
+  exclusion from generated artifacts, private-context exclusion across
+  recall/briefs/exchanges/benchmarks, exchange validation fail-closed,
+  publication/concurrency/CAS guards, size limits, provider process
+  handling, and destructive-operation guards. Summary now lives in
+  docs/security-model.md.
+
+**Compatibility audit.** All Feature 01-07 commands and M1-M3 surfaces
+pinned present (tests/test_compatibility.py), schema-version table
+unchanged (state/plan/goal/profile/archive/memory-exchange v1; new
+quality/feedback/exchange/benchmark all v1), standalone no-init operation
+asserted for goal-check/preflight/agent-brief/quality-check/benchmark,
+supported-Python documentation checked, M1 goal-pack output stability
+re-verified.
+
+**Usability audit.** The six personas' workflows run standalone with no
+project: the benchmark case set is exactly the designer/researcher/
+writer/business/general/developer exercise set; agent-workflows.md
+documents the tested procedure; no command in the universal layer
+requires `aperio init`.
+
+**Sources changed:** `src/aperio/guidance.py` (quote-indent +
+task_reference bound), `src/aperio/benchmark.py` (single-line bounds),
+`tests/test_security_audit.py` (22), `tests/test_integration_pipeline.py`
+(1), `tests/test_compatibility.py` (5), `docs/security-model.md` (new),
+README, docs/architecture.md, docs/roadmap.md, version 0.19.0.
+
+**Tests:** 1220 -> **1248 passed** locally (0 failures). GitHub Actions:
 not run (billing lock).

@@ -113,8 +113,11 @@ def validate_case(data: object) -> dict:
             f"supports version {CASE_SCHEMA_VERSION}"
         )
     case_id = data.get("case_id")
-    if not isinstance(case_id, str) or not case_id.strip():
-        raise ValidationError("benchmark case: 'case_id' must be non-empty")
+    if not isinstance(case_id, str) or not case_id.strip() \
+            or "\n" in case_id or "\x00" in case_id:
+        raise ValidationError(
+            "benchmark case: 'case_id' must be single-line non-empty text"
+        )
     domain = data.get("domain")
     if domain not in BENCHMARK_DOMAINS:
         raise ValidationError(
@@ -122,8 +125,11 @@ def validate_case(data: object) -> dict:
             + ", ".join(BENCHMARK_DOMAINS)
         )
     scenario = data.get("scenario")
-    if not isinstance(scenario, str) or not scenario.strip():
-        raise ValidationError("benchmark case: 'scenario' must be non-empty")
+    if not isinstance(scenario, str) or not scenario.strip() \
+            or "\n" in scenario or "\x00" in scenario:
+        raise ValidationError(
+            "benchmark case: 'scenario' must be single-line non-empty text"
+        )
     checks = data.get("checks", ["quality"])
     if not isinstance(checks, list) or not checks or any(
         c not in ("preflight", "quality", "memory", "exchange", "feedback")

@@ -335,6 +335,9 @@ enforcement, transfer preservation, memory correctness, and measured
 overhead — with human-judged metrics listed per case and never scored,
 and no aggregate quality score. See `docs/benchmark.md`.
 
+See [security-model.md](security-model.md) for the standing security
+summary.
+
 ## Safe path policy (implemented)
 
 `paths.resolve_target` enforces, for writing operations:

@@ -33,6 +33,7 @@ Anything not listed below is **planned, not implemented**. See
 - Implemented (Feature 07): `codex-cli` and `claude-cli` through `aperio agent-list`, `agent-doctor`, `run-preview`, and `run-start --authorize-exec [--authorize-write]` (documented non-interactive CLIs; read-only by default; no GUI-app automation)
 - Implemented (M1): `aperio context-pack [workspace]` with `general` (default) and optional `software` profiles, Markdown/JSON output, deterministic byte budgeting, trust/provenance labels, imported/proposed context labels, and strict read-only operation
 - Implemented (M2): `aperio profiles`, `aperio goal-check`, and `aperio goal-pack` — a versioned universal goal contract (goal-schema v1), six data-only task profiles, optional work decomposition, and goal→context-pack conversion that works with no project, provider, or model API
+- Audited (Chunk 07): end-to-end pipeline integration test, security audit over injection/trust/privacy/paths/publication/concurrency/destructive operations (docs/security-model.md), compatibility audit (all Feature 01-07 commands and M1-M3 schemas unchanged), and usability: every universal workflow runs standalone with no project initialization
 - Implemented (M8): `aperio benchmark-cases` / `benchmark-run` — an offline, reproducible cross-domain benchmark (14 versioned cases, all six domains) measuring detection of planted flaws, trust-boundary enforcement, cross-agent information preservation, memory correctness, and overhead — with human-judged metrics listed per case and never scored, no aggregate quality score, and regressions always reported
 - Implemented (M7): `aperio agent-brief` — a paste-ready agent instruction package (objective, requirements, output contract, quality criteria + advisory profile self-checks, reviewed memory and accepted lessons, uncertainties, trust boundaries); strengthened six-domain profile model with advisory suggested checks; tested manual copy/paste workflows (docs/agent-workflows.md) and a per-provider support/limits guide (docs/providers.md)
 - Implemented (M6): `aperio exchange-export` and `exchange-import` — one provider-neutral universal exchange document (selected goals, context packs, quality reports, feedback, memories, operator notes) with per-section validation, digest-checked integrity, dry-run imports, `imported-*` file naming, and memories that always enter as proposed
@@ -40,6 +41,10 @@ Anything not listed below is **planned, not implemented**. See
 - Implemented (M4): `aperio preflight <goal.json>` and `aperio quality-check <goal.json> --deliverable FILE` — deterministic mistake-prevention and deliverable-quality reports (quality-report v1) with a stable issue taxonomy; read-only, standalone, honest about what only a human can judge
 - Implemented (M3): `aperio mem-propose`, `mem-review`, `mem-list`, `mem-show`, `mem-recall`, `mem-export`, `mem-import` — a standalone universal memory store (memory-schema v1) with explicit review states, deterministic retrieval, optional context-pack integration (`--memory-store`), and a versioned portable exchange format
 - Not implemented (by design, yet): autonomous loops, sandboxed execution, Cursor/ZCode GUI integrations, cloud sync, automatic learning
+
+The standing security summary — authority hierarchy, trust derivation,
+injection defenses, privacy, path/publication/concurrency guarantees, and
+the honest non-claims — is [docs/security-model.md](docs/security-model.md).
 
 ## Requirements
 
