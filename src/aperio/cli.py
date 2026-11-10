@@ -277,6 +277,7 @@ from aperio.runtime import (
     record_external_result,
 )
 from aperio.recovery import recovery_report
+from aperio.hostcompat import HOST_CATALOG, inspect_hosts
 from aperio.planmodel import ready_task_ids
 from aperio.adapters import builtin_adapters, provider_doctor
 from aperio.planmodel import priority_rank
@@ -2032,6 +2033,23 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_parser.add_argument(
         "--json", dest="as_json", action="store_true",
         help="emit the diagnostic report as machine-readable JSON",
+    )
+
+    host_doctor_parser = subparsers.add_parser(
+        "host-doctor",
+        help="report per-host compatibility levels honestly "
+        "(no login or model request; --probe adds a passive "
+        "executable/flags check for provider CLIs)",
+    )
+    host_doctor_parser.add_argument(
+        "--probe",
+        action="store_true",
+        help="passively probe provider CLI executables and documented "
+        "flags (no login, no model request)",
+    )
+    host_doctor_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit the compatibility matrix as machine-readable JSON",
     )
 
     run_preview_parser = subparsers.add_parser(
@@ -4415,6 +4433,44 @@ def _cmd_agent_list(args) -> None:
     )
 
 
+def _cmd_host_doctor(args) -> None:
+    probes: dict[str, dict | None] | None = None
+    if args.probe:
+        probes = {}
+        for entry in HOST_CATALOG:
+            adapter_id = entry["adapter_id"]
+            if entry["family"] != "provider-cli":
+                continue
+            try:
+                probes[adapter_id] = provider_doctor(
+                    adapter_id, config=None,
+                    aperio_dir=Path.cwd(),
+                )
+            except AperioError as exc:
+                probes[adapter_id] = None
+                print(
+                    f"probe for {adapter_id} failed: {exc}",
+                    file=sys.stderr,
+                )
+    report = inspect_hosts(probes=probes)
+    if args.as_json:
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        return
+    print("Host compatibility matrix (honest levels — see docs):")
+    for row in report["hosts"]:
+        print(f"\n  {row['display']}")
+        print(f"    level:   {row['level']}")
+        print(f"    method:  {row['integration_method']}")
+        print(f"    evidence: {row['evidence']}")
+        if row.get("fallback"):
+            print(f"    fallback: {row['fallback']}")
+    print("\nReserved levels (never emitted by this version):")
+    for level, reason in report["reserved_levels"].items():
+        print(f"  {level}: {reason}")
+    for note in report["notes"]:
+        print(f"\nNote: {note}")
+
+
 def _cmd_agent_doctor(args) -> None:
     target = resolve_target(args.project_directory, for_writing=False)
     report = provider_doctor(
@@ -5279,6 +5335,8 @@ def main(argv: list[str] | None = None) -> int:
             _cmd_agent_list(args)
         elif args.command == "agent-doctor":
             _cmd_agent_doctor(args)
+        elif args.command == "host-doctor":
+            _cmd_host_doctor(args)
         elif args.command == "run-preview":
             _cmd_run_preview(args)
         elif args.command == "run-start":

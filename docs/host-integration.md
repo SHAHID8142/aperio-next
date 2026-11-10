@@ -175,6 +175,28 @@ authentication ([security-model.md](security-model.md)).
   every host-internal behavior. Aperio makes no claims about what a host
   might do internally, because it never observes it.
 
+## The compatibility doctor and the level vocabulary
+
+`aperio host-doctor [--probe] [--json]` reports one compatibility level
+per documented host. The levels are **not interchangeable**:
+
+| Level | Meaning | Emitted by this version? |
+| --- | --- | --- |
+| `native_verified` | a verified native integration mechanism (slash-command registration, embedded extension) | **never** — no such mechanism is verified for any host, and aperio does not invent one |
+| `cli_verified` | the canonical terminal CLI, or a provider CLI whose executable and documented flags probe cleanly | yes |
+| `cooperative_verified` | cooperative handoff verified inside that host | never (aperio's protocol side is tested; per-host live verification is not claimed) |
+| `experimental` | experimental integration | **never** — nothing experimental ships |
+| `not_yet_tested` | no evidence gathered yet (no probe, executable missing, cooperative host) | yes |
+| `unsupported` | evidence shows the documented interface is unavailable (installed CLI missing required flags/controls) | yes |
+
+`--probe` reuses `agent-doctor`'s passive diagnostics (executable,
+version, documented flags/controls) for the provider CLIs — never a
+login or a model request, and a clean probe proves only that a binary
+runs. The doctor's rows name the integration method and the fallback
+(canonical CLI, manual handoff, host-agnostic JSON protocols) for every
+host, so a newly installed agent can be assessed without changing any
+project-state schema.
+
 ## Related pages
 
 - [brain-dump.md](brain-dump.md) — the Brain Dump Guard and the cooperative protocol
