@@ -4,7 +4,8 @@ Aperio helps you prepare work for any AI agent, check the result, remember
 what you learned, and carry everything to the next agent — through
 ordinary files and copy/paste.
 
-Install (development):
+Install (development), or see [install.md](install.md) for the full
+fresh-machine path (Windows/macOS/Linux):
 
 ```sh
 python -m pip install -e ".[dev]"     # or: pip install <the built wheel>

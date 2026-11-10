@@ -53,6 +53,7 @@ the honest non-claims — is [docs/security-model.md](docs/security-model.md).
 | Document | Contents |
 | --- | --- |
 | [Quick start](docs/quickstart.md) | first run in five minutes, non-coding |
+| [Install](docs/install.md) | fresh-machine setup (Windows/macOS/Linux), upgrades |
 | [Two-level planning](docs/planning.md) | master roadmap + detailed plan, approvals |
 | [CLI reference](docs/cli-reference.md) | every command and flag |
 | [Python API](docs/python-api.md) | library examples |
