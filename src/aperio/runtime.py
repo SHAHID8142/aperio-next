@@ -72,6 +72,7 @@ from aperio.errors import (
 from aperio.locks import LOCK_TIMEOUT_SECONDS, acquire_lock, release_lock
 from aperio.policy import append_event as _policy_event
 from aperio.policy import load_policy, require_action
+from aperio.planmodel import priority_rank
 from aperio.planstore import read_plan, release_failed_claim, update_task
 from aperio.project import require_supported_state
 from aperio.schema import utc_now_iso
@@ -1243,20 +1244,30 @@ def runs_dispatch(
     limit: int | None = None,
     actor: str | None = None,
     dispatch_lock_timeout: float = 5.0,
+    respect_priority: bool = True,
 ) -> list[dict]:
-    """Deterministic scheduler: dispatch eligible tasks in id order.
+    """Deterministic scheduler: dispatch eligible tasks by priority, then id.
+
+    plan-schema v2 tasks may carry a ``priority`` hint (critical/high/
+    normal/low); the order is (priority rank, task id), visible in every
+    preview via :func:`dispatch_ordering`. v1 plans and tasks without a
+    priority schedule exactly as before (all ``normal`` → id order), so
+    historic plans are never reinterpreted. Sequential same-workspace
+    execution by design: concurrent dispatch fails fast, and parallelism
+    is not offered because non-overlapping write scopes cannot be
+    enforced for the existing adapters.
 
     Acquires ``dispatch.lock`` ONCE for the whole run and dispatches each
-    task through the lock-free internal path; concurrent dispatch fails
-    fast (sequential same-workspace execution by design — non-overlapping
-    scopes cannot be enforced, so parallelism is not offered in 0.4.0).
-    Eligibility is re-evaluated per task inside the loop.
+    task through the lock-free internal path; eligibility is re-evaluated
+    per task inside the loop.
 
     Without ``authorize_exec`` a subprocess-capable adapter returns one
     read-only preview dict per eligible task (``status: "preview"``): no
     records, no task claims, and no processes are created, so a later
     authorized dispatch works normally.
     """
+    if not isinstance(respect_priority, bool):
+        raise ValidationError("respect_priority must be true or false")
     require_supported_state(aperio_dir)
     adapter = get_adapter(adapter_id)
     if not isinstance(authorize_workspace_write, bool):
@@ -1297,7 +1308,9 @@ def runs_dispatch(
             plan = read_plan(aperio_dir)
             executions = read_executions(aperio_dir)
             runs = executions["runs"] if executions is not None else []
-            eligible = _eligible_task_ids(plan, runs)
+            eligible = _eligible_task_ids(
+                plan, runs, respect_priority=respect_priority
+            )
             remaining = [
                 task_id for task_id in eligible
                 if task_id not in {r["task_id"] for r in dispatched}
@@ -1351,13 +1364,55 @@ def runs_dispatch(
     return dispatched
 
 
-def _eligible_task_ids(plan: dict, runs: list[dict]) -> list[str]:
+def _eligible_task_ids(plan: dict, runs: list[dict],
+                       *, respect_priority: bool = True) -> list[str]:
+    """Eligible task ids in dispatch order.
+
+    plan-schema v2 adds the optional per-task ``priority`` hint; the
+    scheduler orders by (priority rank, task id) so critical work goes
+    first while remaining deterministic and fully explainable. v1
+    documents and tasks without a priority rank as ``normal`` — reading
+    old plans never changes their order. Every ready task stays visible
+    in listings (nothing is hidden or starved silently);
+    ``respect_priority=False`` restores the pure historical id order.
+    """
+
+    def order_key(task: dict) -> tuple:
+        if respect_priority:
+            return (priority_rank(task), task["id"])
+        return (0, task["id"])
+
     eligible = []
-    for task in sorted(plan["tasks"], key=lambda t: t["id"]):
+    for task in sorted(plan["tasks"], key=order_key):
         active = _active_run_for_task(runs, task["id"])
         if check_eligibility(plan, task["id"], active).eligible:
             eligible.append(task["id"])
     return eligible
+
+
+def dispatch_ordering(plan: dict, runs: list[dict], *,
+                      respect_priority: bool = True) -> list[dict]:
+    """Explainable dispatch order for the current ready tasks."""
+
+    entries = []
+    for task in plan["tasks"]:
+        active = _active_run_for_task(runs, task["id"])
+        eligibility = check_eligibility(plan, task["id"], active)
+        if not eligibility.eligible:
+            continue
+        entries.append({
+            "task_id": task["id"],
+            "title": task.get("title"),
+            "priority": task.get("priority", "normal"),
+            "rank": priority_rank(task),
+            "ordering_basis": (
+                f"priority {task.get('priority', 'normal')!r}, then task id"
+                if respect_priority
+                else "task id (priority ignored by request)"
+            ),
+        })
+    entries.sort(key=lambda e: (e["rank"], e["task_id"]))
+    return entries
 
 
 # --- cancel / report / reconcile -----------------------------------------------------

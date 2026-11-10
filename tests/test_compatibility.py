@@ -15,7 +15,7 @@ import pytest
 
 from aperio.cli import main
 from aperio.goals import GOAL_SCHEMA_VERSION
-from aperio.planmodel import PLAN_SCHEMA_VERSION
+from aperio.planmodel import PLAN_SCHEMA_READ_VERSIONS, PLAN_SCHEMA_VERSION
 from aperio.profiles import PROFILE_SCHEMA_VERSION
 from aperio.schema import SCHEMA_VERSION
 
@@ -60,7 +60,10 @@ def test_every_legacy_command_still_exists(capsys) -> None:
 
 def test_schema_versions_unchanged() -> None:
     assert SCHEMA_VERSION == 1          # state.json
-    assert PLAN_SCHEMA_VERSION == 1     # plan-schema v1
+    # plan-schema v2 (optional per-task priority); v1 documents remain
+    # fully readable — documented contract change, see planmodel.py
+    assert PLAN_SCHEMA_VERSION == 2
+    assert (1, 2) == PLAN_SCHEMA_READ_VERSIONS
     assert GOAL_SCHEMA_VERSION == 1     # goal-schema v1
     assert PROFILE_SCHEMA_VERSION == 1  # profile v1
     from aperio.memportable import MEMORY_EXCHANGE_FORMAT_VERSION

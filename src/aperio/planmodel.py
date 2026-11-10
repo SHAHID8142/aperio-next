@@ -69,7 +69,28 @@ from datetime import datetime, timezone
 from aperio.errors import StateError, ValidationError
 from aperio.inputs import check_no_foreign_line_separators
 
-PLAN_SCHEMA_VERSION = 1
+# plan-schema v2 adds the optional per-task ``priority`` scheduling hint
+# (v1 plans remain fully readable: a missing priority schedules as
+# ``normal``; nothing historic is reinterpreted). Writing always produces
+# the current version.
+PLAN_SCHEMA_VERSION = 2
+PLAN_SCHEMA_READ_VERSIONS = (1, 2)
+
+TASK_PRIORITY_LEVELS = ("critical", "high", "normal", "low")
+_PRIORITY_RANK = {name: rank for rank, name in enumerate(TASK_PRIORITY_LEVELS)}
+
+
+def priority_rank(task: dict) -> int:
+    """Scheduling rank for one stored/validated task (lower = sooner).
+
+    A missing priority (v1 documents, hand-authored drafts) ranks as
+    ``normal`` — reading old plans never changes their behavior.
+    """
+
+    value = task.get("priority", "normal")
+    if value not in _PRIORITY_RANK:
+        return _PRIORITY_RANK["normal"]
+    return _PRIORITY_RANK[value]
 
 TASK_STATUSES = ("pending", "in-progress", "blocked", "completed")
 VERIFICATION_RESULTS = ("passed", "failed")
@@ -84,6 +105,9 @@ TASK_CONTENT_KEYS = (
     "deliverables",
     "acceptance_criteria",
     "depends_on",
+    # plan-schema v2: optional scheduling hint; absent on v1 documents,
+    # where it schedules as "normal"
+    "priority",
 )
 # Lifecycle keys managed exclusively by task-status operations.
 TASK_SYSTEM_KEYS = ("status", "owner", "blocked_reason", "verification")
@@ -236,7 +260,10 @@ def validate_task_input(task: object, *, where: str) -> dict:
             f"plan: {where} has unknown or system-managed field(s): "
             f"{', '.join(unknown)} (allowed: {', '.join(TASK_CONTENT_KEYS)})"
         )
-    missing = [key for key in TASK_CONTENT_KEYS if key not in task]
+    missing = [
+        key for key in TASK_CONTENT_KEYS
+        if key not in task and key != "priority"
+    ]
     if missing:
         raise ValidationError(
             f"plan: {where} is missing required field(s): {', '.join(missing)}"
@@ -250,6 +277,13 @@ def validate_task_input(task: object, *, where: str) -> dict:
         cleaned[field] = _check_str_list(
             "plan", f"{where}.{field}", task[field], min_len=minimum
         )
+    priority = task.get("priority", "normal")
+    if priority not in TASK_PRIORITY_LEVELS:
+        raise ValidationError(
+            f"plan: {where}.priority must be one of: "
+            + ", ".join(TASK_PRIORITY_LEVELS)
+        )
+    cleaned["priority"] = priority
     return cleaned
 
 
@@ -337,11 +371,11 @@ def validate_plan_document(data: object, path) -> dict:
     schema_version = data.get("schema_version")
     if isinstance(schema_version, bool) or not isinstance(schema_version, int):
         raise StateError(f"{path} is corrupt: 'schema_version' must be an integer")
-    if schema_version != PLAN_SCHEMA_VERSION:
+    if schema_version not in PLAN_SCHEMA_READ_VERSIONS:
+        supported = ", ".join(str(v) for v in PLAN_SCHEMA_READ_VERSIONS)
         raise StateError(
             f"{path} declares plan schema version {schema_version}, but this "
-            f"aperio supports exactly version {PLAN_SCHEMA_VERSION}; aperio "
-            "will not modify it."
+            f"aperio supports versions {supported}; aperio will not modify it."
         )
     plan_version = data.get("plan_version")
     if isinstance(plan_version, bool) or not isinstance(plan_version, int) or plan_version < 1:
@@ -465,7 +499,8 @@ def validate_plan_document(data: object, path) -> dict:
             "plan", "acceptance_criteria", data["acceptance_criteria"], min_len=1
         )
         content_tasks = [
-            {key: task[key] for key in TASK_CONTENT_KEYS} for task in tasks
+            {key: task[key] for key in TASK_CONTENT_KEYS if key in task}
+            for task in tasks
         ]
         for index, content_task in enumerate(content_tasks):
             validate_task_input(content_task, where=f"tasks[{index}]")
@@ -510,8 +545,16 @@ def _validate_stored_task(task: object, where: str, path) -> None:
     if not isinstance(task, dict):
         raise StateError(f"{path} is corrupt: {where} must be an object")
     for key in TASK_CONTENT_KEYS + TASK_SYSTEM_KEYS:
+        if key == "priority":
+            # plan-schema v2 optional field: absent on v1 documents
+            continue
         if key not in task:
             raise StateError(f"{path} is corrupt: {where} is missing '{key}'")
+    if "priority" in task and task["priority"] not in TASK_PRIORITY_LEVELS:
+        raise StateError(
+            f"{path} is corrupt: {where}.priority must be one of: "
+            + ", ".join(TASK_PRIORITY_LEVELS)
+        )
     if not _TASK_ID_RE.match(str(task["id"])):
         raise StateError(f"{path} is corrupt: {where}.id must match TASK-<digits>")
     for field in ("title", "objective"):

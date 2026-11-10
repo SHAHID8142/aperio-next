@@ -129,14 +129,14 @@ def test_corrupt_plan_rejected_on_every_operation(run_cli, project_dir):
 def test_future_plan_schema_rejected_on_operations(run_cli, project_dir):
     run_cli("init", str(project_dir))
     aperio_dir = project_dir / ".aperio"
-    future = json.dumps({"schema_version": 2, "anything": True})
+    future = json.dumps({"schema_version": 3, "anything": True})
     (aprio := aperio_dir / "plan.json").write_text(future)
     for operation in (
         lambda: read_plan(aperio_dir),
         lambda: approve_plan(aperio_dir),
         lambda: update_task(aperio_dir, "TASK-001", new_status="in-progress", owner="a"),
     ):
-        with pytest.raises(StateError, match="schema version 2"):
+        with pytest.raises(StateError, match="schema version 3"):
             operation()
     assert (aprio := aperio_dir / "plan.json").read_text() == future
 
@@ -675,14 +675,14 @@ def test_memory_with_future_plan_schema_degrades_gracefully(
 ):
     run_cli("init", str(project_dir))
     (project_dir / ".aperio/plan.json").write_text(
-        json.dumps({"schema_version": 2, "future": True})
+        json.dumps({"schema_version": 3, "future": True})
     )
     code, out, err = run_cli("memory", str(project_dir), "--json")
     assert code == 0, err  # non-fatal: an optional artifact must not brick memory
     plan = json.loads(out)["plan"]
     assert plan["present"] is True
     assert plan["unsupported_schema"] is True
-    assert plan["schema_version"] == 2
+    assert plan['schema_version'] == 3  # the document's own version
 
 
 def test_memory_with_non_object_plan_is_corrupt(run_cli, project_dir):

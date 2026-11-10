@@ -10,29 +10,16 @@ feedback, exchange, and portable memory. Three standing rules:
   independent-review gates (Feature 06) when they are enabled.
 - **The example is a placeholder.** `example-project` is illustrative
   only: no client names, data, metrics, or outcomes, and every
-  deployment or report shown is a **simulation sketch**, not captured
-  output.
+  deployment or report shown is a **simulation sketch**.
 - **Honesty is part of the workflow.** Where Aperio cannot know
   something — whether a site renders correctly, whether a deployment
   worked, whether a client consented — the walkthrough says so.
 
 ## Stage overview
 
-| # | Stage | Aperio primitives |
-| --- | --- | --- |
-| 1 | Client discovery | goal-schema v1, `goal-check`, `preflight` |
-| 2 | Proposal and agreement | goal and plan content, `decision-add` |
-| 3 | Asset readiness | plan tasks, decisions, the `.aperio/local/` boundary |
-| 4 | Blank-folder initialization | `init`, `status`, `memory` |
-| 5 | Planning and architecture | `plan-propose-from-goal` (planned), `plan-create`, `plan-approve` |
-| 6 | UX/UI design | design sub-goal, `agent-brief`, `quality-check`, reviews |
-| 7 | Frontend implementation | task lifecycle with evidence, `quality-check` |
-| 8 | Backend and CMS | tasks, decisions, the secret boundary |
-| 9 | Integration and QA | recorded evidence, runs, the feedback loop |
-| 10 | Client review | `capture` / `inbox`, revisions through plan gates |
-| 11 | Staging and production | `run-preview` vs `run-start --authorize-exec` |
-| 12 | Production validation | labeled evidence vs claims |
-| 13 | Client handover | `integrity`, `export`, delivery checklist |
+Discovery → proposal → assets → init → plan → design → build →
+backend → QA → client review → deploy → validate → handover. Each
+stage below names the Aperio primitives it uses.
 
 ## 1. Client discovery — capture the assignment
 
@@ -59,20 +46,19 @@ aperio profiles                          # advisory suggestions per profile
 ```
 
 Missing information is reported as missing; Aperio never invents a
-constraint, deliverable, or acceptance criterion to make a goal look
-complete, and profile suggestions are advisory data, never requirements.
+constraint, deliverable, or acceptance criterion, and profile
+suggestions are advisory data, never requirements.
 
 ## 2. Proposal and agreement — scope on paper, not law
 
 Scope assumptions, acceptance criteria, milestones, revisions,
 responsibilities, and exclusions are represented as ordinary goal and
-plan content: assumptions → `assumptions` (preflight reports each as
-unvalidated); acceptance criteria → `acceptance_criteria` (checked
-textually by `quality-check` later); milestones and revisions → plan
-tasks and `plan-revise` (Stage 5); responsibilities → goal text plus the
-optional governance roles (`planner`, `implementer`, `reviewer` — Aperio
-workflow roles, not contractual parties); exclusions → explicit
-constraints and a `decision-add` entry.
+plan content: assumptions → `assumptions`; acceptance criteria →
+`acceptance_criteria` (checked textually by `quality-check` later);
+milestones and revisions → plan tasks and `plan-revise` (Stage 5);
+responsibilities → goal text plus the optional governance roles
+(`planner`, `implementer`, `reviewer` — workflow roles, not contractual
+parties); exclusions → explicit constraints and a `decision-add` entry.
 
 **This does not generate a legally binding agreement or client consent.**
 Goal, plan, and decision files are internal project records. Contracts,
@@ -95,10 +81,10 @@ aperio decision-add . --title "Asset intake" \
 Credentials, tokens, and keys follow one rule: **they never enter
 shareable state.** `.aperio/local/` is the only place machine-local and
 sensitive data may live, and it is excluded from context packs, portable
-export, and every shareable record by construction — not by filtering.
-No password, key, or token belongs in a goal, brief, decision, plan,
-handoff, or any document you intend to share. Access handoffs go through
-your own secure channel outside Aperio.
+export, and every shareable record by construction. No password, key,
+or token belongs in a goal, brief, decision, plan, handoff, or any
+document you intend to share; access handoffs go through your own
+secure channel outside Aperio.
 
 ## 4. Blank-folder initialization — what `aperio init` does and does not do
 
@@ -110,8 +96,8 @@ aperio status .        # what exists now (read-only)
 aperio memory . --json # the shareable context any agent can pick up
 ```
 
-**`aperio init` creates `.aperio/` project state — it does not scaffold a
-website.** No `index.html`, no framework, no CMS configuration is
+**`aperio init` creates `.aperio/` project state — it does not scaffold
+a website.** No `index.html`, no framework, no CMS configuration is
 created. Building the site's own files is the work of the operator and
 their agents; Aperio records, checks, and carries that work. `init`
 never overwrites existing files and only repairs what is missing.
@@ -126,7 +112,6 @@ into a plan **proposal**:
 aperio plan-propose-from-goal example-goal.json --output plan-proposal.json
 # planned in this program, shipping before release (master-plan-v2,
 # Chunk 03); flags shown are illustrative
-
 aperio plan-create . --file plan-proposal.json   # gated create; approval is draft
 aperio task-list .                               # readiness is derived, never stored
 aperio plan-approve . --revision 1 --by owner    # after genuine human review
@@ -141,7 +126,7 @@ aperio plan-approve . --revision 1 --by owner    # after genuine human review
   approval before execution tracking resumes.
 
 Dependencies are validated (unique ids, no cycles); the plan lives in
-`.aperio/plan.json` (plan-schema v1). Architecture decisions — data
+`.aperio/plan.json` (plan-schema v1), and architecture decisions — data
 models, routing, hosting — are recorded with `decision-add`.
 
 ## 6. UX/UI design — what a tool can check and what it cannot
@@ -159,22 +144,14 @@ not as a design engine:
   required sections appear in the written design record.
 
 **Client design approval is operator sign-off** — a person looks at the
-designs and decides. Record it as a decision; when governance is
-enabled, route the same sign-off through the review gates
-(`review-submit`, `review-decide`):
+designs and decides. Record it with `decision-add` (Stage 3 shows the
+form), and when governance is enabled, route the same sign-off through
+the review gates (`review-submit`, `review-decide`).
 
-```sh
-aperio decision-add . --title "Design sign-off" \
-  --context "Home and services layouts presented to client" \
-  --decision "Client approved the layouts after one revision round" \
-  --consequences "Implementation tasks may proceed against this design"
-```
-
-Honest limits: Aperio reads text, not pixels. Measured contrast,
-rendered responsive behavior, and interaction feel are judged with
-browser tooling outside Aperio; those tools' results are the evidence
-you record. An accessibility claim in the design notes is a claim until
-someone measures or tests it.
+Aperio reads text, not pixels: measured contrast, rendered responsive
+behavior, and interaction feel are judged with browser tooling outside
+Aperio, and those tools' results are the evidence you record. An
+accessibility claim is a claim until someone tests it.
 
 ## 7. Frontend implementation — evidence-required completion
 
@@ -192,11 +169,10 @@ aperio task-status . TASK-002 --status completed --result passed \
 ```
 
 `quality-check` verifies what the goal *explicitly, objectively*
-requires and labels every finding: **confirmed** (a rule proved it),
+requires and labels findings: **confirmed** (a rule proved it),
 **warning** (a signal — judge it), **unknown** (the tool cannot decide —
-you decide), or **recommendation** (advice). A clean report means
-"nothing explicitly required was found missing"; it is not a certificate
-of correctness.
+you decide), or **recommendation** (advice). A clean report is not a
+certificate of correctness.
 
 When governance is enabled, completion additionally requires an approved
 independent review at the current material revision, submitted by the
@@ -221,8 +197,7 @@ does not operate a CMS or test an API. It records contract decisions
 subsystem with explicit completion criteria, and enforces the secret
 boundary: credential-bearing configuration lives outside shareable
 state, adapter configs are validated with known keys and never copied
-into records, and run records carry only bounded neutral metadata — raw
-output, environment values, and paths stay machine-local.
+into records, and run records carry only bounded neutral metadata.
 
 A textual guard on written configuration notes:
 
@@ -233,7 +208,7 @@ aperio quality-check example-goal.json --deliverable deploy-notes.md \
 
 That proves absence of the literal token in that file — not that no
 secret exists anywhere. A scanner run outside Aperio is the right tool
-for that, and its output becomes your recorded evidence.
+for that; its output becomes your recorded evidence.
 
 ## 9. Integration and QA — recorded evidence, feedback loop
 
@@ -250,12 +225,12 @@ aperio run-start . TASK-005 --agent local-process --config test-runner.json \
 ```
 
 `run-preview` is side-effect-free; without `--authorize-exec` nothing
-launches. With the `manual` adapter instead, the run stays
-`awaiting-external` until `aperio run-report . RUN-0001 --file
-qa-result.json` records the outcome. Exit 0 is never verification or
-completion — the evidence and limitations recorded on the task are what
-count. Quality reports are derived artifacts: regenerate them, never
-edit them. Problems found in QA feed the improvement loop:
+launches. With the `manual` adapter, the run stays `awaiting-external`
+until `aperio run-report . RUN-0001 --file qa-result.json` records the
+outcome. Exit 0 is never verification or completion — the evidence and
+limitations recorded on the task are what count. Quality reports are
+derived artifacts: regenerate them, never edit them. Problems found in
+QA feed the improvement loop:
 
 ```sh
 aperio feedback-check qa-feedback.json          # describe problem + lesson
@@ -285,20 +260,19 @@ Nothing captured executes; urgency language inside the text has no
 authority — only your explicit `--urgent` flag does. Turning a captured
 item into work is a separate, reviewed promotion through the plan gates,
 so an inbox can never mutate an approved plan silently. Unresolved
-issues stay visible: blocked tasks with reasons, open `uncertainties`,
-and unaccepted review findings. Sign-off is recorded when the client
-(via the operator) confirms — as a decision entry, or as task
-completion with the acceptance evidence. This records that sign-off
-*happened*; it is not client consent in any legal sense.
+issues stay visible: blocked tasks, open `uncertainties`, and unaccepted
+review findings. Sign-off is recorded when the client (via the operator)
+confirms — as a decision entry, or as task completion with acceptance
+evidence. This records that sign-off *happened*; it is not client
+consent in any legal sense.
 
 ## 11. Staging and production — authorization, dry-run versus real
 
-Aperio does not deploy websites. A deployment is a process: run it with
-your own tooling and record what happened, or configure it through an
-adapter. Either way, any real process launch requires **explicit
-`--authorize-exec`** on the dispatch command — without it, dispatch is
-a read-only preparation step — and **a dry-run is not a real
-deployment**: `run-preview` launches nothing; `--dry-run` on
+Aperio does not deploy websites; a deployment is your own tooling or an
+adapter process. Either way, any real process launch requires
+**explicit `--authorize-exec`** on the dispatch command — without it,
+dispatch is a read-only preparation step — and **a dry-run is not a
+real deployment**: `run-preview` launches nothing; `--dry-run` on
 `export`/`import` writes nothing.
 
 ```sh
@@ -320,8 +294,8 @@ decision; it cannot perform the checks:
 | Production environment reachable and correct | operator | recorded evidence after the run |
 
 After any interrupted or ambiguous run, `aperio runs-reconcile .`
-reports state without inventing success — and this document makes no
-claims of deployment success either.
+reports state without inventing success. This document makes no claims
+of deployment success either.
 
 ## 12. Production validation — label every claim
 
@@ -335,10 +309,9 @@ labels distinct:
 | Manual acceptance | A human judged the site on production | attested via `decision-add`; Aperio does not verify judgment |
 | Unverified claim | An agent asserts "the site is live" with no run or evidence | **proposed** trust; never promoted by repetition |
 
-Never present a proposed claim as evidence, and never let an agent's
-confident summary replace a recorded run. Whether the production site
-actually works is known only from checks that actually ran and
-acceptance that actually happened.
+Never present a proposed claim as evidence; never let a confident agent
+summary replace a recorded run. Whether the production site works is
+known only from checks that ran and acceptance that happened.
 
 ## 13. Client handover — documentation and the delivery checklist
 
@@ -364,20 +337,16 @@ they do not authenticate the archive or prove it secret-free.
 | Delivery acceptance | Client acceptance recorded as evidence on the closing task; the Stage 12 rules apply |
 
 Delivery acceptance closes the walkthrough the way every stage opened
-it: with recorded, labeled evidence — and with nothing claimed that was
-not recorded.
+it: recorded, labeled evidence — nothing claimed that was not recorded.
 
 ## Where to go next
 
-| Want | Read |
-| --- | --- |
-| The full goal format | [goal-contract.md](goal-contract.md) |
-| Quality rules and their limits | [quality.md](quality.md) |
-| Plans, tasks, approval, review gates | [architecture.md](architecture.md) |
-| Brain dumps and mid-task capture | [brain-dump.md](brain-dump.md) |
-| Memory, trust, and what `verified` means | [universal-memory.md](universal-memory.md) |
-| What Aperio does not promise | [security-model.md](security-model.md) |
-| Every command | [cli-reference.md](cli-reference.md) |
+Goal format: [goal-contract.md](goal-contract.md). Quality rules:
+[quality.md](quality.md). Plans and review gates:
+[architecture.md](architecture.md). Memory and trust:
+[universal-memory.md](universal-memory.md). Limits:
+[security-model.md](security-model.md). Commands:
+[cli-reference.md](cli-reference.md).
 
 A companion 30-day SEO walkthrough (planned in this program,
 master-plan-v2 Chunk 06) covers search-measurement honesty separately.

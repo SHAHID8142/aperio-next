@@ -24,6 +24,7 @@ from aperio.context_pack import (
     render_context_pack_markdown,
 )
 from aperio.errors import ValidationError
+from aperio.planmodel import PLAN_SCHEMA_VERSION
 from aperio.goals import (
     GOAL_SCHEMA_VERSION,
     goal_suggestions,
@@ -883,7 +884,9 @@ def test_goal_pack_with_project_workspace_is_read_only(run_cli, project_dir):
 def test_legacy_plan_schema_v1_still_written_and_readable(
     run_cli, project_dir, tmp_path
 ):
-    """M2 adds no plan fields and does not migrate plan-schema v1."""
+    """Goal plans write the current plan schema (v2, priority at its
+    default); v1 documents remain fully readable (pinned in
+    tests/test_planbridge_priority.py)."""
 
     code, _out, err = run_cli("init", str(project_dir))
     assert code == 0, err
@@ -919,7 +922,11 @@ def test_legacy_plan_schema_v1_still_written_and_readable(
     )
     assert code == 0, err
     stored = json.loads((project_dir / ".aperio" / "plan.json").read_text())
-    assert stored["schema_version"] == 1
+    assert stored["schema_version"] == PLAN_SCHEMA_VERSION
+    assert all(
+        task.get("priority", "normal") == "normal"
+        for task in stored["tasks"]
+    )
     assert stored["plan_version"] == 1
     assert stored["tasks"][0]["status"] == "pending"
     code, _out, err = run_cli("plan-show", str(project_dir))

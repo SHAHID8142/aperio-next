@@ -66,7 +66,11 @@ from aperio.runtime import executions_path
 from aperio.schema import state_path, utc_now_iso
 
 # Versions this aperio can read and write, per artifact.
-SUPPORTED_SCHEMAS: dict[str, int] = {"state": 1, "plan": 1, "executions": 1}
+# plan-schema v2 (optional per-task priority) is the current version;
+# v1 plans remain fully readable (scheduling treats a missing
+# priority as "normal") and no v1->v2 migration is required for
+# reading.
+SUPPORTED_SCHEMAS: dict[str, int] = {"state": 1, "plan": 2, "executions": 1}
 
 _JSON_ARTIFACTS: dict[str, Callable[[Path], Path]] = {
     "state": lambda aperio_dir: aperio_dir / "state.json",

@@ -50,6 +50,9 @@ Commands:
     aperio checkpoint-show DIR [--json]
                                       show the current checkpoint
     aperio recover DIR [--json]         recovery inspection after a crash
+    aperio plan-propose-from-goal GOAL DIR [--create]
+                                      bridge a goal's work decomposition
+                                      into a plan proposal (M-bridge)
     aperio decision-add <dir> ...     append a decision (append-only)
     aperio handoff-write <dir> --file <handoff.json>
                                       replace the handoff with a validated one
@@ -198,6 +201,16 @@ from aperio.checkpoint import (
     refresh_checkpoint,
     render_recovery_markdown,
 )
+from aperio.planbridge import (
+    PROPOSAL_FORMAT,
+    load_proposal_file as load_plan_proposal_file,
+    plan_proposal_from_goal,
+    render_proposal_markdown,
+)
+from aperio.planmodel import (
+    PLAN_SCHEMA_VERSION,
+    PLAN_SCHEMA_READ_VERSIONS,
+)
 from aperio.benchmark import (
     builtin_cases,
     load_case_file,
@@ -224,6 +237,7 @@ from aperio.runtime import (
 )
 from aperio.planmodel import ready_task_ids
 from aperio.adapters import builtin_adapters, provider_doctor
+from aperio.planmodel import priority_rank
 from aperio.planstore import (
     adopt_plan_author,
     approve_plan,
@@ -1086,6 +1100,49 @@ def build_parser() -> argparse.ArgumentParser:
     recover_parser.add_argument(
         "--json", dest="as_json", action="store_true",
         help="emit the recovery report as JSON",
+    )
+
+    # --- goal-to-plan bridge ----------------------------------------------
+    propose_parser = subparsers.add_parser(
+        "plan-propose-from-goal",
+        help="bridge a goal's work decomposition into a plan proposal",
+        description=(
+            "Convert a validated operator goal into a plan proposal in "
+            "the plan-schema input shape. A proposal is NOT a plan: "
+            "creating the plan (with --create) produces a DRAFT that "
+            "still requires explicit approval before any execution. "
+            "Only operator-declared goals can be bridged; work-task ids "
+            "are re-numbered TASK-001… in declared order with the "
+            "mapping recorded; missing goal fields are listed as "
+            "missing, never invented."
+        ),
+    )
+    propose_parser.add_argument(
+        "goal_file", metavar="GOAL_FILE", help="path to a goal JSON file",
+    )
+    propose_parser.add_argument(
+        "project", metavar="DIR",
+        help="initialized Aperio project directory",
+    )
+    propose_parser.add_argument(
+        "--create", action="store_true",
+        help="create the DRAFT plan from the proposal via the ordinary "
+             "gated plan-create (approval still required)",
+    )
+    propose_parser.add_argument(
+        "--actor", metavar="ID", help="declared operator identifier",
+    )
+    propose_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit the proposal as JSON",
+    )
+    propose_parser.add_argument(
+        "--output", metavar="FILE",
+        help="write the proposal document here",
+    )
+    propose_parser.add_argument(
+        "--force", action="store_true",
+        help="overwrite an existing --output file",
     )
 
     # --- universal memory (M3) -------------------------------------------
@@ -2666,6 +2723,43 @@ def _cmd_recover(args) -> None:
     sys.stdout.write(render_recovery_markdown(report))
 
 
+def _cmd_plan_propose_from_goal(args) -> None:
+    goal = load_goal_file(args.goal_file)
+    proposal = plan_proposal_from_goal(goal, actor=args.actor)
+    # (feedback's load_proposal_file is a different contract; this handler
+    # only builds proposals, it does not load them from disk)
+    if args.create:
+        from aperio.planstore import create_plan
+
+        record = create_plan(
+            Path(args.project) / ".aperio", proposal["plan_input"],
+        )
+        print(
+            f"Created DRAFT plan revision {record['plan_version']} from "
+            f"goal {proposal['goal_identity']}; approval is still "
+            "required before any execution ('aperio plan-approve')."
+        )
+        if args.as_json:
+            sys.stdout.write(json.dumps(
+                {"proposal": proposal,
+                 "created_plan_version": record["plan_version"]},
+                ensure_ascii=False, indent=2) + "\n")
+            return
+        return
+    text = json.dumps(proposal, ensure_ascii=False, indent=2, sort_keys=True)
+    if args.json if False else args.as_json:
+        pass
+    if args.output:
+        publish_text_atomic(Path(args.output), text + "\n",
+                            force=args.force, what="plan proposal")
+        print(f"Wrote plan proposal to {args.output}")
+        return
+    if args.as_json:
+        sys.stdout.write(text + "\n")
+        return
+    sys.stdout.write(render_proposal_markdown(proposal))
+
+
 def _cmd_goal_check(args) -> None:
     goal = load_goal_file(args.goal_file)
     report = describe_goal(goal)
@@ -3471,7 +3565,10 @@ def _cmd_task_list(args) -> None:
             "Plan approval: DRAFT - dependency-ready tasks are NOT "
             "executable until the plan is approved (aperio plan-approve)."
         )
-    for task in sorted(plan["tasks"], key=lambda t: t["id"]):
+    for task in sorted(
+        plan["tasks"],
+        key=lambda t: (priority_rank(t), t["id"]),
+    ):
         if task["id"] in executable:
             marker = "ready"
         elif task["id"] in ready:
@@ -3479,7 +3576,15 @@ def _cmd_task_list(args) -> None:
         else:
             marker = f"{task['status']:>11}"
         owner = f" (owner: {task['owner']})" if task["owner"] else ""
-        print(f"  [{marker}] {task['id']}: {task['title']}{owner}")
+        priority = task.get("priority", "normal")
+        priority_note = "" if priority == "normal" else f" [{priority}]"
+        print(f"  [{marker}] {task['id']}: {task['title']}{owner}"
+              f"{priority_note}")
+    if any(t.get("priority", "normal") != "normal" for t in plan["tasks"]):
+        print(
+            "  (listed by priority, then id; dispatch follows the same "
+            "order)"
+        )
 
 
 def _read_plan_input(path: str) -> dict:
@@ -4275,6 +4380,8 @@ def main(argv: list[str] | None = None) -> int:
             _cmd_checkpoint_show(args)
         elif args.command == "recover":
             _cmd_recover(args)
+        elif args.command == "plan-propose-from-goal":
+            _cmd_plan_propose_from_goal(args)
         elif args.command == "mem-propose":
             _cmd_mem_propose(args)
         elif args.command == "mem-review":

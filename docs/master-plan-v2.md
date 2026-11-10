@@ -35,7 +35,7 @@ complete.
 | 00 | Baseline + architecture closure | COMPLETE | 56535e3 |
 | 01 | Brain Dump Guard + durable intake | COMPLETE | 3ce88b5 |
 | 02 | Task continuity: checkpoints + recovery | COMPLETE | be0ad0f |
-| 03 | Goal→plan bridge + priority-aware scheduling | PENDING | — |
+| 03 | Goal→plan bridge + priority-aware scheduling | COMPLETE | this chunk |
 | 04 | Controlled multi-agent orchestration (sequential-first) | PENDING | — |
 | 05 | Trust-aware portable skill packs (+ builtin packs) | PENDING | — |
 | 06 | Website-delivery + 30-day SEO workflows (templates + docs) | PENDING | — |
@@ -130,7 +130,7 @@ included) and its SHA is recorded.
 
 ## Exact next action
 
-Current: **Chunk 03 — Goal→plan bridge + priority-aware scheduling.**
+Current: **Chunk 04 — Controlled multi-agent orchestration.**
 
 ## Chunk notes (evidence log)
 
@@ -169,3 +169,32 @@ Two hook-attribute defects (wrong Namespace attr per handler) found and
 fixed during the chunk's own tests. P2 note: one planstore concurrency
 test flaked once under full-suite load (passes 3x isolated and 3x in
 suite) — added to the de-flake triage.
+
+### Chunk 03 — COMPLETE (this commit)
+
+**Plan-schema v2** (`planmodel.py`): optional per-task `priority`
+(critical/high/normal/low, default normal); v1 documents fully readable
+(supports versions 1+2; missing priority schedules as normal; nothing
+historic reinterpreted); priority excluded from the material-contract
+comparison (reprioritizing never strands evidence); upgrade registry
+updated. **Priority-aware scheduling** (`runtime.py`):
+`_eligible_task_ids`/`dispatch_ordering` order by (priority rank, task
+id), explainable via ordering_basis; `respect_priority=False` restores
+historical id order; all ready tasks remain visible (no silent
+starvation). `task-list` renders priority and lists by it.
+**Goal→plan bridge** (`planbridge.py` + `plan-propose-from-goal` CLI):
+operator-goal-only; work-task ids renumbered TASK-001… in declared order
+with recorded mapping; missing goal fields listed as missing (never
+invented); no decomposition → single derived task labeled as such;
+`--create` goes through the ordinary gated `plan-create` producing a
+DRAFT (approval still required) — a work breakdown is never presented
+as an approved plan.
+
+**Contract-change test updates (justified, not green-chasing):** writes
+now produce plan v2 (goals/compat/upgrade tests updated); future plan
+schema in tests is 3 (planstore/planmodel/portable); the upgrade
+registry test rewrites its plan to v1 so the synthetic v1→v2 migration
+still exercises the framework. One CLI name collision fixed
+(planbridge/feedback `load_proposal_file` — aliased import).
+
+**Tests:** 15 new (bridge + scheduling), suite 1297 passed (3.14.7).

@@ -18,6 +18,7 @@ from aperio.cli import main
 from aperio.errors import AperioError, PathError, StateError, ValidationError
 from aperio.integrity import check_integrity
 from aperio.locks import acquire_lock, release_lock
+from aperio.planmodel import PLAN_SCHEMA_VERSION
 from aperio.planstore import approve_plan, create_plan, read_plan, update_task
 from aperio.portable import export_project, import_archive, read_portable_archive
 from aperio.runtime import dispatch_task, read_executions
@@ -617,7 +618,7 @@ def test_upgrade_preview_reports_versions_and_writes_nothing(
     assert report["ok"] is True
     by_name = {a["artifact"]: a for a in report["artifacts"]}
     assert by_name["state"]["action"] == "none"
-    assert by_name["plan"]["current_version"] == 1
+    assert by_name["plan"]["current_version"] == PLAN_SCHEMA_VERSION
     assert by_name["handoff"]["current_version"] == "v1"
     assert (project_dir / ".aperio" / "plan.json").read_bytes() == before
 
@@ -628,7 +629,7 @@ def test_upgrade_refuses_future_schema_and_changes_nothing(
     aperio_dir = _awaiting_project(run_cli, project_dir)
     plan_file = aperio_dir / "plan.json"
     document = json.loads(plan_file.read_text())
-    document["schema_version"] = 2
+    document["schema_version"] = 3
     plan_file.write_text(json.dumps(document))
     preview = plan_upgrade(str(project_dir))
     assert preview["ok"] is False
@@ -646,6 +647,14 @@ def test_upgrade_framework_applies_registered_migration_with_backup(
     edge; production ships no migrations."""
     aperio_dir = _init_project(run_cli, project_dir)
     plan_file = aperio_dir / "plan.json"
+    # rewrite the plan to v1 (drop priorities) so the synthetic
+    # v1 -> v2 migration has something to migrate; created plans are
+    # v2 now
+    document = json.loads(plan_file.read_text())
+    document["schema_version"] = 1
+    for task in document.get("tasks", []):
+        task.pop("priority", None)
+    plan_file.write_text(json.dumps(document))
     original = plan_file.read_bytes()
 
     def add_marker(document: dict) -> dict:
