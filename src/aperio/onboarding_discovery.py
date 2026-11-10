@@ -126,10 +126,6 @@ IGNORED_DIRECTORY_NAMES = frozenset(
     }
 )
 
-# Directory names that carry meaning and are therefore reported even though
-# their contents are not descended into.
-REPORTED_DIRECTORY_NAMES = frozenset({APERIO_DIR_NAME, "docs", ".github", "tests", "src"})
-
 # Noise files that never make a workspace "meaningful content" on their own
 # but also never let it be classified empty (directive Rule 4).
 NOISE_FILE_NAMES = frozenset({".DS_Store", "Thumbs.db", "desktop.ini", ".localized"})
@@ -168,9 +164,6 @@ LEGACY_ORCHESTRATOR_MARKERS = (
     ".aider.conf.yml",
     ".github/copilot-instructions.md",
 )
-
-# Documentation that typically describes a project (for reconstruction).
-DOC_INVENTORY_NAMES = ("README", "PRD", "SPEC", "REQUIREMENTS", "ARCHITECTURE", "GUIDE", "CONTRIBUTING", "CHANGELOG")
 
 # Task-style documents that may hold pending work (inventory only; items in
 # them are never treated as approved tasks — see onboarding_reconstruct).
@@ -528,7 +521,7 @@ def _collect_evidence(scan: _ScanState) -> dict:
             evidence["ai_instructions"].append(rel)
         elif upper.startswith(("README", "PRD", "SPEC", "REQUIREMENTS", "ARCHITECTURE", "GUIDE")):
             evidence["documentation"].append(rel)
-        elif upper.startswith(("TODO", "ROADMAP", "BACKLOG", "TASKS", "PLAN", "MASTER-PLAN")):
+        elif upper.startswith(TASK_INVENTORY_NAMES):
             evidence["task_documents"].append(rel)
             if upper.startswith(("PLAN", "MASTER-PLAN")):
                 # Plan documents often indicate orchestrated work history.

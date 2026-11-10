@@ -57,7 +57,6 @@ MAPPING_VERSION = 1
 APPLY_ACTION = "standardization.apply"
 
 PROPOSALS_DIR = "proposals"
-BACKUPS_DIR = "backups"
 MAPPING_FILE_NAME = "standardization-mapping.json"
 
 # The canonical artifacts standardization creates (all under .aperio/, all

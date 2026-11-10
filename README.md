@@ -52,6 +52,7 @@ the honest non-claims — is [docs/security-model.md](docs/security-model.md).
 | Document | Contents |
 | --- | --- |
 | [Quick start](docs/quickstart.md) | first run in five minutes, non-coding |
+| [Onboarding](docs/onboarding.md) | Step 01: universal discovery, adaptive interview, safe standardization |
 | [CLI reference](docs/cli-reference.md) | every command and flag |
 | [Python API](docs/python-api.md) | library examples |
 | [Goal contract](docs/goal-contract.md) | goal-schema v1 field by field |

@@ -194,7 +194,6 @@ def confirm_initialization(raw_path: str, intent: str | None = None) -> dict:
 
     if discovery.classification == CLASS_EMPTY_NEW:
         init_project(str(workspace))
-        record_approval_before_session = None
         session = create_session(
             apdir,
             workspace=str(workspace),

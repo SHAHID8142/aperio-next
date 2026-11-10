@@ -61,7 +61,6 @@ from aperio.onboarding_session import (
 
 INTERVIEW_REGISTRY_FORMAT = "aperio-onboarding-interview-registry"
 INTERVIEW_REGISTRY_VERSION = 1
-PROFILE_FORMAT_VERSION = 1
 
 # Coverage categories (Rule 6 of the Step 01 directive).
 CAT_FOUNDATIONS = "foundations"
@@ -88,8 +87,6 @@ COVERAGE_CATEGORIES = (
 UNSURE_PHRASES = ("not sure", "not sure yet", "unsure", "no idea", "i don't know", "idk", "don't know")
 DEFER_PHRASES = ("decide later", "later", "defer", "skip for now", "decide later.")
 
-MAX_SUGGESTIONS = 8
-MAX_PROMPT_CHARS = 500
 MAX_PROFILE_QUESTIONS = 60
 
 
