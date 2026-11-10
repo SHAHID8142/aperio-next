@@ -8,11 +8,11 @@ omitted.
 
 - **Repository:** https://github.com/SHAHID8142/aperio-next
 - **Branch:** `main` (fast-forward pushes only; no force-push, ever)
-- **Final commit SHA:** `3f7ad7dd578abf4a30869392eb09c02d1499fd9e`
-  (release content at `b88f1b67e72204ab4470b62c93b79ad6b896baf4`); full
-  chunk history in [master-plan-v2.md](master-plan-v2.md):
+- **Final commit SHA:** `6541fe2` (documentation); release content
+  `aaed25f` (E2E finalization on top of `b88f1b6`); full chunk history
+  in [master-plan-v2.md](master-plan-v2.md):
   56535e3 → 3ce88b5 → be0ad0f → 8bea4bc → 3515fb8 → c60c532 →
-  2c55593 → b88f1b6 → 3f7ad7d.
+  2c55593 → b88f1b6 → aaed25f → 6541fe2.
 - **Release version:** 1.1.0rc1 (pyproject.toml == `aperio.__version__`,
   asserted by tests/test_version.py)
 - **Working tree:** clean at the release commit; `dist/` artifacts are
