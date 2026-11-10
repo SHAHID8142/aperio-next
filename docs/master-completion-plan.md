@@ -42,7 +42,7 @@ criteria are §16 of the directive and are re-verified in Chunk 08.
 | 02 | M5 — controlled feedback and improvement | COMPLETE | 247d4f3 |
 | 03 | M6 — universal portable exchange v2 | COMPLETE | 57fff8b |
 | 04 | M7 — optional integration + domain adaptation | COMPLETE | 1c52acf |
-| 05 | Feature 07 provider reliability closure | COMPLETE | see Chunk 05 note |
+| 05 | Feature 07 provider reliability closure | COMPLETE | f00e656 |
 | 06 | M8 — cross-domain benchmark + evaluation | PENDING | — |
 | 07 | Integration, security, usability | PENDING | — |
 | 08 | Final release engineering, 1.0 RC | PENDING | — |
@@ -287,7 +287,7 @@ version 0.17.0.
 **Tests:** 1189 → **1198 passed** locally (0 failures). GitHub Actions: not
 run (billing lock).
 
-### Chunk 05 — COMPLETE (0.17.1)
+### Chunk 05 — COMPLETE (0.17.1, commit f00e6568e97963c2c4b2361447ffeebc2df5c453)
 
 **Defect D-05-1 closed.** One shared metadata contract now defined in
 `src/aperio/adapters.py` (`MAX_PROVIDER_METADATA_VALUE = 1_000_000_000`,
