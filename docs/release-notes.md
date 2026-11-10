@@ -1,5 +1,51 @@
 # Release notes
 
+## 1.2.0rc1 — master-directive v3 release candidate
+
+The third master directive (product integration, universal agent
+compatibility, secure autonomous workflows, release readiness) delivered,
+on top of 1.1.0rc1, on the `feature/master-v3-completion` branch:
+
+- **Two-level planning** (docs/planning.md) — `aperio roadmap-create /
+  roadmap-show / roadmap-approve / roadmap-revise` add the LEVEL-1
+  master roadmap (roadmap-schema v1: lifecycle, milestones with
+  capabilities/dependencies/risks/acceptance conditions) above the
+  existing detailed plan, which remains the only execution engine.
+  Roadmaps are draft-until-approved with the same governance,
+  attribution, and separation-of-duties rules as plans; there is no
+  second planner and no stored milestone progress (progress is derived
+  from which milestone the current plan implements).
+- **plan-schema v3** — plans may optionally declare the master-roadmap
+  milestone they implement (`plan-create --milestone MILESTONE-1`).
+  v1/v2 documents remain fully readable without migration; the
+  explicit v2→v3 upgrade edge re-stamps schema_version only; portable
+  archives from 1.1.0rc1 import unchanged.
+- **Bounded retry with problem signatures** (anti-loop protection) —
+  every failed run is keyed by a deterministic problem signature; at
+  most **3 attempts** are allowed per signature; retries require a
+  declared `--remediation` (new evidence or a changed hypothesis, with
+  verbatim repeats refused), and the 4th attempt on the same signature
+  is refused with escalation guidance. New read-only
+  `aperio recovery-report` shows the debugging history. Enforced in
+  the Python boundary, not by prompt instructions.
+- **Host compatibility doctor** — `aperio host-doctor [--probe]`
+  reports the honest six-level compatibility vocabulary per documented
+  host. `native_verified` and `experimental` are defined but **never
+  emitted** by this version (no verified native integration exists and
+  none is invented); provider CLIs get a passive executable/flags
+  probe; every cooperative host names its canonical-CLI fallback.
+- **Fresh-machine install path** (docs/install.md) — prerequisites,
+  venv recipes for macOS/Linux/Windows, wheel sourcing, first checks,
+  upgrade and uninstall guidance, and platform honesty. Verified by a
+  clean-venv install of the built wheel (Python 3.14, macOS arm64).
+- Test suite: 1403 passed (1344 baseline + 59 new) on Python 3.14.
+
+Still external (unchanged): GitHub Actions CI (account billing lock —
+zero hosted runs), live provider execution, Windows/3.11/3.13
+verification. The Step 01 universal-onboarding implementation lives on
+the separate `feature/step01-universal-onboarding` branch pending
+integration; see docs/final-handoff.md.
+
 ## 1.1.0rc1 — product-completion release candidate
 
 The second master program (the "final product completion" before the
