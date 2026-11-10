@@ -130,7 +130,7 @@ included) and its SHA is recorded.
 
 ## Exact next action
 
-Current: **NONE — all chunks complete. Release candidate 1.1.0rc1 @ b88f1b6.**
+Current: **NONE — all chunks complete. Release candidate 1.1.0rc1 @ aaed25f (final).**
 
 ## Chunk notes (evidence log)
 
@@ -280,3 +280,16 @@ steps (billing lock). Live providers: unverified, stated.
 
 **Program verdict (docs/final-handoff.md):** RELEASE CANDIDATE —
 EXTERNAL VALIDATION PENDING.
+
+### Chunk 08 addendum (commit aaed25f)
+
+The E2E author delivered its compacted final version (654 → 552 lines,
+assertions preserved) as a post-commit refinement; committed above.
+The author's behavior notes are verified against source and now part of
+the record: unauthorized run-start is the documented exit-0 read-only
+preview (refusal gates fire exit 1 only for unavailable executables and
+draft plans — with nothing mutated in any path); goal work tasks carry
+no priority (the bridge maps to normal; priorities flow through the
+plan-revise gate with renewed approval); plan_version bumps on
+task-status transitions; plan-create is create-only (second workspace
+for the second engagement). Final E2E: 3 tests, all pass.
