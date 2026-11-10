@@ -1,0 +1,31 @@
+{
+  "case_id": "software-unverified-acceptance",
+  "case_schema_version": 1,
+  "checks": [
+    "quality"
+  ],
+  "deliverable_text": "# Export feature\n\nAdded an export button to the dashboard that serializes the visible rows.",
+  "domain": "software",
+  "expected_rules": [
+    "Q-missing-verification-evidence"
+  ],
+  "forbidden_rules": [],
+  "goal": {
+    "acceptance_criteria": [
+      "CSV output matches the table contents"
+    ],
+    "intended_outcome": "A merged change with documented verification",
+    "objective": "Add an export button to the billing dashboard",
+    "profile": "software"
+  },
+  "planted_issues": [
+    {
+      "category": "insufficient-evidence",
+      "description": "no verification evidence"
+    }
+  ],
+  "requires_human": [
+    "whether the change is correct"
+  ],
+  "scenario": "acceptance criteria exist but the deliverable never states verification"
+}

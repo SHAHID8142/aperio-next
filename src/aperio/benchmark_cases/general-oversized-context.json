@@ -1,0 +1,68 @@
+{
+  "case_id": "general-oversized-context",
+  "case_schema_version": 1,
+  "checks": [
+    "preflight"
+  ],
+  "domain": "general",
+  "expected_rules": [
+    "P-oversized-instruction-list"
+  ],
+  "forbidden_rules": [],
+  "goal": {
+    "intended_outcome": "A roster the coordinator can use",
+    "objective": "Organize the volunteer roster for the fair",
+    "requirements": [
+      "Instruction entry 1: keep the booth tidy.",
+      "Instruction entry 2: keep the booth tidy.",
+      "Instruction entry 3: keep the booth tidy.",
+      "Instruction entry 4: keep the booth tidy.",
+      "Instruction entry 5: keep the booth tidy.",
+      "Instruction entry 6: keep the booth tidy.",
+      "Instruction entry 7: keep the booth tidy.",
+      "Instruction entry 8: keep the booth tidy.",
+      "Instruction entry 9: keep the booth tidy.",
+      "Instruction entry 10: keep the booth tidy.",
+      "Instruction entry 11: keep the booth tidy.",
+      "Instruction entry 12: keep the booth tidy.",
+      "Instruction entry 13: keep the booth tidy.",
+      "Instruction entry 14: keep the booth tidy.",
+      "Instruction entry 15: keep the booth tidy.",
+      "Instruction entry 16: keep the booth tidy.",
+      "Instruction entry 17: keep the booth tidy.",
+      "Instruction entry 18: keep the booth tidy.",
+      "Instruction entry 19: keep the booth tidy.",
+      "Instruction entry 20: keep the booth tidy.",
+      "Instruction entry 21: keep the booth tidy.",
+      "Instruction entry 22: keep the booth tidy.",
+      "Instruction entry 23: keep the booth tidy.",
+      "Instruction entry 24: keep the booth tidy.",
+      "Instruction entry 25: keep the booth tidy.",
+      "Instruction entry 26: keep the booth tidy.",
+      "Instruction entry 27: keep the booth tidy.",
+      "Instruction entry 28: keep the booth tidy.",
+      "Instruction entry 29: keep the booth tidy.",
+      "Instruction entry 30: keep the booth tidy.",
+      "Instruction entry 31: keep the booth tidy.",
+      "Instruction entry 32: keep the booth tidy.",
+      "Instruction entry 33: keep the booth tidy.",
+      "Instruction entry 34: keep the booth tidy.",
+      "Instruction entry 35: keep the booth tidy.",
+      "Instruction entry 36: keep the booth tidy.",
+      "Instruction entry 37: keep the booth tidy.",
+      "Instruction entry 38: keep the booth tidy.",
+      "Instruction entry 39: keep the booth tidy.",
+      "Instruction entry 40: keep the booth tidy.",
+      "Instruction entry 41: keep the booth tidy.",
+      "Instruction entry 42: keep the booth tidy."
+    ]
+  },
+  "planted_issues": [
+    {
+      "category": "context-misuse",
+      "description": "instruction list near cap dilutes attention"
+    }
+  ],
+  "requires_human": [],
+  "scenario": "large irrelevant context: 42 near-cap instruction entries"
+}

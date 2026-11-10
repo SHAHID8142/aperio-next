@@ -1,0 +1,32 @@
+{
+  "case_id": "research-handled-uncertainty",
+  "case_schema_version": 1,
+  "checks": [
+    "quality"
+  ],
+  "deliverable_text": "# Urban heat islands\n\nCity centres tend to be warmer at night (Oke, 1982). Differences of 1-7 C are reported in the cited reviews [2].\n\n## Limitations\n\nOnly two reviews were consulted; local station data was not available.",
+  "domain": "research",
+  "expected_rules": [
+    "Q-source-support-unknown"
+  ],
+  "forbidden_rules": [
+    "Q-missing-attribution",
+    "Q-unsupported-absolute-claim"
+  ],
+  "goal": {
+    "evidence_requirements": [
+      "Cite every factual claim with a source"
+    ],
+    "intended_outcome": "A cited evidence summary",
+    "objective": "Summarize the evidence on urban heat islands for the council briefing",
+    "profile": "research",
+    "risks": [
+      "Only two reviews available"
+    ]
+  },
+  "planted_issues": [],
+  "requires_human": [
+    "whether Oke 1982 actually supports the claim"
+  ],
+  "scenario": "cited claims with a limitations section; missing attribution must NOT fire (false-positive guard), source support is honestly unknown"
+}

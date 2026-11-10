@@ -1,0 +1,182 @@
+{
+  "case_id": "memory-outdated-and-unreviewed",
+  "case_schema_version": 1,
+  "checks": [
+    "preflight",
+    "memory"
+  ],
+  "domain": "research",
+  "expected_rules": [
+    "P-expired-memory",
+    "P-unreviewed-memory"
+  ],
+  "forbidden_rules": [],
+  "goal": {
+    "evidence_requirements": [
+      "Cite sources"
+    ],
+    "intended_outcome": "A cited evidence summary",
+    "objective": "Summarize the evidence on urban heat islands for the council briefing",
+    "profile": "research"
+  },
+  "memory_fixtures": [
+    {
+      "actor": "analyst",
+      "content": "The slogan is Grow Together 2024.",
+      "content_sha256": "57de028e5b23031e3a570d99c4c21ab181992d1e07261ebc42aabefa1b60d1d1",
+      "created_at": "2025-06-01T00:00:00Z",
+      "evidence": [],
+      "history": [
+        {
+          "action": "accept",
+          "actor": "ops",
+          "at": "2025-06-02T00:00:00Z",
+          "evidence": [],
+          "from_state": "proposed",
+          "memory_id": "MEM-aaaaaaaaaaa1",
+          "note": null,
+          "reason": null,
+          "revision": 2,
+          "to_state": "attested"
+        }
+      ],
+      "memory_id": "MEM-aaaaaaaaaaa1",
+      "memory_schema_version": 1,
+      "recorded_state": "attested",
+      "revision": 2,
+      "scope": {
+        "kind": "global"
+      },
+      "sensitivity": "internal",
+      "source": {
+        "kind": "operator"
+      },
+      "state": "attested",
+      "supersedes": null,
+      "tags": [
+        "briefing"
+      ],
+      "title": "Old slogan",
+      "trust": "attested",
+      "type": "requirement",
+      "updated_at": "2025-06-02T00:00:00Z",
+      "valid_from": null,
+      "valid_until": "2026-01-01"
+    },
+    {
+      "actor": "intern",
+      "content": "An unverified note claims urban heat islands grew 30 percent this decade.",
+      "content_sha256": "3fa5bf8b56e47019565ba6b4c16c09142202f958765940278bdf966ced916d15",
+      "created_at": "2026-06-01T00:00:00Z",
+      "evidence": [],
+      "history": [],
+      "memory_id": "MEM-bbbbbbbbbbb2",
+      "memory_schema_version": 1,
+      "recorded_state": "proposed",
+      "revision": 1,
+      "scope": {
+        "kind": "global"
+      },
+      "sensitivity": "internal",
+      "source": {
+        "kind": "agent"
+      },
+      "state": "proposed",
+      "supersedes": null,
+      "tags": [
+        "briefing"
+      ],
+      "title": "Unconfirmed number",
+      "trust": "proposed",
+      "type": "observation",
+      "updated_at": "2026-06-01T00:00:00Z",
+      "valid_from": null,
+      "valid_until": null
+    },
+    {
+      "actor": "analyst",
+      "content": "The council heat alert threshold is 32 C.",
+      "content_sha256": "a12ce7f01cc501461d1874682f9730b89807630b679c59451d11fec8a47eb7af",
+      "created_at": "2026-06-01T00:00:00Z",
+      "evidence": [],
+      "history": [
+        {
+          "action": "accept",
+          "actor": "ops",
+          "at": "2026-06-02T00:00:00Z",
+          "evidence": [],
+          "from_state": "proposed",
+          "memory_id": "MEM-ccccccccccc3",
+          "note": null,
+          "reason": null,
+          "revision": 2,
+          "to_state": "attested"
+        }
+      ],
+      "memory_id": "MEM-ccccccccccc3",
+      "memory_schema_version": 1,
+      "recorded_state": "attested",
+      "revision": 2,
+      "scope": {
+        "kind": "global"
+      },
+      "sensitivity": "internal",
+      "source": {
+        "kind": "operator"
+      },
+      "state": "attested",
+      "supersedes": null,
+      "tags": [
+        "briefing"
+      ],
+      "title": "Heat threshold",
+      "trust": "attested",
+      "type": "requirement",
+      "updated_at": "2026-06-02T00:00:00Z",
+      "valid_from": null,
+      "valid_until": null
+    },
+    {
+      "actor": "a",
+      "content": "The councillor lives at 12 Example Street.",
+      "content_sha256": "e5edf67d40edfe4fa934226119a03b887f1bcaa878dea04d0a3b2dab3c401afa",
+      "created_at": "2026-06-01T00:00:00Z",
+      "evidence": [],
+      "history": [],
+      "memory_id": "MEM-ddddddddddd4",
+      "memory_schema_version": 1,
+      "recorded_state": "proposed",
+      "revision": 1,
+      "scope": {
+        "kind": "global"
+      },
+      "sensitivity": "private",
+      "source": {
+        "kind": "operator"
+      },
+      "state": "proposed",
+      "supersedes": null,
+      "tags": [
+        "briefing"
+      ],
+      "title": "Personal note",
+      "trust": "proposed",
+      "type": "user_preference",
+      "updated_at": "2026-06-01T00:00:00Z",
+      "valid_from": null,
+      "valid_until": null
+    }
+  ],
+  "planted_issues": [
+    {
+      "category": "outdated-information",
+      "description": "expired memory would otherwise inform the brief"
+    },
+    {
+      "category": "unsupported-claim",
+      "description": "unreviewed proposal selected without a flag"
+    }
+  ],
+  "requires_human": [],
+  "scenario": "outdated memory (expired window), unreviewed proposals, a conflict, and a private record"
+}

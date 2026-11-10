@@ -1,0 +1,42 @@
+{
+  "case_id": "design-incomplete-spec",
+  "case_schema_version": 1,
+  "checks": [
+    "quality"
+  ],
+  "deliverable_text": "# Colour directions\n\nThree calm green palette options with accessible contrast for print and screen.",
+  "domain": "design",
+  "expected_rules": [
+    "Q-constraint-required-inclusion",
+    "Q-deliverable-coverage"
+  ],
+  "forbidden_rules": [],
+  "goal": {
+    "constraints": [
+      "Must include the garden logo"
+    ],
+    "deliverables": [
+      "A3 poster layout"
+    ],
+    "intended_outcome": "A printable A3 poster the committee can send to the print shop",
+    "objective": "Design a spring campaign poster for the neighbourhood garden open day",
+    "profile": "design",
+    "quality_criteria": [
+      "Legible from two metres"
+    ]
+  },
+  "planted_issues": [
+    {
+      "category": "requirement-violation",
+      "description": "the garden logo constraint is never satisfied"
+    },
+    {
+      "category": "missing-deliverable",
+      "description": "the A3 poster layout deliverable is not covered"
+    }
+  ],
+  "requires_human": [
+    "whether the visual direction is good design"
+  ],
+  "scenario": "deliverable ignores the logo constraint and never covers the named A3 poster layout deliverable"
+}

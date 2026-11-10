@@ -1,0 +1,33 @@
+{
+  "case_id": "design-passing-spec",
+  "case_schema_version": 1,
+  "checks": [
+    "quality"
+  ],
+  "deliverable_text": "# A3 poster layout\n\nThe garden logo sits top-centre at 25 mm diameter. Large friendly type stays legible from two metres, with the open day date in the header band.",
+  "domain": "design",
+  "expected_rules": [],
+  "forbidden_rules": [
+    "Q-constraint-required-inclusion",
+    "Q-deliverable-coverage"
+  ],
+  "goal": {
+    "constraints": [
+      "Must include the garden logo"
+    ],
+    "deliverables": [
+      "A3 poster layout"
+    ],
+    "intended_outcome": "A printable A3 poster the committee can send to the print shop",
+    "objective": "Design a spring campaign poster for the neighbourhood garden open day",
+    "profile": "design",
+    "quality_criteria": [
+      "Legible from two metres"
+    ]
+  },
+  "planted_issues": [],
+  "requires_human": [
+    "whether the layout is beautiful"
+  ],
+  "scenario": "a complete spec satisfies the constraints; no confirmed findings may fire"
+}

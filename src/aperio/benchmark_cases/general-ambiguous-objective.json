@@ -1,0 +1,29 @@
+{
+  "case_id": "general-ambiguous-objective",
+  "case_schema_version": 1,
+  "checks": [
+    "preflight"
+  ],
+  "domain": "general",
+  "expected_rules": [
+    "P-objective-underspecified",
+    "P-missing-acceptance-criteria"
+  ],
+  "forbidden_rules": [],
+  "goal": {
+    "intended_outcome": "A better schedule",
+    "objective": "Fix the schedule"
+  },
+  "planted_issues": [
+    {
+      "category": "incomplete-task",
+      "description": "objective states almost nothing"
+    },
+    {
+      "category": "insufficient-evidence",
+      "description": "done cannot be judged"
+    }
+  ],
+  "requires_human": [],
+  "scenario": "ambiguous instructions: an objective too short to act on and no acceptance criteria"
+}

@@ -43,7 +43,7 @@ criteria are §16 of the directive and are re-verified in Chunk 08.
 | 03 | M6 — universal portable exchange v2 | COMPLETE | 57fff8b |
 | 04 | M7 — optional integration + domain adaptation | COMPLETE | 1c52acf |
 | 05 | Feature 07 provider reliability closure | COMPLETE | f00e656 |
-| 06 | M8 — cross-domain benchmark + evaluation | PENDING | — |
+| 06 | M8 — cross-domain benchmark + evaluation | COMPLETE | see Chunk 06 note |
 | 07 | Integration, security, usability | PENDING | — |
 | 08 | Final release engineering, 1.0 RC | PENDING | — |
 
@@ -68,8 +68,8 @@ Recorded as they are confirmed; each closed defect lists its regression test.
 
 ## Exact next action
 
-Maintained at the end of the "Status" section per chunk. Current: **Chunk 06
-— M8 cross-domain benchmark and performance evaluation.**
+Maintained at the end of the "Status" section per chunk. Current: **Chunk 07
+— Complete system integration, security and usability.**
 
 ## Chunk notes (evidence log)
 
@@ -322,3 +322,38 @@ docs/providers.md.
 
 **Tests:** 1198 -> **1207 passed** locally (0 failures). GitHub Actions: not
 run (billing lock).
+
+### Chunk 06 — COMPLETE (0.18.0)
+
+**Delivered (M8).** New module `src/aperio/benchmark.py` + 14 versioned
+fixture cases packaged as `benchmark_cases/*.json` (package-data) +
+`benchmark-cases`/`benchmark-run` CLI. The offline runner measures, per
+domain and without any provider: detection of planted flaws
+(expected_rules must fire, forbidden_rules must not — false-positive
+guards incl. a passing-deliverable case; a case that stops detecting is a
+reported regression), trust-boundary enforcement (forged verified claims,
+agent-goal-as-brief, untrusted-goal-instructions-in-pack must all be
+blocked), cross-agent information preservation through an exchange round
+trip (goal fields/notes verbatim, memory always proposed, unsupported
+claims flagged), memory correctness (expired excluded, unreviewed
+flagged, private never selected), missing-information handling, and
+wall-clock overhead (excluded from the content hash — proven by test).
+Feedback-improvement and honest-regression cases use the M5 comparison
+(improved AND regressed outcomes must be reported). The report states
+verbatim that it is NOT a measurement that agents perform better with
+Aperio: baseline detection is zero by definition, `requires_human`
+metrics are listed per case and never scored, and no aggregate quality
+score exists (asserted by test). Cases cover ambiguous instructions,
+missing information, conflicting requirements, large irrelevant context,
+outdated memory, unsupported claims, cross-agent transfer,
+feedback-improvement, incomplete deliverables, and correctly handled
+uncertainty across all six domains (software one among six).
+
+**Sources changed:** `src/aperio/benchmark.py` (new),
+`src/aperio/benchmark_cases/` (14 new case files), `src/aperio/cli.py`
+(2 subparsers + handlers + dispatch), `pyproject.toml` (package-data),
+`tests/test_benchmark.py` (13), `docs/benchmark.md` (new), README,
+docs/architecture.md, docs/roadmap.md, version 0.18.0.
+
+**Tests:** 1207 -> **1220 passed** locally (0 failures). GitHub Actions:
+not run (billing lock).

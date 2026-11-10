@@ -37,6 +37,9 @@ Commands:
                                       (add --apply to write)
     aperio agent-brief <goal.json> ...  assemble an agent-ready instruction
                                       package for pasting into any agent
+    aperio benchmark-cases [--json]     list the built-in benchmark cases
+    aperio benchmark-run [--cases DIR] [--only ID]
+                                      run the cross-domain benchmark (M8)
     aperio decision-add <dir> ...     append a decision (append-only)
     aperio handoff-write <dir> --file <handoff.json>
                                       replace the handoff with a validated one
@@ -172,6 +175,13 @@ from aperio.exchange import (
 from aperio.guidance import (
     build_agent_brief,
     render_agent_brief_markdown,
+)
+from aperio.benchmark import (
+    builtin_cases,
+    load_case_file,
+    render_benchmark_markdown,
+    run_benchmark,
+    validate_case,
 )
 from aperio.memportable import (
     export_memories,
@@ -859,6 +869,60 @@ def build_parser() -> argparse.ArgumentParser:
         help="write the brief to a file instead of stdout",
     )
     brief_parser.add_argument(
+        "--force", action="store_true",
+        help="overwrite an existing --output file",
+    )
+
+    # --- cross-domain benchmark (M8) --------------------------------------
+    bench_cases_parser = subparsers.add_parser(
+        "benchmark-cases",
+        help="list the built-in benchmark cases (benchmark-case v1)",
+        description=(
+            "List the versioned evaluation cases shipped with Aperio: "
+            "planted, objectively checkable flaws per domain, with "
+            "expected detections, false-positive guards, trust "
+            "attempts, transfer expectations, and the metrics that "
+            "deliberately require a human evaluator."
+        ),
+    )
+    bench_cases_parser.add_argument(
+        "--cases", metavar="DIR",
+        help="load cases from this directory instead of the built-ins",
+    )
+    bench_cases_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit the case list as JSON",
+    )
+
+    bench_run_parser = subparsers.add_parser(
+        "benchmark-run",
+        help="run the cross-domain benchmark and report detections",
+        description=(
+            "Run the versioned benchmark cases offline (no provider, no "
+            "network): detection of planted flaws per domain, "
+            "trust-boundary enforcement, cross-agent information "
+            "preservation, memory correctness, missing-information "
+            "handling, and measured overhead. The report states plainly "
+            "what was measured and what only a human evaluator can judge; "
+            "no aggregate quality score is produced."
+        ),
+    )
+    bench_run_parser.add_argument(
+        "--cases", metavar="DIR",
+        help="run cases from this directory instead of the built-ins",
+    )
+    bench_run_parser.add_argument(
+        "--only", action="append", default=[], metavar="CASE_ID",
+        help="run only this case; repeatable",
+    )
+    bench_run_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit the benchmark report as JSON",
+    )
+    bench_run_parser.add_argument(
+        "--output", metavar="FILE", help="write the report to a file",
+    )
+    bench_run_parser.add_argument(
         "--force", action="store_true",
         help="overwrite an existing --output file",
     )
@@ -2200,6 +2264,64 @@ def _cmd_agent_brief(args) -> None:
     if args.output:
         _write_report_output(args.output, text, force=args.force)
         print(f"Wrote agent brief to {args.output}")
+        return
+    sys.stdout.write(text)
+
+
+def _load_benchmark_cases(args) -> list[dict]:
+    if args.cases:
+        directory = Path(args.cases)
+        if not directory.is_dir():
+            raise ValidationError(
+                f"benchmark cases directory does not exist: {directory}"
+            )
+        cases = [load_case_file(path) for path in sorted(directory.glob("*.json"))]
+        if not cases:
+            raise ValidationError(
+                f"no benchmark cases found in {directory}"
+            )
+        return cases
+    return builtin_cases()
+
+
+def _cmd_benchmark_cases(args) -> None:
+    cases = _load_benchmark_cases(args)
+    if args.as_json:
+        payload = [
+            {"case_id": c["case_id"], "domain": c["domain"],
+             "scenario": c["scenario"], "checks": c["checks"],
+             "expected_rules": c["expected_rules"],
+             "requires_human": c["requires_human"]}
+            for c in cases
+        ]
+        sys.stdout.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+        return
+    for case in cases:
+        print(f"{case['case_id']}  [{case['domain']}]  {case['scenario']}")
+    print(f"\n{len(cases)} case(s); benchmark-case v1; "
+          "human-judged metrics are listed per case and never scored.")
+
+
+def _cmd_benchmark_run(args) -> None:
+    cases = _load_benchmark_cases(args)
+    if args.only:
+        wanted = set(args.only)
+        cases = [c for c in cases if c["case_id"] in wanted]
+        if not cases:
+            raise ValidationError(
+                "no case matched --only: " + ", ".join(sorted(wanted))
+            )
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="aperio-benchmark-") as td:
+        report = run_benchmark(cases, Path(td))
+    if args.as_json:
+        text = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
+    else:
+        text = render_benchmark_markdown(report)
+    if args.output:
+        _write_report_output(args.output, text, force=args.force)
+        print(f"Wrote benchmark report to {args.output}")
         return
     sys.stdout.write(text)
 
@@ -3788,6 +3910,10 @@ def main(argv: list[str] | None = None) -> int:
             _cmd_exchange_import(args)
         elif args.command == "agent-brief":
             _cmd_agent_brief(args)
+        elif args.command == "benchmark-cases":
+            _cmd_benchmark_cases(args)
+        elif args.command == "benchmark-run":
+            _cmd_benchmark_run(args)
         elif args.command == "mem-propose":
             _cmd_mem_propose(args)
         elif args.command == "mem-review":

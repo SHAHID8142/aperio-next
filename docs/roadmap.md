@@ -306,6 +306,30 @@ one — although an `attested` record can have at most one review event, so a
 history-less attested entry is always forged) and always imports as
 `proposed`; nothing is promoted either way.
 
+## M8 — cross-domain benchmark and performance evaluation (implemented in 0.18.0)
+
+`aperio benchmark-cases` and `aperio benchmark-run` ship an offline,
+reproducible evaluation framework: 14 versioned fixture cases
+(benchmark-case v1, packaged as data) across all six domains — software
+deliberately one among six — covering ambiguous instructions, missing
+information, conflicting requirements, large irrelevant context, outdated
+memory, unsupported claims, cross-agent context transfer, feedback-based
+improvement, incomplete deliverables, and correctly handled uncertainty.
+The runner measures detection of planted flaws (a case fails if a planted
+rule stops firing or an unexpected confirmed finding appears),
+trust-boundary enforcement (forged verified claims, agent-goal briefs,
+and untrusted goal instructions must all be blocked), cross-agent
+information preservation through an exchange round trip, memory
+correctness (expired/never-selected private records, unreviewed flags),
+missing-information handling, and measured overhead (excluded from the
+content hash). The report states verbatim that it is NOT a measurement
+that agents perform better with Aperio: baseline (no checks) detection is
+zero by definition, human-evaluator metrics are listed per case under
+`requires_human` and never scored, and no aggregate quality score is
+produced. Regressions are always reported. Provider-assisted benchmarking
+is possible through the Feature 07 adapters but never required and was
+not used for any claim here. See `docs/benchmark.md`.
+
 ## M7 — optional agent/provider integration and domain adaptation (implemented in 0.17.0)
 
 `aperio agent-brief GOAL [--memory-store F]` assembles the portable

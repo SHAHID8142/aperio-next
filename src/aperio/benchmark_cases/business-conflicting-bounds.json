@@ -1,0 +1,31 @@
+{
+  "case_id": "business-conflicting-bounds",
+  "case_schema_version": 1,
+  "checks": [
+    "preflight"
+  ],
+  "domain": "business",
+  "expected_rules": [
+    "P-conflicting-length-expectations"
+  ],
+  "forbidden_rules": [],
+  "goal": {
+    "intended_outcome": "A recommendation with assumptions and risks",
+    "objective": "Assess whether the bakery should open a second location with a full cost model",
+    "output_contract": {
+      "length": "at most 500 words"
+    },
+    "profile": "business",
+    "requirements": [
+      "The cost model section is 1200 words at most."
+    ]
+  },
+  "planted_issues": [
+    {
+      "category": "conflicting-information",
+      "description": "two distinct stated maxima"
+    }
+  ],
+  "requires_human": [],
+  "scenario": "the goal itself states two conflicting length bounds (conflicting requirements)"
+}

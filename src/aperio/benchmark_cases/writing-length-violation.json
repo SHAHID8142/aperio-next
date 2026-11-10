@@ -1,0 +1,32 @@
+{
+  "case_id": "writing-length-violation",
+  "case_schema_version": 1,
+  "checks": [
+    "quality"
+  ],
+  "deliverable_text": "# Sleep debt\n\nToo little sleep adds up over days and the body keeps score of every short night.",
+  "domain": "writing",
+  "expected_rules": [
+    "Q-min-length"
+  ],
+  "forbidden_rules": [],
+  "goal": {
+    "intended_outcome": "A titled article the editor can publish",
+    "objective": "Write a plain-language explainer about sleep debt for the clinic newsletter",
+    "output_contract": {
+      "format": "markdown",
+      "length": "at least 400 words"
+    },
+    "profile": "writing"
+  },
+  "planted_issues": [
+    {
+      "category": "output-format-failure",
+      "description": "word count far below the stated minimum"
+    }
+  ],
+  "requires_human": [
+    "whether the prose reads well"
+  ],
+  "scenario": "deliverable far below the goal's stated minimum length"
+}

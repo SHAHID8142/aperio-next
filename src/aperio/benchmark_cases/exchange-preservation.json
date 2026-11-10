@@ -1,0 +1,71 @@
+{
+  "case_id": "exchange-preservation",
+  "case_schema_version": 1,
+  "checks": [
+    "exchange"
+  ],
+  "domain": "general",
+  "exchange_expectations": {
+    "goal_fields_verbatim": [
+      "objective",
+      "intended_outcome",
+      "constraints",
+      "uncertainties"
+    ],
+    "memory_titles_imported": [
+      "Brand colour"
+    ],
+    "notes": [
+      "Final event date is not fixed - confirm with the committee"
+    ]
+  },
+  "expected_rules": [],
+  "forbidden_rules": [],
+  "goal": {
+    "constraints": [
+      "Accessible contrast"
+    ],
+    "intended_outcome": "A printable A3 poster the committee can send to the print shop",
+    "objective": "Design a spring campaign poster for the neighbourhood garden open day",
+    "uncertainties": [
+      "Final event date is not fixed"
+    ]
+  },
+  "memory_fixtures": [
+    {
+      "actor": "designer",
+      "content": "Primary brand colour is deep green #0B5D3B.",
+      "content_sha256": "ae834c71719d779c9cd575462a5f8104b16c7e99c938ff9618d0013b0c830a20",
+      "created_at": "2026-06-01T00:00:00Z",
+      "evidence": [],
+      "history": [],
+      "memory_id": "MEM-aaaaaaaaaaa1",
+      "memory_schema_version": 1,
+      "recorded_state": "proposed",
+      "revision": 1,
+      "scope": {
+        "kind": "global"
+      },
+      "sensitivity": "internal",
+      "source": {
+        "kind": "operator",
+        "note": null,
+        "ref": "brand guide v3"
+      },
+      "state": "proposed",
+      "supersedes": null,
+      "tags": [
+        "brand"
+      ],
+      "title": "Brand colour",
+      "trust": "proposed",
+      "type": "requirement",
+      "updated_at": "2026-06-01T00:00:00Z",
+      "valid_from": null,
+      "valid_until": null
+    }
+  ],
+  "planted_issues": [],
+  "requires_human": [],
+  "scenario": "cross-agent context transfer: goal fields, notes, and memories must arrive verbatim with provenance and no trust promotion"
+}

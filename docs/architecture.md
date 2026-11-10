@@ -74,6 +74,8 @@ src/aperio/
 │                  aperio-universal-exchange v1)
 ├── guidance.py    agent-ready instruction packages (M7,
 │                  aperio-agent-brief v1)
+├── benchmark.py   cross-domain benchmark runner (M8,
+│                  benchmark-report v1; cases in benchmark_cases/)
 ├── memstore.py    universal memory records + append-only store (M3,
 │                  memory-schema v1): validation, identity, review states
 ├── memrecall.py   deterministic memory retrieval (M3, memory-recall v1)
@@ -324,6 +326,14 @@ self-checks, reviewed memory and accepted lessons (labelled, never
 overriding), uncertainties, and trust boundaries. No provider contact;
 private memory never enters; untrusted goals are refused. See
 `docs/agent-workflows.md` and `docs/providers.md`.
+
+## Cross-domain benchmark (M8)
+
+`aperio benchmark-cases` / `benchmark-run` run versioned fixture cases
+offline: detection of planted flaws per domain, trust-boundary
+enforcement, transfer preservation, memory correctness, and measured
+overhead — with human-judged metrics listed per case and never scored,
+and no aggregate quality score. See `docs/benchmark.md`.
 
 ## Safe path policy (implemented)
 

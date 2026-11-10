@@ -1,0 +1,36 @@
+{
+  "case_id": "feedback-improvement-and-regression",
+  "case_schema_version": 1,
+  "checks": [
+    "feedback"
+  ],
+  "domain": "writing",
+  "exchange_expectations": {
+    "after_text": "# Sleep debt\n\nSleep debt builds when nights run short and the body keeps score. Sleep debt builds when nights run short and the body keeps score. Sleep debt builds when nights run short and the body keeps score. Sleep debt builds when nights run short and the body keeps score. Sleep debt builds when nights run short and the body keeps score. Sleep debt builds when nights run short and the body keeps score. ",
+    "before_text": "# Sleep debt\n\nShort note only.",
+    "worse_text": "A few unattributed notes with no structure at all."
+  },
+  "expected_rules": [],
+  "forbidden_rules": [],
+  "goal": {
+    "deliverables": [
+      "Titled article"
+    ],
+    "intended_outcome": "A titled article",
+    "objective": "Write a plain-language explainer about sleep debt for the clinic newsletter",
+    "output_contract": {
+      "length": "at least 120 words"
+    },
+    "profile": "writing"
+  },
+  "planted_issues": [
+    {
+      "category": "output-format-failure",
+      "description": "before: below length; after: fixed; worse: regressed"
+    }
+  ],
+  "requires_human": [
+    "whether the final article reads well"
+  ],
+  "scenario": "feedback-based improvement: fixing the deliverable improves the report; reverting to a worse one is reported as a regression"
+}

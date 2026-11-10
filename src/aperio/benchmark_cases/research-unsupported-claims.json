@@ -1,0 +1,36 @@
+{
+  "case_id": "research-unsupported-claims",
+  "case_schema_version": 1,
+  "checks": [
+    "quality"
+  ],
+  "deliverable_text": "# Heat islands\n\nStudies show cities are always warmer and the effect is proven largest at night. The difference is guaranteed to exceed five degrees.",
+  "domain": "research",
+  "expected_rules": [
+    "Q-missing-attribution",
+    "Q-unsupported-absolute-claim"
+  ],
+  "forbidden_rules": [],
+  "goal": {
+    "evidence_requirements": [
+      "Cite every factual claim with a source"
+    ],
+    "intended_outcome": "A cited evidence summary",
+    "objective": "Summarize the evidence on urban heat islands for the council briefing",
+    "profile": "research"
+  },
+  "planted_issues": [
+    {
+      "category": "insufficient-evidence",
+      "description": "no source attribution anywhere"
+    },
+    {
+      "category": "unsupported-claim",
+      "description": "absolute claims: always, proven, guaranteed"
+    }
+  ],
+  "requires_human": [
+    "whether cited sources actually support the claims"
+  ],
+  "scenario": "absolute factual claims with no sources under an evidence requirement"
+}

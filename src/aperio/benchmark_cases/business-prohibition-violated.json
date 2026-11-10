@@ -1,0 +1,39 @@
+{
+  "case_id": "business-prohibition-violated",
+  "case_schema_version": 1,
+  "checks": [
+    "quality"
+  ],
+  "deliverable_text": "# Second location assessment\n\nThe numbers work out; revenue projections look strong and unlimited funding is available from retained earnings if needed.",
+  "domain": "business",
+  "expected_rules": [
+    "Q-constraint-prohibition",
+    "Q-missing-limitations"
+  ],
+  "forbidden_rules": [],
+  "goal": {
+    "constraints": [
+      "The analysis must not assume unlimited funding"
+    ],
+    "intended_outcome": "A recommendation with assumptions and risks",
+    "objective": "Assess whether the bakery should open a second location",
+    "profile": "business",
+    "uncertainties": [
+      "Rent for the second site is not negotiated"
+    ]
+  },
+  "planted_issues": [
+    {
+      "category": "requirement-violation",
+      "description": "the prohibited assumption appears affirmed"
+    },
+    {
+      "category": "incomplete-task",
+      "description": "no limitation or caveat language"
+    }
+  ],
+  "requires_human": [
+    "whether the recommendation is sound"
+  ],
+  "scenario": "explicit prohibition violated and no limitation language despite named uncertainties"
+}
