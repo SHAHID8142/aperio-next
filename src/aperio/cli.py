@@ -53,6 +53,12 @@ Commands:
     aperio plan-propose-from-goal GOAL DIR [--create]
                                       bridge a goal's work decomposition
                                       into a plan proposal (M-bridge)
+    aperio orchestrate-assess DIR GOAL [--capability T:C ...]
+                                      explainable single-vs-specialist view
+    aperio orchestrate-plan DIR GOAL [--capability T:C ...]
+                                      build the sequential delegation plan
+    aperio orchestrate-brief DIR TASK-ID GOAL
+                                      render one specialist's scoped brief
     aperio decision-add <dir> ...     append a decision (append-only)
     aperio handoff-write <dir> --file <handoff.json>
                                       replace the handoff with a validated one
@@ -206,6 +212,13 @@ from aperio.planbridge import (
     load_proposal_file as load_plan_proposal_file,
     plan_proposal_from_goal,
     render_proposal_markdown,
+)
+from aperio.orchestrate import (
+    OrchestrationStore,
+    assess_orchestration,
+    build_orchestration_plan,
+    render_specialist_brief_markdown,
+    specialist_brief,
 )
 from aperio.planmodel import (
     PLAN_SCHEMA_VERSION,
@@ -1143,6 +1156,91 @@ def build_parser() -> argparse.ArgumentParser:
     propose_parser.add_argument(
         "--force", action="store_true",
         help="overwrite an existing --output file",
+    )
+
+    # --- controlled multi-agent orchestration ------------------------------
+    def _add_orchestrate_args(parser) -> None:
+        parser.add_argument(
+            "project", metavar="DIR",
+            help="initialized Aperio project directory",
+        )
+        parser.add_argument(
+            "goal_file", metavar="GOAL_FILE",
+            help="path to the operator goal JSON file",
+        )
+        parser.add_argument(
+            "--capability", action="append", default=[], metavar="TASK:CAP",
+            help="declare a task's required capability "
+                 "(e.g. TASK-002:coding); repeatable, operator-declared "
+                 "input — never inferred",
+        )
+        parser.add_argument(
+            "--actor", metavar="ID", help="declared operator identifier",
+        )
+
+    assess_parser = subparsers.add_parser(
+        "orchestrate-assess",
+        help="explainable single-agent vs specialist assessment",
+        description=(
+            "Assess whether the plan's tasks belong to one capable agent "
+            "or to sequential specialist delegation, with every criterion "
+            "and reason listed. Parallel execution is not offered: "
+            "non-overlapping write scopes cannot be proven for the "
+            "existing adapters. The assessment is advice, never "
+            "authorization."
+        ),
+    )
+    _add_orchestrate_args(assess_parser)
+    assess_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit the assessment as JSON",
+    )
+
+    orch_plan_parser = subparsers.add_parser(
+        "orchestrate-plan",
+        help="build the sequential specialist delegation plan",
+        description=(
+            "Map each plan task to a specialist adapter (from the "
+            "existing adapter registry) with scoped per-task context. "
+            "Dispatch still happens through the ordinary run-start / "
+            "scheduler gates; an implementer cannot approve its own "
+            "work. Parallel execution is not offered."
+        ),
+    )
+    _add_orchestrate_args(orch_plan_parser)
+    orch_plan_parser.add_argument(
+        "--adapter", action="append", default=[], metavar="TASK:ADAPTER",
+        help="override the specialist adapter for one task; repeatable",
+    )
+    orch_plan_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit the orchestration document as JSON",
+    )
+
+    orch_brief_parser = subparsers.add_parser(
+        "orchestrate-brief",
+        help="render one specialist's scoped task brief",
+        description=(
+            "Render the brief ONE specialist receives: its own task's "
+            "contract plus the operator goal's authoritative sections, "
+            "with other tasks present only as dependency context — never "
+            "their deliverables. Quoted context under the trust "
+            "boundary; it grants no authority."
+        ),
+    )
+    orch_brief_parser.add_argument(
+        "project", metavar="DIR",
+        help="initialized Aperio project directory",
+    )
+    orch_brief_parser.add_argument(
+        "task_id", metavar="TASK-ID", help="the delegated task, e.g. TASK-002",
+    )
+    orch_brief_parser.add_argument(
+        "goal_file", metavar="GOAL_FILE", help="the operator goal JSON file",
+    )
+    orch_brief_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit the brief as JSON",
     )
 
     # --- universal memory (M3) -------------------------------------------
@@ -2758,6 +2856,110 @@ def _cmd_plan_propose_from_goal(args) -> None:
         sys.stdout.write(text + "\n")
         return
     sys.stdout.write(render_proposal_markdown(proposal))
+
+
+def _orchestration_inputs(args) -> tuple[dict, list[dict], dict[str, str]]:
+    goal = load_goal_file(args.goal_file)
+    plan = read_plan(Path(args.project) / ".aperio")
+    capabilities: dict[str, str] = {}
+    for entry in getattr(args, "capability", None) or []:
+        if ":" not in entry:
+            raise ValidationError(
+                f"orchestration: --capability must be TASK:CAPABILITY, "
+                f"got {entry!r}"
+            )
+        task_id, capability = entry.split(":", 1)
+        capabilities[task_id] = _check_single_line(
+            capability, "orchestration --capability value"
+        )
+    return goal, plan.get("tasks", []), capabilities
+
+
+def _check_single_line(value: str, where: str) -> str:
+    if not value.strip() or "\n" in value or "\x00" in value:
+        raise ValidationError(f"{where} must be single-line non-empty text")
+    return value
+
+
+def _cmd_orchestrate_assess(args) -> None:
+    goal, plan_tasks, capabilities = _orchestration_inputs(args)
+    from aperio.adapters import builtin_adapters
+
+    available = [a.id for a in builtin_adapters()
+                 if a.available()[0] or a.id == "manual"]
+    assessment = assess_orchestration(
+        goal, plan_tasks=plan_tasks, available_adapters=available,
+        required_capabilities=capabilities,
+    )
+    if args.as_json:
+        sys.stdout.write(json.dumps(assessment, ensure_ascii=False, indent=2)
+                         + "\n")
+        return
+    print(f"Recommendation: **{assessment['recommendation']}**")
+    print("Criteria: "
+          + json.dumps(assessment["criteria"], ensure_ascii=False))
+    print("Reasons:")
+    for reason in assessment["reasons"]:
+        print(f"  - {reason}")
+    if assessment["capability_gaps"]:
+        print("Capability gaps (manual fallback required):")
+        for gap in assessment["capability_gaps"]:
+            print(f"  - {gap['task_id']}: {gap['capability']} — "
+                  f"{gap['fallback']}")
+
+
+def _cmd_orchestrate_plan(args) -> None:
+    goal, plan_tasks, capabilities = _orchestration_inputs(args)
+    overrides = {}
+    for entry in getattr(args, "adapter", None) or []:
+        if ":" not in entry:
+            raise ValidationError(
+                f"orchestration: --adapter must be TASK:ADAPTER, got "
+                f"{entry!r}"
+            )
+        task_id, adapter = entry.split(":", 1)
+        overrides[task_id] = _check_single_line(
+            adapter, "orchestration --adapter value"
+        )
+    from aperio.adapters import builtin_adapters
+
+    available = [a.id for a in builtin_adapters()
+                 if a.available()[0] or a.id == "manual"]
+    document = build_orchestration_plan(
+        goal, plan_tasks,
+        required_capabilities=capabilities,
+        adapter_override=overrides,
+        available_adapters=available,
+        actor=args.actor,
+    )
+    store = OrchestrationStore(Path(args.project) / ".aperio")
+    store.write(document)
+    if args.as_json:
+        sys.stdout.write(json.dumps(document, ensure_ascii=False, indent=2)
+                         + "\n")
+        return
+    print(f"Orchestration plan written to {store.path} "
+          f"({len(document['delegations'])} delegation(s), recommendation: "
+          f"{document['recommendation']}; sequential-only).")
+    for delegation in document["delegations"]:
+        print(f"  {delegation['task_id']}: {delegation['specialist_adapter']}"
+              + (f" ({delegation['required_capability']})"
+                 if delegation["required_capability"] else ""))
+    print("Dispatch stays through 'aperio run-start' with its "
+          "authorization gates; briefs: aperio orchestrate-brief.")
+
+
+def _cmd_orchestrate_brief(args) -> None:
+    aperio_dir = Path(args.project) / ".aperio"
+    orchestration = OrchestrationStore(aperio_dir).read()
+    plan = read_plan(aperio_dir)
+    goal = load_goal_file(args.goal_file)
+    brief = specialist_brief(orchestration, plan, args.task_id, goal)
+    if args.as_json:
+        sys.stdout.write(json.dumps(brief, ensure_ascii=False, indent=2)
+                         + "\n")
+        return
+    sys.stdout.write(render_specialist_brief_markdown(brief))
 
 
 def _cmd_goal_check(args) -> None:
@@ -4382,6 +4584,12 @@ def main(argv: list[str] | None = None) -> int:
             _cmd_recover(args)
         elif args.command == "plan-propose-from-goal":
             _cmd_plan_propose_from_goal(args)
+        elif args.command == "orchestrate-assess":
+            _cmd_orchestrate_assess(args)
+        elif args.command == "orchestrate-plan":
+            _cmd_orchestrate_plan(args)
+        elif args.command == "orchestrate-brief":
+            _cmd_orchestrate_brief(args)
         elif args.command == "mem-propose":
             _cmd_mem_propose(args)
         elif args.command == "mem-review":

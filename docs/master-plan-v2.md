@@ -36,7 +36,7 @@ complete.
 | 01 | Brain Dump Guard + durable intake | COMPLETE | 3ce88b5 |
 | 02 | Task continuity: checkpoints + recovery | COMPLETE | be0ad0f |
 | 03 | Goal→plan bridge + priority-aware scheduling | COMPLETE | 8bea4bc |
-| 04 | Controlled multi-agent orchestration (sequential-first) | PENDING | — |
+| 04 | Controlled multi-agent orchestration (sequential-first) | COMPLETE | this chunk |
 | 05 | Trust-aware portable skill packs (+ builtin packs) | PENDING | — |
 | 06 | Website-delivery + 30-day SEO workflows (templates + docs) | COMPLETE (docs) | agent docs: website-delivery.md, seo-30-day.md, host-integration.md — commit with Chunk 07 |
 | 07 | UX: work-status view, read-only loopback UI, host matrix | IN_PROGRESS | host matrix doc done |
@@ -130,7 +130,7 @@ included) and its SHA is recorded.
 
 ## Exact next action
 
-Current: **Chunk 04 — Controlled multi-agent orchestration.**
+Current: **Chunk 05 — Trust-aware portable skill packs.**
 
 ## Chunk notes (evidence log)
 
@@ -198,3 +198,23 @@ still exercises the framework. One CLI name collision fixed
 (planbridge/feedback `load_proposal_file` — aliased import).
 
 **Tests:** 15 new (bridge + scheduling), suite 1297 passed (3.14.7).
+
+### Chunk 04 — COMPLETE (this commit)
+
+`src/aperio/orchestrate.py` + `orchestrate-assess`/`orchestrate-plan`/
+`orchestrate-brief` CLI. Supervising layer over the existing
+plan/scheduler/adapters — no second engine, nothing dispatched by
+orchestration itself. Assessment is explainable advice (declared
+capabilities are operator input, never inferred from size; parallel
+execution is NOT offered — sequential_only is validated into the
+document). Delegations map plan tasks to specialists from the existing
+adapter registry with recorded selection basis and capability-gap
+manual fallbacks ('manual' is the fallback, not an automated server —
+gap detection excludes it). Specialist briefs scope context to the
+task's own contract plus the operator goal, with other tasks as
+dependency context only (never their deliverables); the trust boundary
+and implementer-cannot-self-approve statements are part of every brief.
+Orchestration store validates on read/write (duplicate delegations,
+sequential_only tampering, oversize refused).
+
+**Tests:** 12 new. Suite 1309 passed (3.14.7).
