@@ -35,11 +35,11 @@ complete.
 | 00 | Baseline + architecture closure | COMPLETE | 56535e3 |
 | 01 | Brain Dump Guard + durable intake | COMPLETE | 3ce88b5 |
 | 02 | Task continuity: checkpoints + recovery | COMPLETE | be0ad0f |
-| 03 | Goal→plan bridge + priority-aware scheduling | COMPLETE | this chunk |
+| 03 | Goal→plan bridge + priority-aware scheduling | COMPLETE | 8bea4bc |
 | 04 | Controlled multi-agent orchestration (sequential-first) | PENDING | — |
 | 05 | Trust-aware portable skill packs (+ builtin packs) | PENDING | — |
-| 06 | Website-delivery + 30-day SEO workflows (templates + docs) | PENDING | — |
-| 07 | UX: work-status view, read-only loopback UI, host matrix | PENDING | — |
+| 06 | Website-delivery + 30-day SEO workflows (templates + docs) | COMPLETE (docs) | agent docs: website-delivery.md, seo-30-day.md, host-integration.md — commit with Chunk 07 |
+| 07 | UX: work-status view, read-only loopback UI, host matrix | IN_PROGRESS | host matrix doc done |
 | 08 | E2E A–Z simulation + full audit matrices | PENDING | — |
 | 09 | Packaging, docs, release readiness | PENDING | — |
 
