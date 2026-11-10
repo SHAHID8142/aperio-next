@@ -5075,7 +5075,7 @@ def _cmd_onboarding_recommend_tools(args) -> None:
         if _ob_session_exists(apdir):
             session = _ob_read_session(apdir)
             category = session.get("project_category")
-    recs = recommend_tools(discovery, reconstruction, report, project_category=category)
+    recs = _ob_recommend_tools(discovery, reconstruction, report, project_category=category)
     if args.as_json:
         sys.stdout.write(json.dumps({"recommendations": recs}, indent=2) + "\n")
         return
