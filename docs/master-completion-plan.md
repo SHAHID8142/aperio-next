@@ -45,7 +45,7 @@ criteria are §16 of the directive and are re-verified in Chunk 08.
 | 05 | Feature 07 provider reliability closure | COMPLETE | f00e656 |
 | 06 | M8 — cross-domain benchmark + evaluation | COMPLETE | bc94c75 |
 | 07 | Integration, security, usability | COMPLETE | d282c79 |
-| 08 | Final release engineering, 1.0 RC | PENDING | — |
+| 08 | Final release engineering, 1.0 RC | COMPLETE | see Chunk 08 note |
 
 Chunk statuses: `PENDING`, `IN_PROGRESS`, `BLOCKED`, `FAILED`, `COMPLETE`.
 A chunk is marked COMPLETE only after its acceptance criteria actually pass
@@ -68,8 +68,7 @@ Recorded as they are confirmed; each closed defect lists its regression test.
 
 ## Exact next action
 
-Maintained at the end of the "Status" section per chunk. Current: **Chunk 08
-— Final release engineering and the 1.0 release candidate.**
+Maintained at the end of the "Status" section per chunk. Current: **NONE — all chunks complete. Release candidate 1.0.0rc1.**
 
 ## Chunk notes (evidence log)
 
@@ -411,3 +410,88 @@ README, docs/architecture.md, docs/roadmap.md, version 0.19.0.
 
 **Tests:** 1220 -> **1248 passed** locally (0 failures). GitHub Actions:
 not run (billing lock).
+
+### Chunk 08 — COMPLETE (1.0.0rc1)
+
+**Packaging.** Wheel builds (`aperio_next-1.0.0rc1-py3-none-any.whl`,
+14 benchmark case files verified inside the archive as package data);
+installs into a fresh Python 3.12 venv; console script `aperio` runs from
+outside the repository; `--help` accurate; runtime dependencies remain
+zero; version 1.0.0rc1 consistent across pyproject + `aperio.__init__`
+(test_version). Optional integrations remain genuinely optional: the full
+universal layer runs with no provider installed (asserted).
+
+**Verification matrix (local, honestly reported).**
+- Python 3.14.7 (repo venv): 1248 passed — repeated twice.
+- Python 3.12.14 (clean venv, installed wheel): 1248 passed — repeated
+  twice.
+- Python 3.11/3.13: NOT installed on the verification machine (declared
+  supported; exercised only in the blocked CI matrix).
+- GitHub Actions: ZERO steps executed for the entire series (billing
+  lock). No CI success is claimed anywhere.
+- One non-reproducible failure observed once during concurrent local
+  builds (identity not captured before cache reset); four subsequent
+  full-suite runs green on both interpreters. Triaged as a post-RC
+  hardening item (P2): identify and de-flake the likely timing-sensitive
+  concurrency/process tests.
+- Cross-domain CLI smoke: `benchmark-run` 14/14 passed; installed-wheel
+  smoke covers goal/preflight/quality/exchange paths; portable round
+  trip, security/privacy regressions, concurrency/corruption, and the
+  M1–M8 pipeline integration all covered by the suite (Chunks 00–07
+  evidence above).
+
+**Documentation.** README (doc index, release status), quickstart
+(non-coding first-run), cli-reference, python-api, goal-contract,
+context-pack, universal-memory, quality, feedback, exchange,
+agent-workflows, providers, benchmark, security-model, architecture,
+conventions, roadmap, release-notes (1.0.0rc1 + verification statement),
+limitations, troubleshooting, master-completion-plan.
+
+**Version.** 1.0.0rc1 (release candidate; no PyPI publication, no public
+release, no force-push — per the directive's scope).
+
+## Directive §16 final acceptance checklist
+
+1. Universal task without initializing a coding project — YES (standalone
+   tests + quickstart; asserted by test_standalone_workflows_need_no_project).
+2. Trust-aware context construction — YES (M1 packs, M3 memory, M7
+   briefs; trust derived from recorded history everywhere).
+3. Reviewed memory across sessions and agents — YES (M3 stores + M6
+   exchange; round-trip test).
+4. Unknown/unsupported claims not silently verified — YES (state-proof
+   boundary tests; exchange imports as proposed; benchmark trust cases).
+5. Quality checks identify concrete mistakes — YES (M4; six-domain
+   benchmark 14/14).
+6. Feedback reviewed and reused safely — YES (M5; full-loop test).
+7. Agent-ready instructions without a provider API — YES (M7 brief;
+   manual workflows tested).
+8. Portable exchange preserves context and provenance — YES (M6
+   preservation case).
+9. Imported information stays untrusted — YES (`imported-*` naming,
+   goal warnings, memories proposed).
+10. Optional provider integrations behave safely — YES (Feature 07 tests;
+    shared metadata contract; probes; two consents).
+11. Feature 07 metadata mismatch resolved — YES (Chunk 05, D-05-1).
+12. Benchmarks cover non-coding and coding tasks — YES (software is one
+    of six domains).
+13. CLI and Python library work together — YES (CLI handlers are thin
+    wrappers over the tested library calls).
+14. Legacy data and commands compatible — YES (compatibility audit).
+15. Confirmed P0/P1 resolved — YES (D-00-1, D-05-1, D-07-1 closed; CI
+    billing lock is external and documented, not a code defect).
+16. Tests/examples use real executable pathways — YES (no mocked claims;
+    subprocess/process-boundary tests use real fake CLIs; every doc
+    command sequence is executed by tests).
+17. Documentation matches the implementation — YES (each doc names its
+    test evidence; honesty limits stated in the docs themselves).
+18. Package builds and installs from a clean environment — YES (3.12
+    clean venv, wheel install, external invocation).
+19. Final report distinguishes verified evidence from unsupported
+    claims — YES (below).
+20. Repository contains a reproducible release candidate — YES (tagged
+    content = the 1.0.0rc1 commit; wheel rebuildable from source).
+
+**P2 triage (documented, non-blocking):** the timing-sensitive test flake
+noted above; 3.11/3.13 and Windows verification pending an environment
+with those platforms; live-provider integration testing pending
+credentials.

@@ -34,6 +34,7 @@ Anything not listed below is **planned, not implemented**. See
 - Implemented (M1): `aperio context-pack [workspace]` with `general` (default) and optional `software` profiles, Markdown/JSON output, deterministic byte budgeting, trust/provenance labels, imported/proposed context labels, and strict read-only operation
 - Implemented (M2): `aperio profiles`, `aperio goal-check`, and `aperio goal-pack` — a versioned universal goal contract (goal-schema v1), six data-only task profiles, optional work decomposition, and goal→context-pack conversion that works with no project, provider, or model API
 - Audited (Chunk 07): end-to-end pipeline integration test, security audit over injection/trust/privacy/paths/publication/concurrency/destructive operations (docs/security-model.md), compatibility audit (all Feature 01-07 commands and M1-M3 schemas unchanged), and usability: every universal workflow runs standalone with no project initialization
+- Release candidate: 1.0.0rc1 — all master-plan chunks complete; see [docs/release-notes.md](docs/release-notes.md) for what is verified and what is not
 - Implemented (M8): `aperio benchmark-cases` / `benchmark-run` — an offline, reproducible cross-domain benchmark (14 versioned cases, all six domains) measuring detection of planted flaws, trust-boundary enforcement, cross-agent information preservation, memory correctness, and overhead — with human-judged metrics listed per case and never scored, no aggregate quality score, and regressions always reported
 - Implemented (M7): `aperio agent-brief` — a paste-ready agent instruction package (objective, requirements, output contract, quality criteria + advisory profile self-checks, reviewed memory and accepted lessons, uncertainties, trust boundaries); strengthened six-domain profile model with advisory suggested checks; tested manual copy/paste workflows (docs/agent-workflows.md) and a per-provider support/limits guide (docs/providers.md)
 - Implemented (M6): `aperio exchange-export` and `exchange-import` — one provider-neutral universal exchange document (selected goals, context packs, quality reports, feedback, memories, operator notes) with per-section validation, digest-checked integrity, dry-run imports, `imported-*` file naming, and memories that always enter as proposed
@@ -45,6 +46,31 @@ Anything not listed below is **planned, not implemented**. See
 The standing security summary — authority hierarchy, trust derivation,
 injection defenses, privacy, path/publication/concurrency guarantees, and
 the honest non-claims — is [docs/security-model.md](docs/security-model.md).
+
+## Documentation
+
+| Document | Contents |
+| --- | --- |
+| [Quick start](docs/quickstart.md) | first run in five minutes, non-coding |
+| [CLI reference](docs/cli-reference.md) | every command and flag |
+| [Python API](docs/python-api.md) | library examples |
+| [Goal contract](docs/goal-contract.md) | goal-schema v1 field by field |
+| [Context packs](docs/context-pack.md) | the M1 pack contract |
+| [Universal memory](docs/universal-memory.md) | memory schema, trust, retrieval |
+| [Quality evaluation](docs/quality.md) | preflight + deliverable checks, rules |
+| [Feedback](docs/feedback.md) | controlled feedback and improvement |
+| [Exchange](docs/exchange.md) | universal portable exchange |
+| [Agent workflows](docs/agent-workflows.md) | tested copy/paste workflows per agent |
+| [Providers](docs/providers.md) | adapter support, safety, honest limits |
+| [Benchmark](docs/benchmark.md) | methodology and scope statements |
+| [Security model](docs/security-model.md) | standing security summary |
+| [Architecture](docs/architecture.md) | what is implemented and how it fits |
+| [Conventions](docs/conventions.md) | the engineering invariants |
+| [Roadmap](docs/roadmap.md) | implemented milestones and history |
+| [Release notes](docs/release-notes.md) | 1.0.0rc1 contents and verification |
+| [Limitations](docs/limitations.md) | known limits, stated plainly |
+| [Troubleshooting](docs/troubleshooting.md) | common errors and fixes |
+| [Master plan](docs/master-completion-plan.md) | the completion record with SHAs |
 
 ## Requirements
 
