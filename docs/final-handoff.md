@@ -8,10 +8,11 @@ omitted.
 
 - **Repository:** https://github.com/SHAHID8142/aperio-next
 - **Branch:** `main` (fast-forward pushes only; no force-push, ever)
-- **Final commit SHA:** recorded at the bottom of
-  [master-plan-v2.md](master-plan-v2.md) as Chunk 09 — see also
-  `git log --oneline` for the complete chunk history
-  (56535e3 → 3ce88b5 → be0ad0f → 8bea4bc → 3515fb8 → c60c532 → …).
+- **Final commit SHA:** `3f7ad7dd578abf4a30869392eb09c02d1499fd9e`
+  (release content at `b88f1b67e72204ab4470b62c93b79ad6b896baf4`); full
+  chunk history in [master-plan-v2.md](master-plan-v2.md):
+  56535e3 → 3ce88b5 → be0ad0f → 8bea4bc → 3515fb8 → c60c532 →
+  2c55593 → b88f1b6 → 3f7ad7d.
 - **Release version:** 1.1.0rc1 (pyproject.toml == `aperio.__version__`,
   asserted by tests/test_version.py)
 - **Working tree:** clean at the release commit; `dist/` artifacts are
@@ -47,10 +48,9 @@ simulations in the walkthrough docs — never real client deliveries.
 ## D. Verification evidence
 
 - **Local (this machine, macOS arm64):**
-  - Python 3.14.7 (repo venv): **1341 passed** (and re-run after E2E
-    integration — see master-plan-v2 Chunk 09 note for the exact final
-    count).
-  - Python 3.12.14 (clean venv, installed wheel): **1341 passed**.
+  - Python 3.14.7 (repo venv): **1344 passed** (final count,
+    including the A–Z simulation suite).
+  - Python 3.12.14 (clean venv, installed wheel): **1344 passed**.
   - Wheel contents verified: 14 benchmark cases + 11 skill packs as
     package data.
 - **CI:** GitHub Actions executed **zero** test steps for the entire
@@ -81,7 +81,7 @@ simulations in the walkthrough docs — never real client deliveries.
 **RELEASE CANDIDATE — EXTERNAL VALIDATION PENDING.**
 
 The documented local product workflow is installed, tested, and usable
-(1341 tests, two interpreters, clean wheel install), and every
+(1344 tests, two interpreters, clean wheel install), and every
 external-integration boundary (CI, live providers, additional
 platforms) is stated with its blocker rather than claimed. What remains
 before unrestricted deployment claims: CI execution (billing), live
@@ -93,7 +93,7 @@ to this repository's code.
 ```sh
 git clone https://github.com/SHAHID8142/aperio-next && cd aperio-next
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/python -m pytest          # full suite (~1341 tests, ~1 min)
+.venv/bin/python -m pytest          # full suite (1344 tests, ~1 min)
 .venv/bin/python -m pytest tests/test_e2e_website.py   # the A–Z walkthrough
 .venv/bin/python -m aperio benchmark-run               # M8 benchmark
 .venv/bin/python -m aperio --help                      # full command surface
