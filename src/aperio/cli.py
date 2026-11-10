@@ -59,6 +59,20 @@ Commands:
                                       build the sequential delegation plan
     aperio orchestrate-brief DIR TASK-ID GOAL
                                       render one specialist's scoped brief
+    aperio skill-import STORE SOURCE     import a skill pack as UNTRUSTED
+    aperio skill-list STORE [--json]     list the store's skills
+    aperio skill-show STORE NAME         inspect one skill (read-only)
+    aperio skill-review STORE NAME --action A --actor ID
+                                      approve or revoke (explicit review)
+    aperio skill-select STORE GOAL       select approved skills for a goal
+    aperio skill-export STORE [--output F]
+                                      export APPROVED skills portably
+    aperio skill-import-export STORE FILE
+                                      import a skill export (untrusted)
+    aperio work-status DIR [--skills-store S] [--json]
+                                      consolidated status view (read-only)
+    aperio serve-ui DIR [--port N] [--skills-store S]
+                                      local read-only UI (127.0.0.1 + token)
     aperio decision-add <dir> ...     append a decision (append-only)
     aperio handoff-write <dir> --file <handoff.json>
                                       replace the handoff with a validated one
@@ -220,6 +234,19 @@ from aperio.orchestrate import (
     render_specialist_brief_markdown,
     specialist_brief,
 )
+from aperio.skills import (
+    SkillStore,
+    builtin_skill_packs,
+    compose_skill_section,
+    export_approved_skills,
+    import_skill_export,
+    select_skills,
+)
+from aperio.workstatus import (
+    build_work_status,
+    render_work_status_markdown,
+)
+from aperio.localui import start_ui_server
 from aperio.planmodel import (
     PLAN_SCHEMA_VERSION,
     PLAN_SCHEMA_READ_VERSIONS,
@@ -908,6 +935,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--task-reference", metavar="TEXT",
         help="optional task label to carry into the brief",
     )
+    brief_parser.add_argument(
+        "--skills-store", metavar="DIR",
+        help="compose APPROVED skills from this store into the brief",
+    )
+    brief_parser.add_argument(
+        "--skill", action="append", default=[], metavar="NAME",
+        help="require this skill in the composition; repeatable",
+    )
     _add_memory_store_options(brief_parser)
     brief_parser.add_argument(
         "--json", dest="as_json", action="store_true",
@@ -1241,6 +1276,152 @@ def build_parser() -> argparse.ArgumentParser:
     orch_brief_parser.add_argument(
         "--json", dest="as_json", action="store_true",
         help="emit the brief as JSON",
+    )
+
+    # --- trust-aware skill packs ------------------------------------------
+    skill_import_parser = subparsers.add_parser(
+        "skill-import",
+        help="import a SKILL.md skill pack as UNTRUSTED",
+        description=(
+            "Import one SKILL.md file (or a directory holding SKILL.md) "
+            "into the operator-named skill store. Imported skills are "
+            "untrusted until an explicit skill-review approves them; "
+            "existing content is never overwritten."
+        ),
+    )
+    skill_import_parser.add_argument("store", metavar="STORE",
+                                     help="operator-named skill directory")
+    skill_import_parser.add_argument(
+        "source", metavar="SOURCE",
+        help="path to a SKILL.md file or a directory containing one",
+    )
+
+    skill_list_parser = subparsers.add_parser(
+        "skill-list",
+        help="list the skill store (read-only)",
+    )
+    skill_list_parser.add_argument("store", metavar="STORE")
+    skill_list_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit the skill list as JSON",
+    )
+
+    skill_show_parser = subparsers.add_parser(
+        "skill-show",
+        help="inspect one skill and its review history (read-only)",
+    )
+    skill_show_parser.add_argument("store", metavar="STORE")
+    skill_show_parser.add_argument("name", metavar="NAME")
+    skill_show_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+    )
+
+    skill_review_parser = subparsers.add_parser(
+        "skill-review",
+        help="explicitly approve or revoke one skill",
+        description=(
+            "Approval is the operator's explicit review decision; it is "
+            "recorded with the approver identity (a declaration, like "
+            "every actor id). Untrusted skills never compose into briefs."
+        ),
+    )
+    skill_review_parser.add_argument("store", metavar="STORE")
+    skill_review_parser.add_argument("name", metavar="NAME")
+    skill_review_parser.add_argument(
+        "--action", required=True, choices=("approve", "revoke"),
+        help="the review decision",
+    )
+    skill_review_parser.add_argument(
+        "--actor", required=True, metavar="ID",
+        help="declared reviewer identifier",
+    )
+    skill_review_parser.add_argument(
+        "--note", metavar="TEXT", help="optional review note",
+    )
+
+    skill_select_parser = subparsers.add_parser(
+        "skill-select",
+        help="select approved skills for a goal's profile (read-only)",
+        description=(
+            "Shows which approved skills would compose for the goal's "
+            "scope, rejected ones with reasons, declared conflicts, and "
+            "version supersessions. Read-only."
+        ),
+    )
+    skill_select_parser.add_argument("store", metavar="STORE")
+    skill_select_parser.add_argument(
+        "goal_file", metavar="GOAL_FILE", help="goal JSON file",
+    )
+    skill_select_parser.add_argument(
+        "--require", action="append", default=[], metavar="NAME",
+        help="require this skill in the selection; repeatable",
+    )
+    skill_select_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+    )
+
+    skill_export_parser = subparsers.add_parser(
+        "skill-export",
+        help="export APPROVED skills as a portable document",
+    )
+    skill_export_parser.add_argument("store", metavar="STORE")
+    skill_export_parser.add_argument(
+        "--output", required=True, metavar="FILE",
+        help="write the export document here",
+    )
+    skill_export_parser.add_argument(
+        "--force", action="store_true",
+        help="overwrite an existing --output file",
+    )
+
+    skill_import_export_parser = subparsers.add_parser(
+        "skill-import-export",
+        help="import a skill-export document (every skill enters untrusted)",
+    )
+    skill_import_export_parser.add_argument("store", metavar="STORE")
+    skill_import_export_parser.add_argument("file", metavar="FILE")
+
+    # --- consolidated UX: work status + optional read-only UI --------------
+    workstatus_parser = subparsers.add_parser(
+        "work-status",
+        help="one consolidated, read-only view of the whole engagement",
+        description=(
+            "Current work, pending brain-dump items and ideas, "
+            "awaiting reviews, verified completions vs unverified "
+            "signals, recent run outcomes, recovery status, and "
+            "available agents/skills — derived from durable state, "
+            "mutating nothing."
+        ),
+    )
+    workstatus_parser.add_argument("project", metavar="DIR")
+    workstatus_parser.add_argument(
+        "--skills-store", metavar="DIR",
+        help="include skills from this store",
+    )
+    workstatus_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+    )
+
+    serve_ui_parser = subparsers.add_parser(
+        "serve-ui",
+        help="serve the read-only local UI (loopback + token)",
+        description=(
+            "Serve the work-status view as a minimal local web UI. "
+            "Bound to 127.0.0.1 ONLY, with a per-launch random token in "
+            "the URL as the sole credential; GET-only (no write "
+            "endpoints exist), no remote assets. Ctrl-C stops it. The "
+            "CLI 'aperio work-status' is the equivalent without a "
+            "server."
+        ),
+    )
+    serve_ui_parser.add_argument("project", metavar="DIR")
+    serve_ui_parser.add_argument(
+        "--port", type=int, default=0,
+        help="port to bind (default: an ephemeral port)",
+    )
+    serve_ui_parser.add_argument(
+        "--skills-store", metavar="DIR",
+        help="include skills from this store",
     )
 
     # --- universal memory (M3) -------------------------------------------
@@ -2570,8 +2751,16 @@ def _cmd_agent_brief(args) -> None:
     memory = _preflight_memory_selection(
         args, objective=goal["objective"], profile=goal["profile"]
     )
+    skills_section = None
+    if getattr(args, "skills_store", None):
+        skills = SkillStore(Path(args.skills_store)).list_skills()
+        selection = select_skills(
+            skills, scope=goal["profile"], required=args.skill or None,
+        )
+        skills_section = compose_skill_section(selection)
     brief = build_agent_brief(
-        goal, memory_selection=memory, task_reference=args.task_reference
+        goal, memory_selection=memory, task_reference=args.task_reference,
+        skills_section=skills_section,
     )
     if args.as_json:
         text = json.dumps(brief, ensure_ascii=False, indent=2) + "\n"
@@ -2960,6 +3149,160 @@ def _cmd_orchestrate_brief(args) -> None:
                          + "\n")
         return
     sys.stdout.write(render_specialist_brief_markdown(brief))
+
+
+def _cmd_skill_import(args) -> None:
+    source = Path(args.source)
+    if source.is_dir():
+        candidate = source / "SKILL.md"
+    else:
+        candidate = source
+    if candidate.is_symlink():
+        raise ValidationError(
+            "refusing to follow a symlink for the skill source"
+        )
+    try:
+        text = candidate.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ValidationError(
+            f"cannot read skill source: {exc.strerror or exc}"
+        ) from None
+    except UnicodeDecodeError:
+        raise ValidationError("skill source must be valid UTF-8") from None
+    result = SkillStore(Path(args.store)).import_skill_md(
+        text, source=str(args.source)
+    )
+    skill = result["skill"]
+    print(f"{skill['name']} v{skill['version']}: {result['reason']}"
+          + (" — review it with: aperio skill-review " + args.store
+             + " " + skill["name"] + " --action approve --actor <you>"
+             if result["imported"] else ""))
+
+
+def _cmd_skill_list(args) -> None:
+    skills = SkillStore(Path(args.store)).list_skills()
+    if args.as_json:
+        sys.stdout.write(json.dumps(skills, ensure_ascii=False, indent=2)
+                         + "\n")
+        return
+    print(f"{len(skills)} skill(s) in {args.store}")
+    for skill in skills:
+        print(f"  {skill['name']} v{skill['version']} "
+              f"[{skill['state']['state']}] ({skill['scope']}) — "
+              f"{skill['description']}")
+
+
+def _cmd_skill_show(args) -> None:
+    skill = SkillStore(Path(args.store)).read_skill(args.name)
+    if args.as_json:
+        sys.stdout.write(json.dumps(skill, ensure_ascii=False, indent=2)
+                         + "\n")
+        return
+    print(render_skill_md_for_display(skill))
+
+
+def render_skill_md_for_display(skill: dict) -> str:
+    from aperio.skills import render_skill_md
+
+    header = render_skill_md(skill)
+    lines = [header.rstrip(), "", f"State: {skill['state']['state']}",
+             "Reviews:"]
+    for review in skill["state"]["reviews"]:
+        lines.append(
+            f"  - {review['action']} by {review['actor']} at "
+            f"{review['at']}" + (f" ({review['note']})" if review["note"]
+                                 else "")
+        )
+    return "\n".join(lines) + "\n"
+
+
+def _cmd_skill_review(args) -> None:
+    skill = SkillStore(Path(args.store)).review(
+        args.name, action=args.action, actor=args.actor, note=args.note,
+    )
+    print(f"{skill['name']} is now {skill['state']['state']} "
+          f"(recorded with actor {args.actor}; identity is a declaration)")
+
+
+def _cmd_skill_select(args) -> None:
+    goal = load_goal_file(args.goal_file)
+    skills = SkillStore(Path(args.store)).list_skills()
+    selection = select_skills(
+        skills, scope=goal["profile"], required=args.require or None,
+    )
+    if args.as_json:
+        sys.stdout.write(json.dumps(selection, ensure_ascii=False, indent=2)
+                         + "\n")
+        return
+    print(f"Selected for scope {goal['profile']!r}:")
+    for skill in selection["selected"]:
+        print(f"  + {skill['name']} v{skill['version']}")
+    for rejected in selection["rejected"]:
+        print(f"  - {rejected['name']}: {rejected['reason']}")
+    for conflict in selection["conflicts"]:
+        print(f"  ! conflict between "
+              f"{'/'.join(conflict['between'])}: {conflict['resolution']}")
+    for supersession in selection["superseded_versions"]:
+        print(f"  ~ {supersession['name']}: "
+              f"v{supersession['superseded_version']} superseded by "
+              f"v{supersession['kept_version']}")
+    print("Only approved skills compose; they are quoted guidance and "
+          "never outrank operator requirements.")
+
+
+def _cmd_skill_export(args) -> None:
+    document = export_approved_skills(Path(args.store))
+    publish_text_atomic(
+        Path(args.output), json.dumps(document, ensure_ascii=False, indent=2)
+        + "\n", force=args.force, what="skill export",
+    )
+    print(f"Exported {len(document['skills'])} approved skill(s) to "
+          f"{args.output}")
+
+
+def _cmd_skill_import_export(args) -> None:
+    path = Path(args.file)
+    if path.is_symlink():
+        raise ValidationError(
+            "refusing to follow a symlink for the skill export"
+        )
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValidationError(
+            f"cannot read skill export: {exc}"
+        ) from None
+    results = import_skill_export(Path(args.store), document)
+    for result in results["imported"]:
+        skill = result["skill"]
+        print(f"{skill['name']} v{skill['version']}: {result['reason']}")
+    print("All imported skills are untrusted until reviewed.")
+
+
+def _cmd_work_status(args) -> None:
+    document = build_work_status(
+        Path(args.project) / ".aperio",
+        skill_store=Path(args.skills_store) if args.skills_store else None,
+    )
+    if args.as_json:
+        sys.stdout.write(json.dumps(document, ensure_ascii=False, indent=2)
+                         + "\n")
+        return
+    sys.stdout.write(render_work_status_markdown(document))
+
+
+def _cmd_serve_ui(args) -> None:
+    handle = start_ui_server(
+        Path(args.project) / ".aperio", port=args.port,
+        skill_store=Path(args.skills_store) if args.skills_store else None,
+    )
+    print(f"Serving the READ-ONLY work-status UI on {handle['url']}")
+    print("Loopback only; GET-only; Ctrl-C to stop.")
+    try:
+        handle["thread"].join()
+    except KeyboardInterrupt:
+        handle["server"].shutdown()
+        print("\nUI stopped.")
 
 
 def _cmd_goal_check(args) -> None:
@@ -4590,6 +4933,24 @@ def main(argv: list[str] | None = None) -> int:
             _cmd_orchestrate_plan(args)
         elif args.command == "orchestrate-brief":
             _cmd_orchestrate_brief(args)
+        elif args.command == "skill-import":
+            _cmd_skill_import(args)
+        elif args.command == "skill-list":
+            _cmd_skill_list(args)
+        elif args.command == "skill-show":
+            _cmd_skill_show(args)
+        elif args.command == "skill-review":
+            _cmd_skill_review(args)
+        elif args.command == "skill-select":
+            _cmd_skill_select(args)
+        elif args.command == "skill-export":
+            _cmd_skill_export(args)
+        elif args.command == "skill-import-export":
+            _cmd_skill_import_export(args)
+        elif args.command == "work-status":
+            _cmd_work_status(args)
+        elif args.command == "serve-ui":
+            _cmd_serve_ui(args)
         elif args.command == "mem-propose":
             _cmd_mem_propose(args)
         elif args.command == "mem-review":

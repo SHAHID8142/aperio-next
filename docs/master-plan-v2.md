@@ -37,9 +37,9 @@ complete.
 | 02 | Task continuity: checkpoints + recovery | COMPLETE | be0ad0f |
 | 03 | Goal→plan bridge + priority-aware scheduling | COMPLETE | 8bea4bc |
 | 04 | Controlled multi-agent orchestration (sequential-first) | COMPLETE | this chunk |
-| 05 | Trust-aware portable skill packs (+ builtin packs) | PENDING | — |
+| 05 | Trust-aware portable skill packs (+ builtin packs) | COMPLETE | this commit |
 | 06 | Website-delivery + 30-day SEO workflows (templates + docs) | COMPLETE (docs) | agent docs: website-delivery.md, seo-30-day.md, host-integration.md — commit with Chunk 07 |
-| 07 | UX: work-status view, read-only loopback UI, host matrix | IN_PROGRESS | host matrix doc done |
+| 07 | UX: work-status view, read-only loopback UI, host matrix | COMPLETE | this commit (host matrix cbb1495) |
 | 08 | E2E A–Z simulation + full audit matrices | PENDING | — |
 | 09 | Packaging, docs, release readiness | PENDING | — |
 
@@ -130,7 +130,7 @@ included) and its SHA is recorded.
 
 ## Exact next action
 
-Current: **Chunk 05 — Trust-aware portable skill packs.**
+Current: **Chunk 08 — E2E A–Z simulation + audit matrices.**
 
 ## Chunk notes (evidence log)
 
@@ -218,3 +218,32 @@ Orchestration store validates on read/write (duplicate delegations,
 sequential_only tampering, oversize refused).
 
 **Tests:** 12 new. Suite 1309 passed (3.14.7).
+
+### Chunks 05 + 07 — COMPLETE (this commit)
+
+**Chunk 05 — skills** (`skills.py` + 8 CLI commands + docs/skills.md +
+11 builtin packs as package data): SKILL.md-compatible format
+(HTML-comment header, bounded, no executable content); operator-named
+store; imports enter `untrusted` and only an explicit review approves
+(revocations recorded); content changes reset trust (approval never
+carries over; same-version different-content refused); builtin packs
+ship `aperio-builtin-v1` and still enter untrusted; selection is
+scope-matched with explicit rejections, declared-conflict blocking, and
+version supersession; `agent-brief --skills-store` composes approved
+skills under the trust boundary (never gating anything); exports carry
+approved-only content with hash verification on import and no machine
+paths.
+
+**Chunk 07 — UX** (`workstatus.py` + `localui.py` + `work-status`/
+`serve-ui` CLI): one consolidated read-only document (current work,
+pending brain-dump items/ideas/conflicts, awaiting reviews, verified
+completions vs unverified signals, recent run outcomes, recovery
+eligibility, available agents/skills) feeding both the CLI rendering
+and a minimal local web UI — bound to 127.0.0.1 ONLY, per-launch random
+URL token (403 without it), GET-only (POST returns 405; no write
+endpoints exist at all), no remote assets, semantic HTML. The CLI is
+the primary interface; the UI is optional.
+
+**Tests:** 44 new (20 skills incl. builtin-pack graph checks, 11 UX
+incl. live-HTTP auth/405/loopback/token-uniqueness assertions). Suite
+1341 passed (3.14.7).

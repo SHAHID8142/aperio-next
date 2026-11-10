@@ -87,7 +87,8 @@ def _digest(payload: object) -> str:
 
 
 def build_agent_brief(goal: dict, *, memory_selection: dict | None = None,
-                      task_reference: str | None = None) -> dict:
+                      task_reference: str | None = None,
+                      skills_section: dict | None = None) -> dict:
     """Assemble the agent-ready instruction package for an operator goal.
 
     ``memory_selection`` is an optional M3 recall selection (the output of
@@ -145,6 +146,8 @@ def build_agent_brief(goal: dict, *, memory_selection: dict | None = None,
                 proposals.append(entry)
         conflicts = list(memory_selection.get("conflicts") or [])
 
+    if skills_section is not None and skills_section.get("skills"):
+        pass  # validated composition; rendered below and stored in content
     content = {
         "kind": "agent-brief",
         "goal": {
@@ -180,8 +183,13 @@ def build_agent_brief(goal: dict, *, memory_selection: dict | None = None,
         if memory_selection is not None
         else None,
         "uncertainties": list(goal["uncertainties"]),
+        "skills": skills_section,
         "trust_boundary": _TRUST_BOUNDARY_TEXT,
-        "limitations": list(_BRIEF_LIMITS),
+        "limitations": list(_BRIEF_LIMITS + (
+            "selected skills are quoted guidance under this boundary; "
+            "operator requirements outrank them and they never gate "
+            "approval or completion",
+        ) if skills_section else ()),
     }
     return {
         "format": BRIEF_FORMAT,
@@ -326,6 +334,27 @@ def render_agent_brief_markdown(brief: dict) -> str:
             lines.append(f"- {item}")
         lines.append("")
 
+    skills = content.get("skills")
+    if skills and skills.get("skills"):
+        lines.append("## Selected skills (quoted guidance)")
+        lines.append("")
+        lines.append(skills["note"])
+        lines.append("")
+        for skill in skills["skills"]:
+            body = _quote_content(skill["body"])
+            lines.append(
+                f"### {skill['name']} v{skill['version']} "
+                f"[{skill['scope']}]"
+            )
+            lines.append("")
+            lines.append(body)
+            lines.append("")
+        if skills.get("untrusted_rejected"):
+            lines.append("Not composed (untrusted or scope mismatch):")
+            lines.append("")
+            for rejected in skills["untrusted_rejected"]:
+                lines.append(f"- {rejected['name']}: {rejected['reason']}")
+            lines.append("")
     lines.append("## Trust boundaries and limits")
     lines.append("")
     lines.append(content["trust_boundary"])
