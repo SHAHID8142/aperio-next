@@ -49,10 +49,29 @@ or reports.
 - Import is not a filesystem transaction: a hard crash can leave a
   subset, which `integrity` diagnoses and a re-run finishes.
 
+## Brain Dump, orchestration, and skills (v1.1)
+
+- Classification is keyword triage: a message about the task can be
+  routed "related" by a shared word, and a genuinely related item
+  phrased without overlap lands as ambiguous. Every item keeps its raw
+  text and the operator reviews before anything becomes work.
+- Urgency authority is the operator's `--urgent` flag only; detected
+  urgency language has no authority and is reported, never acted on.
+- Orchestration is sequential-only: parallel delegation is not offered
+  because write-scope isolation cannot be proven for the existing
+  adapters (an assessment never spawns anything; dispatch stays behind
+  the ordinary gates).
+- Skills are guidance, not verified improvements: no performance claims
+  are made for any pack; conflicts block composition; approval records
+  a declared identity only.
+- The loopback UI is read-only and token-gated, but same-machine
+  processes can read the token from the process command line — use it
+  on a machine you control.
+
 ## Verification coverage (this release candidate)
 
-- **GitHub Actions has executed zero test steps for the entire 0.13→1.0
-  series** (account billing lock). Every green claim in the docs and the
+- **GitHub Actions has executed zero test steps for the entire
+  0.13→1.1 series** (account billing lock). Every green claim in the docs and the
   release notes is from local runs: Python 3.14.7 and 3.12.14 (the
   latter against the built wheel), 1248 tests each.
 - Python 3.11 and 3.13 are declared supported and exercised in the

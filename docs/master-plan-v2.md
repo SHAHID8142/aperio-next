@@ -41,7 +41,7 @@ complete.
 | 06 | Website-delivery + 30-day SEO workflows (templates + docs) | COMPLETE (docs) | agent docs: website-delivery.md, seo-30-day.md, host-integration.md — commit with Chunk 07 |
 | 07 | UX: work-status view, read-only loopback UI, host matrix | COMPLETE | this commit (host matrix cbb1495) |
 | 08 | E2E A–Z simulation + full audit matrices | PENDING | — |
-| 09 | Packaging, docs, release readiness | PENDING | — |
+| 09 | Packaging, docs, release readiness | COMPLETE (final count pending E2E test) | this commit |
 
 Statuses: PENDING / IN_PROGRESS / BLOCKED / FAILED / COMPLETE. A chunk is
 COMPLETE only when its acceptance criteria pass locally (full suite
@@ -130,7 +130,7 @@ included) and its SHA is recorded.
 
 ## Exact next action
 
-Current: **Chunk 08 — E2E A–Z simulation + audit matrices.**
+Current: **Chunk 08 (E2E A–Z test in review) → Chunk 09 finalization.**
 
 ## Chunk notes (evidence log)
 
@@ -247,3 +247,14 @@ the primary interface; the UI is optional.
 **Tests:** 44 new (20 skills incl. builtin-pack graph checks, 11 UX
 incl. live-HTTP auth/405/loopback/token-uniqueness assertions). Suite
 1341 passed (3.14.7).
+
+### Chunk 09 packaging evidence (pre-E2E)
+
+- Version 1.1.0rc1 across pyproject + package; wheel builds with 14
+  benchmark case files AND 11 skill packs as verified package data.
+- Clean-venv install on Python 3.12.14 from the built wheel: CLI entry
+  point runs, full 1341-test suite green against the installed wheel.
+- Python 3.14.7 repo venv: 1341 green.
+- README (status lines + doc index for all 20 documents), release notes
+  (1.1.0rc1 section), limitations (v1.1 honesty section) updated.
+- Final handoff: docs/final-handoff.md (directive §15 structure).

@@ -1,5 +1,55 @@
 # Release notes
 
+## 1.1.0rc1 — product-completion release candidate
+
+The second master program (the "final product completion" before the
+independent external audit) delivered, on top of 1.0.0rc1:
+
+- **Brain Dump Guard** — `aperio capture` preserves mid-task messages
+  verbatim in an append-only chain-hashed intake log; a deterministic
+  keyword heuristic routes items (related → checkpoint first, unrelated
+  → queued, ideas → never executed) and is labeled as heuristic
+  everywhere; urgency authority has exactly one channel (the operator's
+  `--urgent` flag — urgency words in text are detected and reported
+  with authority: none); `inbox`/`inbox-resolve` review the queue.
+  Cooperative same-chat protocol documented; never claimed as host
+  interception.
+- **Durable continuity** — `checkpoint-write/show/recover`: a CAS
+  checkpoint derived only from durable artifacts, refreshed at
+  meaningful transitions, with drift detection, verified-vs-unverified
+  separation, and gated resume eligibility.
+- **Goal-to-plan bridge + priority scheduling** — `plan-propose-from-goal`
+  converts a goal's descriptive decomposition into a plan proposal
+  through the ordinary gated plan-create (a breakdown is never an
+  approved plan); plan-schema v2 adds optional per-task priority with
+  v1 documents fully readable; the scheduler orders by (priority rank,
+  task id) with visible rationale.
+- **Controlled orchestration** — `orchestrate-assess/plan/brief`:
+  explainable single-agent vs specialist recommendation from
+  operator-declared capabilities, sequential-only (parallel not
+  offered), delegations through the ordinary gates, scoped specialist
+  briefs.
+- **Skill packs** — SKILL.md-compatible, trust-aware: imports untrusted
+  until explicit review; content changes reset trust; conflicts block
+  composition; exports approved-only; 11 builtin packs (requirements,
+  UX/IA, design systems, accessibility, frontend, backend/CMS,
+  security, testing, release, technical SEO, SEO content reporting).
+- **Workflows** — docs/website-delivery.md (13-stage client walkthrough)
+  and docs/seo-30-day.md (30-day SEO with no-guarantees/no-invented-data
+  rules); host honesty in docs/host-integration.md.
+- **UX** — consolidated `aperio work-status`; optional `aperio
+  serve-ui`: a READ-ONLY loopback UI (127.0.0.1 only, per-launch URL
+  token, GET-only, no write endpoints, no remote assets).
+
+**Verification (local, honestly reported):** 1341+ tests green on
+Python 3.14.7; one cross-interpreter run on 3.12.14; the wheel builds
+with benchmark cases and skill packs as package data. GitHub Actions
+remains blocked by the account billing lock (zero CI steps executed).
+One non-reproducible test flake observed twice under concurrent local
+load (triaged post-RC). Live provider execution and 3.11/3.13/Windows
+remain unverified. See [limitations.md](limitations.md).
+
+
 ## 1.0.0rc1 — release candidate
 
 Aperio Next 1.0.0rc1 is the completed release candidate: the universal

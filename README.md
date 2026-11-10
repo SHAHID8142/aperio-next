@@ -34,6 +34,7 @@ Anything not listed below is **planned, not implemented**. See
 - Implemented (M1): `aperio context-pack [workspace]` with `general` (default) and optional `software` profiles, Markdown/JSON output, deterministic byte budgeting, trust/provenance labels, imported/proposed context labels, and strict read-only operation
 - Implemented (M2): `aperio profiles`, `aperio goal-check`, and `aperio goal-pack` — a versioned universal goal contract (goal-schema v1), six data-only task profiles, optional work decomposition, and goal→context-pack conversion that works with no project, provider, or model API
 - Audited (Chunk 07): end-to-end pipeline integration test, security audit over injection/trust/privacy/paths/publication/concurrency/destructive operations (docs/security-model.md), compatibility audit (all Feature 01-07 commands and M1-M3 schemas unchanged), and usability: every universal workflow runs standalone with no project initialization
+- Implemented (v1.1 program): Brain Dump Guard (`capture`/`inbox`/`inbox-resolve` — durable mid-task intake with keyword triage labeled as such and urgency authority only via the operator's --urgent flag), durable checkpoints (`checkpoint-write`/`show`/`recover`), goal-to-plan bridge (`plan-propose-from-goal`), priority-aware scheduling (plan-schema v2), controlled orchestration (`orchestrate-assess/plan/brief` — sequential only), trust-aware skill packs (`skill-*` + 11 builtin packs), consolidated `work-status`, and the optional read-only loopback UI (`serve-ui`)
 - Release candidate: 1.0.0rc1 — all master-plan chunks complete; see [docs/release-notes.md](docs/release-notes.md) for what is verified and what is not
 - Implemented (M8): `aperio benchmark-cases` / `benchmark-run` — an offline, reproducible cross-domain benchmark (14 versioned cases, all six domains) measuring detection of planted flaws, trust-boundary enforcement, cross-agent information preservation, memory correctness, and overhead — with human-judged metrics listed per case and never scored, no aggregate quality score, and regressions always reported
 - Implemented (M7): `aperio agent-brief` — a paste-ready agent instruction package (objective, requirements, output contract, quality criteria + advisory profile self-checks, reviewed memory and accepted lessons, uncertainties, trust boundaries); strengthened six-domain profile model with advisory suggested checks; tested manual copy/paste workflows (docs/agent-workflows.md) and a per-provider support/limits guide (docs/providers.md)
@@ -70,7 +71,13 @@ the honest non-claims — is [docs/security-model.md](docs/security-model.md).
 | [Release notes](docs/release-notes.md) | 1.0.0rc1 contents and verification |
 | [Limitations](docs/limitations.md) | known limits, stated plainly |
 | [Troubleshooting](docs/troubleshooting.md) | common errors and fixes |
-| [Master plan](docs/master-completion-plan.md) | the completion record with SHAs |
+| [Master plan v1](docs/master-completion-plan.md) | the 1.0 completion record with SHAs |
+| [Brain Dump Guard](docs/brain-dump.md) | mid-task capture, the same-chat protocol, host honesty |
+| [Skills](docs/skills.md) | trust-aware skill packs, selection, composition |
+| [Website delivery](docs/website-delivery.md) | the optional 13-stage client workflow |
+| [30-day SEO](docs/seo-30-day.md) | the optional SEO service workflow, honest data rules |
+| [Host integration](docs/host-integration.md) | the truthful host capability matrix |
+| [Master plan v2](docs/master-plan-v2.md) | the product-completion record with SHAs |
 
 ## Requirements
 
