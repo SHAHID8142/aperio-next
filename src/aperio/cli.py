@@ -45,6 +45,11 @@ Commands:
     aperio inbox DIR [--json]           show pending captures and items
     aperio inbox-resolve DIR CAPTURE-ID ITEM --action A
                                       acknowledge or dismiss one item
+    aperio checkpoint-write DIR --reason R
+                                      derive and publish a durable checkpoint
+    aperio checkpoint-show DIR [--json]
+                                      show the current checkpoint
+    aperio recover DIR [--json]         recovery inspection after a crash
     aperio decision-add <dir> ...     append a decision (append-only)
     aperio handoff-write <dir> --file <handoff.json>
                                       replace the handoff with a validated one
@@ -186,6 +191,12 @@ from aperio.intake import (
     capture as capture_message,
     resolve as resolve_intake_item,
     IntakeLog,
+)
+from aperio.checkpoint import (
+    read_checkpoint,
+    recover_report,
+    refresh_checkpoint,
+    render_recovery_markdown,
 )
 from aperio.benchmark import (
     builtin_cases,
@@ -1023,6 +1034,58 @@ def build_parser() -> argparse.ArgumentParser:
     )
     inbox_resolve_parser.add_argument(
         "--note", metavar="TEXT", help="optional note",
+    )
+
+    # --- durable task continuity: checkpoints -----------------------------
+    checkpoint_write_parser = subparsers.add_parser(
+        "checkpoint-write",
+        help="derive and publish a durable checkpoint from current state",
+        description=(
+            "Derive a checkpoint from durable state (plan, executions, "
+            "intake log) and publish it through a byte compare-and-swap. "
+            "Called automatically at meaningful transitions; call it "
+            "explicitly before pausing work and after any recovery "
+            "review."
+        ),
+    )
+    checkpoint_write_parser.add_argument(
+        "project", metavar="DIR", help="initialized Aperio project directory",
+    )
+    checkpoint_write_parser.add_argument(
+        "--reason", required=True, metavar="TEXT",
+        help="why this checkpoint was written (e.g. 'before pausing')",
+    )
+
+    checkpoint_show_parser = subparsers.add_parser(
+        "checkpoint-show",
+        help="show the current durable checkpoint (read-only)",
+    )
+    checkpoint_show_parser.add_argument(
+        "project", metavar="DIR", help="initialized Aperio project directory",
+    )
+    checkpoint_show_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit the checkpoint document as JSON",
+    )
+
+    recover_parser = subparsers.add_parser(
+        "recover",
+        help="recovery inspection: checkpoint vs current durable state",
+        description=(
+            "After an interruption or crash: validate the checkpoint, "
+            "compare it against current durable state, report drift, "
+            "separate verified completions from unverified agent claims, "
+            "and state resume eligibility with reasons. Read-only: "
+            "recovery never mutates anything and never invents "
+            "completion."
+        ),
+    )
+    recover_parser.add_argument(
+        "project", metavar="DIR", help="initialized Aperio project directory",
+    )
+    recover_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit the recovery report as JSON",
     )
 
     # --- universal memory (M3) -------------------------------------------
@@ -2456,6 +2519,9 @@ def _cmd_capture(args) -> None:
         + str(args.project)
     )
 
+    _refresh_after_transition(
+        Path(getattr(args, 'project')) / ".aperio", 'brain-dump captured'
+    )
 
 def _cmd_inbox(args) -> None:
     state = IntakeLog(Path(args.project) / ".aperio").read()
@@ -2526,6 +2592,78 @@ def _cmd_inbox_resolve(args) -> None:
     )
     print(f"Recorded {event['action']} on {event['capture_id']}"
           f"[{event['item_index']}] (append-only; intake history unchanged)")
+
+    _refresh_after_transition(
+        Path(getattr(args, 'project')) / ".aperio", 'intake item resolved'
+    )
+
+def _aperio_dir_of(args) -> Path:
+    return Path(args.project) / ".aperio"
+
+
+def _refresh_after_transition(aperio_dir: Path, reason: str) -> None:
+    """Write a checkpoint after a meaningful state transition.
+
+    Best-effort by design: a checkpoint failure must never corrupt the
+    transition that just happened, so failures are reported on stderr
+    and leave the transition intact.
+    """
+
+    try:
+        refresh_checkpoint(aperio_dir, reason=reason)
+    except Exception as exc:  # noqa: BLE001 - deliberate: continuity aid
+        print(
+            f"warning: checkpoint not updated ({str(exc)[:160]})",
+            file=sys.stderr,
+        )
+
+
+def _cmd_checkpoint_write(args) -> None:
+    document = refresh_checkpoint(_aperio_dir_of(args), reason=args.reason)
+    print(
+        f"Checkpoint revision {document['revision']} written "
+        f"({document['written_at']}): {document['next_recommended_action']}"
+    )
+
+
+def _cmd_checkpoint_show(args) -> None:
+    document = read_checkpoint(_aperio_dir_of(args))
+    if args.as_json:
+        sys.stdout.write(json.dumps(document, ensure_ascii=False, indent=2)
+                         + "\n")
+        return
+    print(f"Checkpoint revision {document['revision']} "
+          f"({document['written_at']}, reason: {document['reason']})")
+    tasks = document["tasks_summary"]
+    print(f"Verified completed: {len(tasks['verified_completed'])}"
+          f"; completed without evidence: "
+          f"{len(tasks['completed_without_evidence'])}"
+          f"; in progress: {len(tasks['in_progress'])}"
+          f"; pending: {len(tasks['pending'])}"
+          f"; blocked: {len(tasks['blocked'])}")
+    if document["active_task"]:
+        print(f"Active task: {document['active_task']['task_id']}"
+              f" ({document['active_task'].get('title')})")
+    print(f"Inbox: {document['inbox']['pending_items']} pending, "
+          f"{document['inbox']['urgent_pending']} urgent")
+    if document["unverified_signals"]:
+        print("Unverified signals (not evidence):")
+        for signal in document["unverified_signals"]:
+            print(f"  - {signal}")
+    print(f"Next: {document['next_recommended_action']}")
+    print(f"Resume eligibility: "
+          f"{'eligible' if document['resume_eligibility']['eligible'] else 'gated'}")
+    for reason in document["resume_eligibility"]["reasons"]:
+        print(f"  - {reason}")
+
+
+def _cmd_recover(args) -> None:
+    report = recover_report(_aperio_dir_of(args))
+    if args.as_json:
+        sys.stdout.write(json.dumps(report, ensure_ascii=False, indent=2)
+                         + "\n")
+        return
+    sys.stdout.write(render_recovery_markdown(report))
 
 
 def _cmd_goal_check(args) -> None:
@@ -3197,6 +3335,9 @@ def _cmd_phase_set(args) -> None:
     else:
         print(f"phase unchanged: {result.new_phase}")
 
+    _refresh_after_transition(
+        Path(getattr(args, 'project_directory')) / ".aperio", 'project phase changed'
+    )
 
 def _cmd_plan_create(args) -> None:
     content = _read_plan_input(args.file)
@@ -3610,6 +3751,9 @@ def _cmd_run_report(args) -> None:
         "manual Feature-03 step."
     )
 
+    _refresh_after_transition(
+        Path(getattr(args, 'project_directory')) / ".aperio", 'run outcome reported'
+    )
 
 def _cmd_run_handoff(args) -> None:
     aperio = aperio_dir_for(
@@ -3704,6 +3848,9 @@ def _cmd_task_status(args) -> None:
     owner = f", owner: {task['owner']}" if task["owner"] else ""
     print(f"task {task['id']}: {task['status']}{owner}{extra}")
 
+    _refresh_after_transition(
+        Path(getattr(args, 'project_directory')) / ".aperio", 'task status changed'
+    )
 
 def _cmd_export(args) -> None:
     report = export_project(
@@ -4122,6 +4269,12 @@ def main(argv: list[str] | None = None) -> int:
             _cmd_inbox(args)
         elif args.command == "inbox-resolve":
             _cmd_inbox_resolve(args)
+        elif args.command == "checkpoint-write":
+            _cmd_checkpoint_write(args)
+        elif args.command == "checkpoint-show":
+            _cmd_checkpoint_show(args)
+        elif args.command == "recover":
+            _cmd_recover(args)
         elif args.command == "mem-propose":
             _cmd_mem_propose(args)
         elif args.command == "mem-review":

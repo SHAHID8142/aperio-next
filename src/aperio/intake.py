@@ -395,6 +395,52 @@ class IntakeLog:
         return pending
 
     # -- writing -----------------------------------------------------------
+    def append_decided(self, build_event) -> dict:
+        """Decide and append atomically: the whole decision (ids, counts,
+        duplicate checks, chain head) is computed inside the lock from the
+        validated file, then one complete event is appended. This is the
+        only write path."""
+
+        token = acquire_lock(self.lock_path, artifact="intake log")
+        try:
+            state = self.read()
+            if state["damaged"]:
+                raise StateError(
+                    "the intake log has damaged or unverifiable lines; "
+                    "inspect .aperio/inbox.jsonl and repair it by hand "
+                    "before capturing more"
+                )
+            previous = None
+            if self.path.exists():
+                with self.path.open("r", encoding="utf-8") as handle:
+                    for raw in handle:
+                        raw = raw.rstrip("\n")
+                        if raw:
+                            previous = json.loads(raw).get(_CHAIN_FIELD)
+            event = build_event(state)
+            flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT
+            flags |= getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(self.path, flags, 0o600)
+            try:
+                payload = dict(event)
+                payload[_CHAIN_FIELD] = line_sha256(payload, previous)
+                data = (json.dumps(payload, ensure_ascii=False)
+                        + "\n").encode("utf-8")
+                written = 0
+                while written < len(data):
+                    written += os.write(fd, data[written:])
+                if written == 0:
+                    raise StateError(
+                        "intake append wrote zero bytes; treating as "
+                        "damage rather than success"
+                    )
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            return event
+        finally:
+            release_lock(self.lock_path, token)
+
     def _append(self, line: dict) -> None:
         """Validate, chain, and append entirely inside the lock.
 
@@ -545,21 +591,22 @@ def capture(
     items = _split_and_classify(message, operator_urgent=operator_urgent,
                                 active_task_terms=terms)
     log = IntakeLog(aperio_dir)
-    state = log.read()
-    capture_id = f"INT-{len(state['captures']) + len(state['resolves']) + 1:04d}"
-    event = {
-        "record": "capture",
-        "capture_id": capture_id,
-        "at": _utc_now(),
-        "actor": actor,
-        "channel": channel,
-        "operator_urgent": operator_urgent,
-        "message": message,
-        "items": items,
-        "active_task": active,
-    }
-    log._append(event)
-    return event
+
+    def build_event(state: dict) -> dict:
+        serial = len(state["captures"]) + len(state["resolves"]) + 1
+        return {
+            "record": "capture",
+            "capture_id": f"INT-{serial:04d}",
+            "at": _utc_now(),
+            "actor": actor,
+            "channel": channel,
+            "operator_urgent": operator_urgent,
+            "message": message,
+            "items": items,
+            "active_task": active,
+        }
+
+    return log.append_decided(build_event)
 
 
 def confirmation_line(event: dict) -> str:
@@ -621,45 +668,47 @@ def resolve(
             "intake resolve action must be one of: "
             + ", ".join(RESOLVE_ACTIONS)
         )
-    log = IntakeLog(aperio_dir)
-    state = log.read()
-    capture_event = next(
-        (c for c in state["captures"] if c["capture_id"] == capture_id),
-        None,
-    )
-    if capture_event is None:
-        raise ValidationError(
-            f"no capture {capture_id!r} in the intake log"
-        )
-    if not isinstance(item_index, int) or not (
-        0 <= item_index < len(capture_event["items"])
-    ):
-        raise ValidationError(
-            f"item index {item_index!r} is outside capture {capture_id}"
-        )
-    if (capture_id, item_index) in {
-        (r["capture_id"], r["item_index"]) for r in state["resolves"]
-    }:
-        raise ValidationError(
-            f"item {capture_id}[{item_index}] is already resolved; "
-            "intake history is append-only"
-        )
     actor = _check_text(actor, "resolve.actor", max_bytes=MAX_ACTOR_BYTES,
                         single_line=True)
     if note is not None:
         note = _check_text(note, "resolve.note", max_bytes=MAX_NOTE_BYTES)
-    event = {
-        "record": "resolve",
-        "resolve_id": f"RES-{len(state['captures']) + len(state['resolves']) + 1:04d}",
-        "at": _utc_now(),
-        "actor": actor,
-        "capture_id": capture_id,
-        "item_index": item_index,
-        "action": action,
-        "note": note,
-    }
-    log._append(event)
-    return event
+    log = IntakeLog(aperio_dir)
+
+    def build_event(state: dict) -> dict:
+        capture_event = next(
+            (c for c in state["captures"] if c["capture_id"] == capture_id),
+            None,
+        )
+        if capture_event is None:
+            raise ValidationError(
+                f"no capture {capture_id!r} in the intake log"
+            )
+        if not isinstance(item_index, int) or not (
+            0 <= item_index < len(capture_event["items"])
+        ):
+            raise ValidationError(
+                f"item index {item_index!r} is outside capture {capture_id}"
+            )
+        if (capture_id, item_index) in {
+            (r["capture_id"], r["item_index"]) for r in state["resolves"]
+        }:
+            raise ValidationError(
+                f"item {capture_id}[{item_index}] is already resolved; "
+                "intake history is append-only"
+            )
+        serial = len(state["captures"]) + len(state["resolves"]) + 1
+        return {
+            "record": "resolve",
+            "resolve_id": f"RES-{serial:04d}",
+            "at": _utc_now(),
+            "actor": actor,
+            "capture_id": capture_id,
+            "item_index": item_index,
+            "action": action,
+            "note": note,
+        }
+
+    return log.append_decided(build_event)
 
 
 __all__ = [

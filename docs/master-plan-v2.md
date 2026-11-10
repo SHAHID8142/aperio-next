@@ -33,8 +33,8 @@ complete.
 | Chunk | Deliverable | Status | Commit |
 |---|---|---|---|
 | 00 | Baseline + architecture closure | COMPLETE | 56535e3 |
-| 01 | Brain Dump Guard + durable intake | PENDING | — |
-| 02 | Task continuity: checkpoints + recovery | PENDING | — |
+| 01 | Brain Dump Guard + durable intake | COMPLETE | 3ce88b5 |
+| 02 | Task continuity: checkpoints + recovery | COMPLETE | this chunk |
 | 03 | Goal→plan bridge + priority-aware scheduling | PENDING | — |
 | 04 | Controlled multi-agent orchestration (sequential-first) | PENDING | — |
 | 05 | Trust-aware portable skill packs (+ builtin packs) | PENDING | — |
@@ -130,8 +130,42 @@ included) and its SHA is recorded.
 
 ## Exact next action
 
-Current: **Chunk 01 — Brain Dump Guard and durable intake.**
+Current: **Chunk 03 — Goal→plan bridge + priority-aware scheduling.**
 
 ## Chunk notes (evidence log)
 
 Appended per chunk with sources, tests, results, and SHAs.
+
+### Chunk 01 — COMPLETE (commit 3ce88b5, on top of 56535e3)
+
+Brain Dump Guard runtime path: `src/aperio/intake.py` + `capture`/`inbox`/
+`inbox-resolve` CLI + docs/brain-dump.md. Append-only chain-hashed intake
+log with decide-under-lock semantics (IDs, duplicate checks, and chain
+head computed inside the lock — a race found and fixed during the chunk's
+own testing). Deterministic lexicon classification labeled
+heuristic-keyword everywhere; emergency authority only via --urgent
+(text urgency language detected and reported with authority: none);
+nothing captured executes; active-task identity durable across plan
+revisions (approval state reported separately). 20 tests. One defect
+found by the chunk's own tests and fixed before commit: unlocked
+chain-head computation allowed concurrent appends to corrupt each other.
+
+### Chunk 02 — COMPLETE (this commit)
+
+`src/aperio/checkpoint.py` + `checkpoint-write`/`checkpoint-show`/
+`recover` CLI + automatic refresh hooks at meaningful transitions
+(task-status, run-report, phase-set, capture, inbox-resolve — hook
+failure never corrupts the transition). Checkpoint = CAS document
+(checkpoint-schema v1) derived ONLY from durable artifacts: active task,
+task summary with verified_completed (plan-lifecycle evidence) vs
+completed_without_evidence, unverified signals, inbox pending/urgent,
+next action (urgent > active-runs > in-progress > dispatch > approval
+gates), resume eligibility with reasons. Recovery report: validates,
+detects drift (plan_version/active task/intake moved), separates
+verified from claimed work, gates resume on draft plans/active runs,
+never invents completion, never auto-repairs damage. Idempotent
+re-derivation keeps revision unless content or reason changed. 14 tests.
+Two hook-attribute defects (wrong Namespace attr per handler) found and
+fixed during the chunk's own tests. P2 note: one planstore concurrency
+test flaked once under full-suite load (passes 3x isolated and 3x in
+suite) — added to the de-flake triage.
