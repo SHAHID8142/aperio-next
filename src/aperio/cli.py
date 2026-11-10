@@ -270,11 +270,13 @@ from aperio.runtime import (
     cancel_run,
     dispatch_task,
     execution_preview,
+    read_executions,
     read_executions_or_fail,
     read_run_handoff,
     reconcile_runs,
     record_external_result,
 )
+from aperio.recovery import recovery_report
 from aperio.planmodel import ready_task_ids
 from aperio.adapters import builtin_adapters, provider_doctor
 from aperio.planmodel import priority_rank
@@ -2083,6 +2085,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--previous-run", help="link a retry to the run it replaces"
     )
     run_start_parser.add_argument(
+        "--remediation",
+        help="for retries: the new evidence or changed root-cause "
+        "hypothesis justifying another attempt (required after a failed "
+        "run; capped at 3 attempts per problem signature)",
+    )
+    run_start_parser.add_argument(
         "--actor", help="declared actor id (required when governance is enabled)"
     )
     run_start_parser.add_argument(
@@ -2122,6 +2130,20 @@ def build_parser() -> argparse.ArgumentParser:
     runs_reconcile_parser.add_argument("project_directory")
     runs_reconcile_parser.add_argument(
         "--json", dest="as_json", action="store_true"
+    )
+
+    recovery_report_parser = subparsers.add_parser(
+        "recovery-report",
+        help="read-only failure history for one task, grouped by problem "
+        "signature, with the bounded-retry verdict",
+    )
+    recovery_report_parser.add_argument("project_directory")
+    recovery_report_parser.add_argument(
+        "task_id", help="task id, e.g. TASK-001"
+    )
+    recovery_report_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit the report as machine-readable JSON",
     )
 
     run_report_parser = subparsers.add_parser(
@@ -4474,6 +4496,7 @@ def _cmd_run_start(args) -> None:
         authorize_exec=args.authorize_exec,
         authorize_workspace_write=args.authorize_workspace_write,
         previous_run_id=args.previous_run,
+        remediation=args.remediation,
         actor=args.actor,
     )
     if args.as_json:
@@ -4597,6 +4620,39 @@ def _cmd_runs_reconcile(args) -> None:
               "via task-status or run-report; no success was invented.")
     if not any(report[k] for k in report if k != "no_records"):
         print("No incomplete runs found.")
+
+
+def _cmd_recovery_report(args) -> None:
+    target = resolve_target(args.project_directory, for_writing=False)
+    executions = read_executions(aperio_dir_for(target))
+    report = recovery_report(
+        executions["runs"] if executions is not None else [],
+        args.task_id,
+    )
+    if args.as_json:
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        return
+    print(f"Task:          {report['task_id']}")
+    print(
+        f"Retry policy:  max {report['max_attempts_per_signature']} "
+        "attempts per problem signature"
+    )
+    print(
+        f"Failed runs:   {report['failed_run_count']} across "
+        f"{report['signature_count']} signature(s)"
+    )
+    for entry in report["signatures"]:
+        state = "EXHAUSTED - stop retrying" if entry["exhausted"] else "within budget"
+        print(f"\n  signature {entry['signature']}: "
+              f"{entry['attempts']} attempt(s) [{state}]")
+        for run in entry["runs"]:
+            print(f"    {run['run_id']} exit={run['exit_code']} "
+                  f"adapter={run['adapter_id']}")
+            print(f"      outcome: {run['outcome']}")
+            if run["remediation_note"]:
+                print(f"      remediation: {run['remediation_note']}")
+    for line in report["guidance"]:
+        print(f"\nNext: {line}")
 
 
 def _cmd_run_report(args) -> None:
@@ -5235,6 +5291,8 @@ def main(argv: list[str] | None = None) -> int:
             _cmd_run_cancel(args)
         elif args.command == "runs-reconcile":
             _cmd_runs_reconcile(args)
+        elif args.command == "recovery-report":
+            _cmd_recovery_report(args)
         elif args.command == "run-report":
             _cmd_run_report(args)
         elif args.command == "run-handoff":

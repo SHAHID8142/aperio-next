@@ -80,3 +80,29 @@ quoted evidence); `warning`/`recommendation` mean judgment is yours;
 `unknown` means the tool says it cannot decide. Correct the goal, the
 request, or the deliverable — or accept and move on; findings gate
 nothing.
+
+## A task keeps failing and the agent keeps retrying it
+
+Aperio enforces bounded retries in code, not by convention: a failed
+run is keyed by a **problem signature** (task + adapter + exit code +
+recorded outcome), and at most **3 attempts** are allowed per signature.
+A retry must declare what changed (`aperio run-start ... --remediation
+"new evidence or changed hypothesis"`); repeating the same remediation
+text is refused, and the 4th attempt on the same signature is refused
+with escalation guidance.
+
+When the budget is exhausted, stop retrying:
+
+1. `aperio recovery-report DIR TASK` — read-only debugging history
+   (every attempt, its outcome, and the declared remediation).
+2. `aperio task-status DIR TASK --status blocked --reason "exhausted
+   retry budget for signature <sig>"` — blocked tasks are never
+   dispatched.
+3. Record the findings (`aperio decision-add`) and change the approach
+   materially (a new plan revision), switch adapter after
+   `aperio agent-doctor`, or decide yourself as the operator.
+
+The signature is a coordination boundary, not a root-cause analyzer:
+two different root causes that produce the same recorded outcome share
+a budget, and the same cause presenting differently does not. The
+report history is the evidence a human reads.

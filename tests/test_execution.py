@@ -474,7 +474,8 @@ def test_retry_creates_new_run_and_preserves_history(run_cli, project_dir, tmp_p
         tmp_path, project_dir=project_dir, script="print('recovered')")
     retry = dispatch_task(aperio_dir, "TASK-001", adapter_id="local-process",
                           config=config2, authorize_exec=True,
-                          previous_run_id="RUN-0001")
+                          previous_run_id="RUN-0001",
+                          remediation="script changed to print('recovered')")
     assert retry["run_id"] == "RUN-0002"
     assert retry["previous_run_id"] == "RUN-0001"
     assert retry["status"] == "completed"
@@ -1388,6 +1389,7 @@ def test_cli_operational_errors_are_actionable(run_cli, project_dir, tmp_path):
         "run-start", str(project_dir), "TASK-001",
         "--agent", "local-process", "--config", good,
         "--authorize-exec",
+        "--remediation", "executable restored; retesting log collision",
     )
     assert code == 1 and "Traceback" not in err
     assert "already occupied" in err
@@ -1482,7 +1484,8 @@ def test_manual_handoff_collision_fails_preserves_file_and_recovers(
     # Explicit recovery: remove the obstruction and dispatch again.
     occupied.unlink()
     second = dispatch_task(aperio_dir, "TASK-001", adapter_id="manual",
-                           config=None, authorize_exec=False)
+                           config=None, authorize_exec=False,
+                           remediation="handoff collision removed")
     assert second["run_id"] == "RUN-0002"
     assert second["status"] == "awaiting-external"
     document = read_executions(aperio_dir)
@@ -1557,7 +1560,9 @@ def test_unverifiable_claim_is_reported_and_not_reversed(
                 reason="dispatch failed")
     update_task(aperio_dir, "TASK-001", new_status="pending")
     result = dispatch_task(aperio_dir, "TASK-001", adapter_id="manual",
-                           config=None, authorize_exec=False)
+                           config=None, authorize_exec=False,
+                           remediation="claim obstruction resolved via "
+                                       "explicit task-status recovery")
     assert result["status"] == "awaiting-external"
     assert read_run_handoff(aperio_dir, result["run_id"])
 

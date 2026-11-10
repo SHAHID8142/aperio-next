@@ -39,7 +39,8 @@ marked *(read-only)*.
 | `aperio task-status DIR TASK --status S …` | validated lifecycle transitions (evidence-required completion) |
 | `aperio agent-list [DIR] [--json]` | adapter registry |
 | `aperio agent-doctor DIR --agent ID [--config F] [--json]` | passive capability probe |
-| `aperio run-preview / run-start / run-status / runs-list / run-cancel / runs-reconcile / run-report / run-handoff` | execution records, dispatch (`--authorize-exec` required for real processes; `--authorize-write` for write-capable provider modes) |
+| `aperio run-preview / run-start / run-status / runs-list / run-cancel / runs-reconcile / run-report / run-handoff` | execution records, dispatch (`--authorize-exec` required for real processes; `--authorize-write` for write-capable provider modes); retries require `run-start --remediation` |
+| `aperio recovery-report DIR TASK [--json]` | failure history for one task, grouped by problem signature, with the bounded-retry verdict *(read-only)* |
 
 ## Governance (Feature 06)
 

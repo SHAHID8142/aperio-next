@@ -71,6 +71,7 @@ from aperio.errors import (
 )
 from aperio.locks import LOCK_TIMEOUT_SECONDS, acquire_lock, release_lock
 from aperio.policy import append_event as _policy_event
+from aperio.recovery import attach_failure_signature, retry_gate
 from aperio.policy import load_policy, require_action
 from aperio.planmodel import priority_rank
 from aperio.planstore import read_plan, release_failed_claim, update_task
@@ -596,6 +597,7 @@ def dispatch_task(
     authorize_workspace_write: bool = False,
     authorize_write: bool | None = None,
     previous_run_id: str | None = None,
+    remediation: str | None = None,
     actor: str | None = None,
     dispatch_lock_timeout: float = 5.0,
     lock_timeout: float = LOCK_TIMEOUT_SECONDS,
@@ -605,10 +607,16 @@ def dispatch_task(
     Acquires ``dispatch.lock`` once for the whole dispatch (short bounded
     wait: concurrent dispatch fails fast — same-workspace execution is
     sequential by design). Protocol: config validation → eligibility
-    against a fresh plan read → run record created → task claimed through
-    the Feature-03 lifecycle API → adapter executes → record finalized. A
-    claim lost to a competing writer finalizes the record as failed;
-    nothing is left dangling.
+    against a fresh plan read → bounded-retry gate against the failure
+    history → run record created → task claimed through the Feature-03
+    lifecycle API → adapter executes → record finalized. A claim lost to
+    a competing writer finalizes the record as failed; nothing is left
+    dangling.
+
+    ``remediation`` records what changed since the previous failed
+    attempt (new evidence or a changed hypothesis) and is required for
+    any retry; the gate refuses attempts beyond
+    ``MAX_ATTEMPTS_PER_SIGNATURE`` per problem signature.
 
     Subprocess-capable adapters WITHOUT ``--authorize-exec`` are a
     read-only preview: no run record is created, the task is never claimed,
@@ -663,7 +671,8 @@ def dispatch_task(
             aperio_dir, task_id, adapter=adapter, adapter_id=adapter_id,
             config=validated_config, authorize_exec=authorize_exec,
             authorize_workspace_write=authorize_workspace_write,
-            previous_run_id=previous_run_id, actor=actor,
+            previous_run_id=previous_run_id, remediation=remediation,
+            actor=actor,
             lock_timeout=lock_timeout,
         )
         if result.get("status") == "preview":
@@ -699,15 +708,17 @@ def _dispatch_locked(
     authorize_exec: bool,
     authorize_workspace_write: bool,
     previous_run_id: str | None,
+    remediation: str | None = None,
     actor: str | None = None,
     lock_timeout: float,
 ) -> dict:
-    """Run the eligibility + record-creation steps.
+    """Run the eligibility + bounded-retry + record-creation steps.
 
     The dispatch lock is already held; the executions lock is acquired
     alone. For local-process without authorization this returns a
     read-only preview dict (``status: "preview"``) — no record, no
-    claim. Otherwise it creates the record and returns the dispatch
+    claim. Otherwise it evaluates the bounded-retry gate against the
+    failure history, creates the record, and returns the dispatch
     result for the execution step.
     """
     executions_token = acquire_lock(
@@ -775,6 +786,15 @@ def _dispatch_locked(
             owner=claim_owner,
             previous_run_id=previous_run_id,
         )
+        # Bounded-retry gate (authorized dispatches only; previews return
+        # earlier and stay read-only). A refusal raises before any record
+        # or claim exists.
+        gate = retry_gate(runs, task_id, remediation=remediation)
+        record["remediation_note"] = (
+            remediation.strip() if remediation and remediation.strip() else None
+        )
+        record["retry_signature"] = gate["signature"]
+        record["retry_attempt_no"] = gate["attempt_no"]
         runs.append(record)
         # CAS semantics: snapshot is None only when the file did not
         # exist (creation path); otherwise the compare protects against
@@ -1097,18 +1117,32 @@ def _dispatch_execute(
         if not result.get("timed_out") and result.get("exit_code") == 0
         else "failed"
     )
+    updates = {
+        "pid": result.get("pid"),
+        "machine": machine_token(),
+        "outcome": result.get("outcome"),
+        "exit_code": result.get("exit_code"),
+        "output_truncated": result.get("output_truncated"),
+        "provider_result": result.get("provider_result"),
+        "local_log_ref": result.get("local_log_ref"),
+        "finished_at": utc_now_iso(),
+    }
+    if status == "failed":
+        # Key the failure for the bounded-retry budget (best-effort count
+        # under concurrency; the dispatch gate recounts from records).
+        prior_document = read_executions(aperio_dir)
+        updates.update(
+            attach_failure_signature(
+                prior_document["runs"] if prior_document is not None else [],
+                task_id=task_id,
+                adapter_id=adapter_id,
+                outcome=str(result.get("outcome") or ""),
+                exit_code=result.get("exit_code"),
+            )
+        )
     return _finalize_run(
         aperio_dir, run_id,
-        updates={
-            "pid": result.get("pid"),
-            "machine": machine_token(),
-            "outcome": result.get("outcome"),
-            "exit_code": result.get("exit_code"),
-            "output_truncated": result.get("output_truncated"),
-            "provider_result": result.get("provider_result"),
-            "local_log_ref": result.get("local_log_ref"),
-            "finished_at": utc_now_iso(),
-        },
+        updates=updates,
         status=status,
     )
 
