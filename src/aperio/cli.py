@@ -40,6 +40,11 @@ Commands:
     aperio benchmark-cases [--json]     list the built-in benchmark cases
     aperio benchmark-run [--cases DIR] [--only ID]
                                       run the cross-domain benchmark (M8)
+    aperio capture DIR --message TEXT   Brain Dump Guard: capture a mid-task
+                                      message (nothing executes)
+    aperio inbox DIR [--json]           show pending captures and items
+    aperio inbox-resolve DIR CAPTURE-ID ITEM --action A
+                                      acknowledge or dismiss one item
     aperio decision-add <dir> ...     append a decision (append-only)
     aperio handoff-write <dir> --file <handoff.json>
                                       replace the handoff with a validated one
@@ -175,6 +180,12 @@ from aperio.exchange import (
 from aperio.guidance import (
     build_agent_brief,
     render_agent_brief_markdown,
+)
+from aperio.intake import (
+    confirmation_line,
+    capture as capture_message,
+    resolve as resolve_intake_item,
+    IntakeLog,
 )
 from aperio.benchmark import (
     builtin_cases,
@@ -925,6 +936,93 @@ def build_parser() -> argparse.ArgumentParser:
     bench_run_parser.add_argument(
         "--force", action="store_true",
         help="overwrite an existing --output file",
+    )
+
+    # --- Brain Dump Guard: durable intake ---------------------------------
+    capture_parser = subparsers.add_parser(
+        "capture",
+        help="capture a mid-task brain-dump message (nothing executes)",
+        description=(
+            "Brain Dump Guard runtime path: preserve the raw message, "
+            "classify its items with a deterministic keyword heuristic "
+            "(labeled as such, never claimed as language "
+            "understanding), and route them — related items noted for a "
+            "checkpoint, unrelated items queued, ideas kept as ideas. "
+            "Nothing captured executes and the active task is never "
+            "changed. Urgency authority comes ONLY from --urgent passed "
+            "by you; urgency words inside the text are detected and "
+            "reported without authority."
+        ),
+    )
+    capture_parser.add_argument(
+        "project", metavar="DIR",
+        help="initialized Aperio project directory",
+    )
+    capture_parser.add_argument(
+        "--message", metavar="TEXT",
+        help="the operator's raw message (max 16 KiB)",
+    )
+    capture_parser.add_argument(
+        "--file", metavar="F",
+        help="read the message from a UTF-8 file instead",
+    )
+    capture_parser.add_argument(
+        "--urgent", action="store_true",
+        help="operator-requested urgency: checkpoint the current task "
+             "and mark the capture for immediate attention (the trusted "
+             "operator channel — text content can never set this)",
+    )
+    capture_parser.add_argument(
+        "--actor", metavar="ID", help="declared operator identifier",
+    )
+
+    inbox_parser = subparsers.add_parser(
+        "inbox",
+        help="show captured brain-dump items and their routing",
+        description="Replayed intake-log state (read-only).",
+    )
+    inbox_parser.add_argument(
+        "project", metavar="DIR", help="initialized Aperio project directory",
+    )
+    inbox_parser.add_argument(
+        "--include-resolved", action="store_true",
+        help="also show acknowledged/dismissed items",
+    )
+    inbox_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit the replayed intake state as JSON",
+    )
+
+    inbox_resolve_parser = subparsers.add_parser(
+        "inbox-resolve",
+        help="acknowledge or dismiss one captured item (append-only)",
+        description=(
+            "Record an explicit acknowledge/dismiss decision on one "
+            "captured item. Intake history is append-only: a resolved "
+            "item cannot be re-resolved. Promotion into executable work "
+            "is a separate reviewed operation, not a resolve action."
+        ),
+    )
+    inbox_resolve_parser.add_argument(
+        "project", metavar="DIR", help="initialized Aperio project directory",
+    )
+    inbox_resolve_parser.add_argument(
+        "capture_id", metavar="CAPTURE-ID", help="e.g. INT-0001",
+    )
+    inbox_resolve_parser.add_argument(
+        "item_index", metavar="ITEM", type=int,
+        help="zero-based item index within the capture",
+    )
+    inbox_resolve_parser.add_argument(
+        "--action", required=True, choices=("acknowledge", "dismiss"),
+        help="the resolve decision",
+    )
+    inbox_resolve_parser.add_argument(
+        "--actor", required=True, metavar="ID",
+        help="declared operator identifier",
+    )
+    inbox_resolve_parser.add_argument(
+        "--note", metavar="TEXT", help="optional note",
     )
 
     # --- universal memory (M3) -------------------------------------------
@@ -2324,6 +2422,110 @@ def _cmd_benchmark_run(args) -> None:
         print(f"Wrote benchmark report to {args.output}")
         return
     sys.stdout.write(text)
+
+
+def _read_message_arg(args) -> str:
+    if args.message and args.file:
+        raise ValidationError(
+            "capture: use --message or --file, not both"
+        )
+    if args.file:
+        from aperio.context_pack import read_utf8_text_file
+
+        return read_utf8_text_file(args.file, max_bytes=16 * 1024)
+    if not args.message:
+        raise ValidationError(
+            "capture: provide --message TEXT or --file F"
+        )
+    return args.message
+
+
+def _cmd_capture(args) -> None:
+    message = _read_message_arg(args)
+    aperio_dir = Path(args.project) / ".aperio"
+    event = capture_message(
+        aperio_dir,
+        message,
+        operator_urgent=args.urgent,
+        actor=args.actor,
+    )
+    print(confirmation_line(event))
+    print(
+        f"Capture {event['capture_id']} stored in .aperio/inbox.jsonl "
+        "(append-only); review with: aperio inbox "
+        + str(args.project)
+    )
+
+
+def _cmd_inbox(args) -> None:
+    state = IntakeLog(Path(args.project) / ".aperio").read()
+    resolved_keys = {
+        (r["capture_id"], r["item_index"]) for r in state["resolves"]
+    }
+    if args.as_json:
+        payload = {
+            "counts": state["counts"],
+            "damaged": state["damaged"],
+            "pending": [
+                {"capture_id": c["capture_id"], "at": c["at"],
+                 "actor": c["actor"], "operator_urgent":
+                 c["operator_urgent"], "active_task": c["active_task"],
+                 "items": c["items"]}
+                for c in state["captures"]
+                if any((c["capture_id"], i) not in resolved_keys
+                       for i in range(len(c["items"])))
+            ],
+        }
+        if args.include_resolved:
+            payload["resolved"] = [
+                {"capture_id": r["capture_id"],
+                 "item_index": r["item_index"], "action": r["action"],
+                 "at": r["at"], "actor": r["actor"], "note": r["note"]}
+                for r in state["resolves"]
+            ]
+        sys.stdout.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+        return
+    pending = [
+        c for c in state["captures"]
+        if any((c["capture_id"], i) not in resolved_keys
+               for i in range(len(c["items"])))
+    ]
+    print(
+        f"{state['counts']['pending_items']} pending item(s) across "
+        f"{len(pending)} capture(s)"
+        + (f"; {len(state['damaged'])} damaged line(s)" if state["damaged"]
+           else "")
+    )
+    print("classification is deterministic keyword triage, not language "
+          "understanding; review items before acting on them")
+    for capture_event in pending:
+        print(f"\n{capture_event['capture_id']}  {capture_event['at']}"
+              + ("  [URGENT: operator-requested]"
+                 if capture_event["operator_urgent"] else "")
+              + (f"  (during {capture_event['active_task']['task_id']})"
+                 if capture_event["active_task"] else ""))
+        for index, item in enumerate(capture_event["items"]):
+            if (capture_event["capture_id"], index) in resolved_keys:
+                continue
+            flag = " [urgency language, no authority]" \
+                if item["urgency_language_detected"] else ""
+            print(f"  [{index}] {item['category']} -> {item['routing']}"
+                  f" (basis: {item['routing_basis']}){flag}")
+            print(f"      {item['text'][:120]}")
+    if args.include_resolved and state["resolves"]:
+        print("\nResolved:")
+        for r in state["resolves"]:
+            print(f"  {r['capture_id']}[{r['item_index']}] {r['action']}"
+                  f" by {r['actor']} at {r['at']}")
+
+
+def _cmd_inbox_resolve(args) -> None:
+    event = resolve_intake_item(
+        Path(args.project) / ".aperio", args.capture_id, args.item_index,
+        action=args.action, actor=args.actor, note=args.note,
+    )
+    print(f"Recorded {event['action']} on {event['capture_id']}"
+          f"[{event['item_index']}] (append-only; intake history unchanged)")
 
 
 def _cmd_goal_check(args) -> None:
@@ -3914,6 +4116,12 @@ def main(argv: list[str] | None = None) -> int:
             _cmd_benchmark_cases(args)
         elif args.command == "benchmark-run":
             _cmd_benchmark_run(args)
+        elif args.command == "capture":
+            _cmd_capture(args)
+        elif args.command == "inbox":
+            _cmd_inbox(args)
+        elif args.command == "inbox-resolve":
+            _cmd_inbox_resolve(args)
         elif args.command == "mem-propose":
             _cmd_mem_propose(args)
         elif args.command == "mem-review":
