@@ -175,6 +175,10 @@ SEO_GOAL = {
         "as unknown",
     ],
     "deliverables": ["Client-facing audit summary", "Final 30-day report"],
+    "acceptance_criteria": [
+        "The final report separates measured data, estimates, assumptions, "
+        "and unknowns"
+    ],
     "evidence_requirements": [
         "Name the external tool and retrieval date for every cited "
         "measurement"

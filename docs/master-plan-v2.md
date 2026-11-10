@@ -41,7 +41,7 @@ complete.
 | 06 | Website-delivery + 30-day SEO workflows (templates + docs) | COMPLETE (docs) | agent docs: website-delivery.md, seo-30-day.md, host-integration.md — commit with Chunk 07 |
 | 07 | UX: work-status view, read-only loopback UI, host matrix | COMPLETE | this commit (host matrix cbb1495) |
 | 08 | E2E A–Z simulation + full audit matrices | PENDING | — |
-| 09 | Packaging, docs, release readiness | COMPLETE | 2c55593 |
+| 09 | Packaging, docs, release readiness | COMPLETE | 2c55593 (+ b88f1b6 final count) |
 
 Statuses: PENDING / IN_PROGRESS / BLOCKED / FAILED / COMPLETE. A chunk is
 COMPLETE only when its acceptance criteria pass locally (full suite
@@ -130,7 +130,7 @@ included) and its SHA is recorded.
 
 ## Exact next action
 
-Current: **Chunk 08 (E2E A–Z test in review) → Chunk 09 finalization.**
+Current: **NONE — all chunks complete. Release candidate 1.1.0rc1 @ b88f1b6.**
 
 ## Chunk notes (evidence log)
 
@@ -258,3 +258,25 @@ incl. live-HTTP auth/405/loopback/token-uniqueness assertions). Suite
 - README (status lines + doc index for all 20 documents), release notes
   (1.1.0rc1 section), limitations (v1.1 honesty section) updated.
 - Final handoff: docs/final-handoff.md (directive §15 structure).
+
+### Chunk 08 — COMPLETE (commit b88f1b6)
+
+`tests/test_e2e_website.py`: the directive's continuous A–Z simulation
+(empty workspace → goal → gated plan → orchestration → canonical brain
+dump with unchanged active task → fake-urgency refusal → quality
+findings → feedback/lesson/brief → skill composition →
+checkpoint/revision/recovery gating → deployment-authorization refusal
+→ 30-day SEO plan → honest-report flags → integrity/export), plus
+standalone deployment-authorization and honest-SEO-report gate tests.
+Authored with a subagent against the real CLI surface; the author's
+stale plan-version assertion was the only fix needed. The audit
+matrices (20 brain-dump scenarios, orchestration, skills, release/SEO)
+are covered across test_intake.py, test_checkpoint.py,
+test_orchestration.py, test_skills.py, test_ux.py, and this file.
+
+**Final verification:** 1344 passed on Python 3.14.7 (repo venv) and
+1344 on Python 3.12.14 (clean venv, installed 1.1.0rc1 wheel). CI: zero
+steps (billing lock). Live providers: unverified, stated.
+
+**Program verdict (docs/final-handoff.md):** RELEASE CANDIDATE —
+EXTERNAL VALIDATION PENDING.
