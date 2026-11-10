@@ -101,14 +101,18 @@
   under "Proposed goal instructions" instead of appearing as operator
   requirements.
 
-- **Known provider release blocker (unresolved, not part of M1/M2):**
-  Feature 07 has a P1 metadata-bound mismatch. `adapters._bounded_usage()`
-  accepts values up to `10**12`, while
-  `runtime._validate_provider_result()` rejects usage values above
-  `1_000_000_000`; Claude `num_turns`/`duration_ms` share the mismatch. A
-  structurally valid provider result can therefore strand a run after the
-  child exits. Provider execution is not release-ready until this is fixed
-  with boundary tests. M1 does not change or silently resolve it.
+- **Former provider release blocker — CLOSED in 0.17.1:** the Feature 07
+  metadata-bound mismatch (`adapters._bounded_usage()` accepted up to
+  `10**12` while `runtime._validate_provider_result()` rejected values
+  above `1_000_000_000`; Claude `num_turns`/`duration_ms` shared it) is
+  resolved with one shared contract: `adapters.MAX_PROVIDER_METADATA_VALUE`
+  / `MAX_PROVIDER_COUNT_VALUE` / `MAX_PROVIDER_COST_USD` are the single
+  definition both the adapter parsers and the runtime persistence
+  validator use. Beyond-contract magnitudes are recorded as honest
+  absence, never persisted as values that would fail validation, so an
+  adapter-accepted result can no longer strand a run. Boundary and
+  end-to-end tests: `tests/test_provider_metadata_bounds.py`. See
+  `docs/feature-07.md`.
 
 Everything below is future work. Nothing in this list works today; do not
 claim otherwise in code, docs, or demos. Each item lands as its own

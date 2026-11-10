@@ -50,6 +50,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from aperio.adapters import (
+    MAX_PROVIDER_COUNT_VALUE,
+    MAX_PROVIDER_COST_USD,
+    MAX_PROVIDER_METADATA_VALUE,
     MANUAL_ADAPTER_ID,
     get_adapter,
     runs_dir,
@@ -229,7 +232,7 @@ def _validate_provider_result(value: object, path: Path, index: int) -> None:
         if (
             isinstance(number, bool)
             or not isinstance(number, int)
-            or not 0 <= number <= 1_000_000
+            or not 0 <= number <= MAX_PROVIDER_COUNT_VALUE
         ):
             raise StateError(
                 f"{path} is corrupt: runs[{index}].provider_result.{key} "
@@ -264,7 +267,7 @@ def _validate_provider_result(value: object, path: Path, index: int) -> None:
         }
         if not isinstance(usage, dict) or set(usage) - usage_keys or any(
             isinstance(v, bool) or not isinstance(v, int)
-            or not 0 <= v <= 1_000_000_000
+            or not 0 <= v <= MAX_PROVIDER_METADATA_VALUE
             for v in usage.values()
         ):
             raise StateError(
@@ -287,7 +290,7 @@ def _validate_provider_result(value: object, path: Path, index: int) -> None:
         }
         if not isinstance(counts, dict) or set(counts) - count_keys or any(
             isinstance(v, bool) or not isinstance(v, int)
-            or not 0 <= v <= 1_000_000
+            or not 0 <= v <= MAX_PROVIDER_COUNT_VALUE
             for v in counts.values()
         ):
             raise StateError(
@@ -323,7 +326,7 @@ def _validate_provider_result(value: object, path: Path, index: int) -> None:
             number = value.get(key)
             if number is not None and (
                 isinstance(number, bool) or not isinstance(number, int)
-                or not 0 <= number <= 1_000_000_000
+                or not 0 <= number <= MAX_PROVIDER_METADATA_VALUE
             ):
                 raise StateError(
                     f"{path} is corrupt: runs[{index}].provider_result.{key} "
@@ -332,7 +335,8 @@ def _validate_provider_result(value: object, path: Path, index: int) -> None:
         cost = value.get("total_cost_usd")
         if cost is not None and (
             isinstance(cost, bool) or not isinstance(cost, (int, float))
-            or not math.isfinite(cost) or not 0 <= cost <= 10**9
+            or not math.isfinite(cost)
+            or not 0 <= cost <= MAX_PROVIDER_COST_USD
         ):
             raise StateError(
                 f"{path} is corrupt: runs[{index}].provider_result."

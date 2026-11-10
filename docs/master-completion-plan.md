@@ -42,7 +42,7 @@ criteria are §16 of the directive and are re-verified in Chunk 08.
 | 02 | M5 — controlled feedback and improvement | COMPLETE | 247d4f3 |
 | 03 | M6 — universal portable exchange v2 | COMPLETE | 57fff8b |
 | 04 | M7 — optional integration + domain adaptation | COMPLETE | 1c52acf |
-| 05 | Feature 07 provider reliability closure | PENDING | — |
+| 05 | Feature 07 provider reliability closure | COMPLETE | see Chunk 05 note |
 | 06 | M8 — cross-domain benchmark + evaluation | PENDING | — |
 | 07 | Integration, security, usability | PENDING | — |
 | 08 | Final release engineering, 1.0 RC | PENDING | — |
@@ -58,7 +58,7 @@ Recorded as they are confirmed; each closed defect lists its regression test.
 | ID | Chunk | Severity | Summary | Status |
 |---|---|---|---|---|
 | D-00-1 | 00 | P1 | Raw/caller-supplied memory records could claim `state="attested"` (or carry the recorded `attested` state) without any recorded `accept` transition and receive attested authority in recall/packs; derivation now requires the recorded transition for every active state, not only `verified` | CLOSED (commit recorded below) |
-| D-05-1 | 05 | P1 | (Known) `adapters._bounded_usage()` accepts ≤ 10**12 but `runtime._validate_provider_result()` rejects > 1_000_000_000; Claude `num_turns`/`duration_ms` share mismatch | OPEN → Chunk 05 |
+| D-05-1 | 05 | P1 | `adapters._bounded_usage()` accepted ≤ 10**12 while `runtime._validate_provider_result()` rejected > 1e9; Claude `num_turns`/`duration_ms` shared the mismatch → stranded runs. CLOSED: one shared contract (`MAX_PROVIDER_METADATA_VALUE`/`MAX_PROVIDER_COUNT_VALUE`/`MAX_PROVIDER_COST_USD` in adapters.py, imported by runtime.py); beyond-contract magnitudes recorded as honest absence; boundary + end-to-end tests | CLOSED |
 
 ## Outstanding blockers
 
@@ -68,8 +68,8 @@ Recorded as they are confirmed; each closed defect lists its regression test.
 
 ## Exact next action
 
-Maintained at the end of the "Status" section per chunk. Current: **Chunk 05
-— Feature 07 provider reliability closure.**
+Maintained at the end of the "Status" section per chunk. Current: **Chunk 06
+— M8 cross-domain benchmark and performance evaluation.**
 
 ## Chunk notes (evidence log)
 
@@ -285,4 +285,40 @@ tests/test_provider_adapters.py and stay green).
 version 0.17.0.
 
 **Tests:** 1189 → **1198 passed** locally (0 failures). GitHub Actions: not
+run (billing lock).
+
+### Chunk 05 — COMPLETE (0.17.1)
+
+**Defect D-05-1 closed.** One shared metadata contract now defined in
+`src/aperio/adapters.py` (`MAX_PROVIDER_METADATA_VALUE = 1_000_000_000`,
+`MAX_PROVIDER_COUNT_VALUE = 1_000_000`, `MAX_PROVIDER_COST_USD = 10**9`)
+and imported by `runtime.py`, replacing three independent inline bounds
+(adapter 10**12 vs runtime 1e9 on usage tokens, Claude num_turns and
+duration_ms; both on cost). `_bounded_usage` documents the adapter side:
+beyond-contract magnitudes are recorded as honest absence (`None`),
+never written as a value the runtime validator would refuse. All adapter
+fields audited for cross-layer mismatches: usage tokens (codex+claude),
+num_turns, duration_ms, permission_denials (<=1000 by construction),
+event/error/unknown counts (<=4096 by construction), item_counts
+(<= events), cost — all now governed by the shared constants. Empty usage
+objects are recorded as `None` (no in-contract usage recorded), not `{}`.
+
+**Honest failure behavior.** With aligned boundaries, an adapter-accepted
+result can no longer fail persistence on magnitude grounds. End-to-end
+tests dispatch through real fake-CLI processes reporting 2e9/9e12
+magnitudes: the run finalizes `completed` with dropped values and
+`executions.json` stays readable (the pre-fix behavior poisoned reads).
+Nonzero-exit and malformed-output honest finalization was already covered
+by tests/test_provider_adapters.py (still green). Live-provider end-to-end
+testing remains NOT verified (no credentials) — stated in
+docs/providers.md.
+
+**Sources changed:** `src/aperio/adapters.py` (shared constants +
+`_bounded_usage` + cost bound + usage-None semantics), `src/aperio/runtime.py`
+(validator uses the imported shared constants), `tests/test_provider_metadata_bounds.py`
+(new, 9 tests incl. end-to-end codex+claude), `docs/feature-07.md`
+(blocker section replaced with the resolved contract), `docs/roadmap.md`
+(blocker closed), version 0.17.1.
+
+**Tests:** 1198 -> **1207 passed** locally (0 failures). GitHub Actions: not
 run (billing lock).

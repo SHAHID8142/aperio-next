@@ -297,17 +297,26 @@ It never logs in, installs, or makes a paid model request.
   output, timeout, operator interrupt, cancellation, descendant-pipe
   cleanup, governance, doctor, and export/import privacy.
 
-## Unresolved release blocker (P1)
+## Provider metadata contract (resolved in 0.17.1)
 
-Provider execution is **not release-ready** until the metadata-bound mismatch
-is corrected:
+One shared magnitude contract now governs provider metadata on **both**
+sides of the persistence boundary, defined once in `adapters.py` and
+imported by `runtime.py`:
 
-- `adapters._bounded_usage()` accepts numeric values up to `10**12`;
-- `runtime._validate_provider_result()` rejects usage values above
-  `1_000_000_000` (and applies corresponding bounds to Claude
-  `num_turns`/`duration_ms`).
+- `MAX_PROVIDER_METADATA_VALUE = 1_000_000_000` — token counts, turn
+  counts, and millisecond durations;
+- `MAX_PROVIDER_COUNT_VALUE = 1_000_000` — event and item counts;
+- `MAX_PROVIDER_COST_USD = 10**9` — finite, non-negative USD cost.
 
-A parser can therefore produce a structurally valid `provider_result` that
-fails record validation after the child exits, leaving an abandoned active
-run. M1 deliberately does not change this path. The fix must unify one
-documented bound and add fail-first boundary tests for every affected field.
+An adapter that receives a value beyond the contract records honest
+absence (`None` for the whole usage object when nothing survives, the
+field dropped otherwise) — it never writes a value the runtime validator
+would refuse, so an adapter-accepted result can no longer fail persistence
+on magnitude grounds and strand a run after the child exited. Negative,
+boolean, malformed, non-finite, and excessive values are dropped on the
+adapter side and rejected on the persistence side. Boundary tests for
+every affected field (codex usage, Claude `num_turns`/`duration_ms`/
+`total_cost_usd`/`usage`, event counts, cost) live in
+`tests/test_provider_metadata_bounds.py`, including an end-to-end dispatch
+whose provider reports beyond-contract magnitudes: the run finalizes
+honestly and `executions.json` stays readable.

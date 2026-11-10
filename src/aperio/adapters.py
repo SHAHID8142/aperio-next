@@ -77,7 +77,19 @@ MAX_PROVIDER_STDOUT_BYTES = 1024 * 1024  # bounded structured-output capture
 MAX_PROVIDER_EVENT_BYTES = 256 * 1024  # one JSON/JSONL event
 MAX_PROVIDER_EVENTS = 4096
 MAX_PROVIDER_PROBE_BYTES = 512 * 1024
-MAX_PROVIDER_USAGE_VALUE = 10**12
+#: One shared magnitude contract for provider-reported metadata (token
+#: counts, turn counts, millisecond durations). Adapters drop values above
+#: this bound (recorded as ``None`` — honest absence), and the runtime
+#: persistence validator refuses values above it with the same constant:
+#: a second, larger adapter-side bound would let a structurally accepted
+#: provider result fail at persistence and strand the run after the child
+#: exited (the Feature 07 gate defect).
+MAX_PROVIDER_METADATA_VALUE = 1_000_000_000
+#: Event and item counts (bounded further by the capture caps).
+MAX_PROVIDER_COUNT_VALUE = 1_000_000
+#: Provider-reported USD cost: finite, non-negative, same constant on
+#: both sides of the boundary.
+MAX_PROVIDER_COST_USD = 10**9
 PIPE_JOIN_GRACE_SECONDS = 2.0  # bounded drain after the leader exits
 PROBE_TIMEOUT_SECONDS = 15
 
@@ -1067,9 +1079,13 @@ def _parse_codex_stdout(text: str, *, truncated: bool) -> dict:
 
 
 def _bounded_usage(value) -> int | None:
+    """Adapter side of the shared metadata contract: a provider-reported
+    magnitude the contract cannot carry is recorded as ``None`` — honest
+    absence — never a value the runtime validator would refuse."""
+
     if isinstance(value, bool) or not isinstance(value, int):
         return None
-    if value < 0 or value > MAX_PROVIDER_USAGE_VALUE:
+    if value < 0 or value > MAX_PROVIDER_METADATA_VALUE:
         return None
     return value
 
@@ -1144,7 +1160,7 @@ def _parse_claude_stdout(text: str, *, truncated: bool) -> dict:
         not isinstance(cost, bool)
         and isinstance(cost, (int, float))
         and math.isfinite(cost)
-        and 0 <= cost <= 10**9
+        and 0 <= cost <= MAX_PROVIDER_COST_USD
     ):
         base["total_cost_usd"] = float(cost)
     usage = event.get("usage")
@@ -1157,7 +1173,9 @@ def _parse_claude_stdout(text: str, *, truncated: bool) -> dict:
             value = _bounded_usage(usage.get(key))
             if value is not None:
                 neutral_usage[key] = value
-        base["usage"] = neutral_usage
+        # None, not {}: an empty object would look like "provider reported
+        # nothing"; None says "no in-contract usage was recorded".
+        base["usage"] = neutral_usage if neutral_usage else None
     denials = event.get("permission_denials")
     if isinstance(denials, list):
         base["permission_denials"] = min(len(denials), 1000)
