@@ -43,7 +43,7 @@ criteria are §16 of the directive and are re-verified in Chunk 08.
 | 03 | M6 — universal portable exchange v2 | COMPLETE | 57fff8b |
 | 04 | M7 — optional integration + domain adaptation | COMPLETE | 1c52acf |
 | 05 | Feature 07 provider reliability closure | COMPLETE | f00e656 |
-| 06 | M8 — cross-domain benchmark + evaluation | COMPLETE | see Chunk 06 note |
+| 06 | M8 — cross-domain benchmark + evaluation | COMPLETE | bc94c75 |
 | 07 | Integration, security, usability | PENDING | — |
 | 08 | Final release engineering, 1.0 RC | PENDING | — |
 
@@ -323,7 +323,7 @@ docs/providers.md.
 **Tests:** 1198 -> **1207 passed** locally (0 failures). GitHub Actions: not
 run (billing lock).
 
-### Chunk 06 — COMPLETE (0.18.0)
+### Chunk 06 — COMPLETE (0.18.0, commit bc94c75189c3cb58c9e33ca713434dffbfe59fc8)
 
 **Delivered (M8).** New module `src/aperio/benchmark.py` + 14 versioned
 fixture cases packaged as `benchmark_cases/*.json` (package-data) +
