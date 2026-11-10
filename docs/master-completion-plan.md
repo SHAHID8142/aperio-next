@@ -44,7 +44,7 @@ criteria are §16 of the directive and are re-verified in Chunk 08.
 | 04 | M7 — optional integration + domain adaptation | COMPLETE | 1c52acf |
 | 05 | Feature 07 provider reliability closure | COMPLETE | f00e656 |
 | 06 | M8 — cross-domain benchmark + evaluation | COMPLETE | bc94c75 |
-| 07 | Integration, security, usability | COMPLETE | see Chunk 07 note |
+| 07 | Integration, security, usability | COMPLETE | d282c79 |
 | 08 | Final release engineering, 1.0 RC | PENDING | — |
 
 Chunk statuses: `PENDING`, `IN_PROGRESS`, `BLOCKED`, `FAILED`, `COMPLETE`.
@@ -358,7 +358,7 @@ docs/architecture.md, docs/roadmap.md, version 0.18.0.
 **Tests:** 1207 -> **1220 passed** locally (0 failures). GitHub Actions:
 not run (billing lock).
 
-### Chunk 07 — COMPLETE (0.19.0)
+### Chunk 07 — COMPLETE (0.19.0, commit d282c79dd26816c26f1c219f9ef2192882988828)
 
 **End-to-end pipeline.** tests/test_integration_pipeline.py walks the
 directive's full pipeline as ONE continuous CLI-only workflow — objective
