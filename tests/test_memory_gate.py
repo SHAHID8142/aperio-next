@@ -43,7 +43,14 @@ def text_lines(store: MemoryStore) -> list[str]:
 
 
 def today() -> date:
-    return date.today()
+    # The product evaluates validity against *today in UTC* (documented in
+    # docs/universal-memory.md); the test frame must match, or a record
+    # intended as "expired" becomes current whenever the local date is a
+    # day ahead of the UTC date (the trap this test fell into at the
+    # local-midnight/UTC-midnight boundary).
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).date()
 
 
 def shift(days: int) -> str:
@@ -282,7 +289,7 @@ def test_downstream_recall_and_pack_use_the_downgraded_trust(tmp_path: Path) -> 
 def test_recall_excludes_expired_memory_without_as_of(tmp_path: Path) -> None:
     store = store_at(tmp_path)
     memory = store.propose(
-        {**BASE, "valid_until": shift(-1), "actor": "alice"}
+        {**BASE, "valid_until": shift(-2), "actor": "alice"}
     )["memory"]
     store.review(memory["memory_id"], "accept", actor="alice")
 
@@ -376,7 +383,7 @@ def test_invalid_as_of_is_refused(tmp_path: Path, bad: str) -> None:
 
 def test_recall_report_is_deterministic_for_a_fixed_date(tmp_path: Path) -> None:
     store = store_at(tmp_path)
-    store.propose({**BASE, "valid_until": shift(-1)})
+    store.propose({**BASE, "valid_until": shift(-2)})
     store.propose({**BASE, "title": "Open item", "content": "still current"})
     first = recall_memories(
         store.snapshots(as_of=shift(0))["memories"],
@@ -579,7 +586,7 @@ def run_cli(*args: str) -> subprocess.CompletedProcess:
 
 def test_cli_recall_applies_validity_without_as_of(tmp_path: Path) -> None:
     store = store_at(tmp_path)
-    store.propose({**BASE, "valid_until": shift(-1)})
+    store.propose({**BASE, "valid_until": shift(-2)})
     store.propose({**BASE, "title": "Open item", "content": "current"})
 
     completed = run_cli("mem-recall", str(store.path), "--objective", "churn")
@@ -614,7 +621,7 @@ def test_cli_bad_as_of_is_a_single_line_error(tmp_path: Path) -> None:
 def test_context_pack_drops_expired_memory_and_keeps_current(tmp_path: Path) -> None:
     store = store_at(tmp_path)
     store.propose(
-        {**BASE, "title": "Old churn rule", "valid_until": shift(-1)}
+        {**BASE, "title": "Old churn rule", "valid_until": shift(-2)}
     )
     store.propose({**BASE, "title": "Current churn rule", "content": "current"})
 
@@ -643,7 +650,7 @@ def test_context_pack_drops_expired_memory_and_keeps_current(tmp_path: Path) -> 
 
 def test_goal_pack_reports_time_exclusions(tmp_path: Path) -> None:
     store = store_at(tmp_path)
-    store.propose({**BASE, "valid_until": shift(-1)})
+    store.propose({**BASE, "valid_until": shift(-2)})
     goal = tmp_path / "goal.json"
     goal.write_text(
         json.dumps(
@@ -672,7 +679,7 @@ def test_export_honours_current_applicability(tmp_path: Path) -> None:
     from aperio.memportable import export_memories
 
     store = store_at(tmp_path)
-    store.propose({**BASE, "valid_until": shift(-1)})
+    store.propose({**BASE, "valid_until": shift(-2)})
     store.propose({**BASE, "title": "Open item", "content": "current"})
 
     current = export_memories(store)
