@@ -21,7 +21,7 @@ a prior report. Where something could not be checked, it is marked
 | Branch | `audit/1.2-final-hardening` |
 | Base → HEAD | 18 commits, 31 files, +3035 / −974 |
 | Audited source SHA (README pin target) | `f04232d` — code + tests, all suites green |
-| Documentation head | `45c3022` — docs only, no executable change |
+| Code after the audited SHA | docs-only commits; no executable change since `f04232d` |
 | Pre-existing work | preserved; no reset, clean, force-push, or branch deletion |
 | Untracked at start | `audit-inputs/` (owner-provided reference material) |
 
@@ -299,13 +299,11 @@ with hosts, and the code and docs say so. It is not marketed as done.
 
 ## Q. Branch and commits
 
-Branch `audit/1.2-final-hardening`, 18 commits on `9773ba4` (last three):
+Branch `audit/1.2-final-hardening`, 18 commits on `9773ba4`. The last commits
+are the final remediation, then documentation-only updates:
 
 ```
-45c3022 docs(audit): correct the branch commit and file totals
-<docs: commit-count fix>
-e8ee461 docs: refresh release notes and stale test counts to the final audited numbers
-716bd5f docs(audit): re-pin install to the audited commit and record the R01–R03 remediation
+docs-only  README re-pin + audit/release-notes/handoff totals (no code change)
 f04232d fix: bind install approval to the plan, gate task size on every path
 8279e1d fix(audit): bound subprocess capture, guard POSIX kill, require all prereqs, bind install approval to plan fingerprint
 d69d24a fix(audit): scan directories incrementally and read documents with a byte-bounded handle
