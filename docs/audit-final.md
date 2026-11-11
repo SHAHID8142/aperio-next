@@ -20,8 +20,8 @@ a prior report. Where something could not be checked, it is marked
 | Base SHA | `9773ba4cb213a2358c970c5013627b2d87bb2026` |
 | Branch | `audit/1.2-final-hardening` |
 | Base → HEAD | 32 files changed; commits are purely additive. Exact totals: `git diff --shortstat 9773ba4..HEAD`, `git rev-list --count 9773ba4..HEAD` |
-| Audited source SHA (README pin target) | `4d835eb` — code + tests, all suites green |
-| Code after the audited SHA | docs-only commits; no executable change since `4d835eb` |
+| Audited source SHA (README pin target) | `5715380` — code + tests, all suites green |
+| Code after the audited SHA | docs-only commits; no executable change since `5715380` |
 | Pre-existing work | preserved; no reset, clean, force-push, or branch deletion |
 | Untracked at start | `audit-inputs/` (owner-provided reference material) |
 
@@ -65,6 +65,7 @@ onboarding facade; `git log` shows the integration commits).
 | R15 | **MEDIUM** | Ctrl-C during a captured probe leaked the child: `start_new_session=True` hides the interrupt and the supervision body had no unwind path, yet the CLI claimed the children were stopped | **FIXED (kill group + reap on unwinding)** |
 | R16 | **MEDIUM** | The R15 cleanup read `process` even when `Popen()` failed, so a missing tool surfaced as `UnboundLocalError` instead of the startup error | **FIXED (guarded cleanup)** |
 | R17 | **MEDIUM** | A breadth marker claimed any product noun within 48 characters, so "Build a Docker image for the service" was refused as a whole project | **FIXED (marker governs its own object)** |
+| R18 | **MEDIUM** | `full-width` was read as a whole-feature claim, so an ordinary CSS task naming the login page was refused | **FIXED (dimensional adjectives excluded)** |
 
 ## C. Reproduction and root cause (key items)
 
@@ -159,18 +160,18 @@ captures, zero failures**, and three consecutive clean full-suite runs.
 | Hardening tests before the final remediation | 1,637 total |
 | New regression tests, first remediation | 17 (wizard ×3, install approval ×4, task-size ×10) |
 | New regression tests, second remediation | 12 (wizard fail-closed ×4, section atomicity ×8) |
-| New regression tests, Codex review rounds | 24 (`/back` ×4, drain deadline ×1, product mentions ×8, criteria keys ×2, criteria breadth ×3, test-only ×1, decomposition ×1, ceiling report ×1, interrupt ×1, startup error ×1, governed object ×1) |
+| New regression tests, Codex review rounds | 25 (`/back` ×4, drain deadline ×1, product mentions ×8, criteria keys ×2, criteria breadth ×3, test-only ×1, decomposition ×1, ceiling report ×1, interrupt ×1, startup error ×1, governed object ×1, dimensional adjectives ×1) |
 | Tests updated for the new policy | 3 (`test_planbridge_priority`, `test_onboarding_tools`, hero A05 fixtures) |
-| **Final full suite** | **1,690 passed, 0 skipped** |
+| **Final full suite** | **1,691 passed, 0 skipped** |
 
 Per-interpreter full-suite results (macOS arm64):
 
 | Python | Result |
 | --- | --- |
-| 3.11 | 1,690 passed |
-| 3.12 | 1,690 passed |
-| 3.13 | 1,690 passed |
-| 3.14 | 1,690 passed |
+| 3.11 | 1,691 passed |
+| 3.12 | 1,691 passed |
+| 3.13 | 1,691 passed |
+| 3.14 | 1,691 passed |
 
 ### Regression reproduction for the final remediation (R01–R03)
 
@@ -205,7 +206,7 @@ Each new test was written before its fix and failed first:
 | Method | Isolation | Verified | Notes |
 | --- | --- | --- | --- |
 | `uv tool install` (wheel) | yes | **yes** | upgrade/uninstall clean; bin on PATH |
-| `uv tool install` (git @ immutable commit) | yes | **yes** | re-verified against the audited commit `4d835eb` (24-char SHA resolved, `aperio 1.2.0rc2`) |
+| `uv tool install` (git @ immutable commit) | yes | **yes** | re-verified against the audited commit `5715380` (24-char SHA resolved, `aperio 1.2.0rc2`) |
 | `pipx install` (wheel) | yes | **yes** | viable fallback |
 | venv + wheel | yes | yes | more manual |
 | PyPI | — | **N/A** | no package published |
@@ -228,7 +229,7 @@ built. Project `.aperio/` data survives upgrade and uninstall (verified).
   install (wheel built from this branch, installed outside the repo).
 - 16 relative links, all resolve. No badges, no screenshots, no placeholders.
 - The documented install command is pinned to the audited code commit
-  `4d835eb` and was executed successfully from a clean environment with both
+  `5715380` and was executed successfully from a clean environment with both
   `uv tool install` and `pipx install`
   (`Installed 1 executable: aperio` → `aperio 1.2.0rc2`), after the second
   remediation and the Codex review round. `aperio next`, `aperio --help`, and
@@ -246,7 +247,7 @@ built. Project `.aperio/` data survives upgrade and uninstall (verified).
 installed artifact. `aperio next` confirmed to leave an empty directory empty.
 
 R01 and R04 were additionally verified end to end in a **real PTY** against
-the pinned install (`4575497`, `66ed17f`, `f9b9d3f`, `3dc3207`, `5b30fba`, `e611df6`, `5e63c2a`, `71bf2df`, `4d835eb`), on an existing
+the pinned install (`4575497`, `66ed17f`, `f9b9d3f`, `3dc3207`, `5b30fba`, `e611df6`, `5e63c2a`, `71bf2df`, `4d835eb`, `5715380`), on an existing
 project with no `.aperio`:
 
 - declining the init prompt printed by the wizard left the directory unchanged
@@ -273,6 +274,12 @@ Each `host-doctor` row now carries `verification` with six booleans; only
 probe. `cli_launch_tested`, `authenticated_model_call_tested`,
 `functional_handoff_tested`, `native_command_registered_and_tested` are `false`
 until a real run is recorded. No mock executable is described as a live test.
+
+### Eighth Codex review round (R18) — what changed and why
+
+| ID | Defect (reproduced first) | Fix | Evidence |
+| --- | --- | --- | --- |
+| R18 | `full-width` counted as a breadth marker, so "Add a full-width image to the login page" was refused as a whole feature (the same task with "wide" passed) | markers are skipped after a hyphen or before a dimensional qualifier, in the task and criteria loops; whole-feature phrasings stay blocked | 1 test (three dimensional phrasings allowed, two whole-feature phrasings blocked) |
 
 ### Seventh Codex review round (R17) — what changed and why
 
@@ -371,7 +378,7 @@ documented limitations in M. The rc2 build is **not** claimed production-ready.
 | --- | --- | --- |
 | G01 Repo state preserved | PASS | §A |
 | G02 High/critical defects fixed | PASS | §B, §D |
-| G03 Unit tests pass | PASS | 1,690 (4 interpreters) |
+| G03 Unit tests pass | PASS | 1,691 (4 interpreters) |
 | G04 Integration tests pass | PASS | e2e/onboarding suites green |
 | G05 Real onboarding journey works | PASS | §K, PTY wizard |
 | G06 Atomic execution policy enforceable | PASS | §C A05 |
