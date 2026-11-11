@@ -344,13 +344,27 @@ _FEATURE_VERB_RE = re.compile(
 
 
 def _task_text(task: dict) -> str:
+    """The task's *implementation* scope: what it says it will build.
+
+    Criteria are deliberately excluded here. Requiring "Unit tests pass" is
+    verification of a bounded change, not evidence that the task spans several
+    implementation areas — counting it would push operators to drop test
+    requirements to get a plan accepted.
+    """
     parts = [str(task.get("title") or ""), str(task.get("action") or "")]
     parts.append(str(task.get("objective") or ""))
     parts.extend(str(d) for d in (task.get("deliverables") or []))
-    # Goal tasks use ``completion_criteria``; native plan tasks (planmodel
-    # TASK_CONTENT_KEYS) use ``acceptance_criteria``. Read both, so scope
-    # cannot be hidden in whichever key the current gate happens to skip.
-    parts.extend(str(c) for c in (task.get("completion_criteria") or []))
+    return " ".join(parts)
+
+
+def _task_criteria_text(task: dict) -> str:
+    """The task's declared completion/acceptance criteria.
+
+    Goal tasks use ``completion_criteria``; native plan tasks (planmodel
+    ``TASK_CONTENT_KEYS``) use ``acceptance_criteria``. Both are read so scope
+    cannot be hidden in whichever key a gate happens to skip.
+    """
+    parts = [str(c) for c in (task.get("completion_criteria") or [])]
     parts.extend(str(c) for c in (task.get("acceptance_criteria") or []))
     return " ".join(parts)
 
@@ -358,15 +372,27 @@ def _task_text(task: dict) -> str:
 def assess_task_boundeness(task: dict) -> tuple[bool, list[str]]:
     """Whether one task looks like a whole project instead of a unit of work.
 
+    Implementation scope (title/action/objective/deliverables) decides breadth.
+    Criteria are read only to catch scope *hidden* there — requiring "unit
+    tests pass" is verification, not extra implementation surface.
+
     Returns ``(oversized, signals)``.
     """
     signals: list[str] = []
-    text = _task_text(task)
+    declared = " ".join(
+        str(task.get(key) or "") for key in ("title", "objective", "action")
+    ).lower()
+    text = _task_text(task).lower()
+    criteria = _task_criteria_text(task).lower()
+    everything = f"{text} {criteria}".strip()
+    has_slice = bool(_mentions(declared, _SLICE_QUALIFIERS))
 
     # A whole-product object preceded (within a short window) by a
     # "whole/complete/entire/build a ..." marker means the task is the project.
-    for match in _COMPOUND_PREFIX_RE.finditer(text):
-        window = text[match.end(): match.end() + 48]
+    # Criteria are included: hiding the project in an acceptance criterion is
+    # still the project.
+    for match in _COMPOUND_PREFIX_RE.finditer(everything):
+        window = everything[match.end(): match.end() + 48]
         hit = _mentions(window, _COMPOUND_PROJECT_OBJECTS)
         if hit:
             signals.append(
@@ -374,12 +400,10 @@ def assess_task_boundeness(task: dict) -> tuple[bool, list[str]]:
             )
             break
 
-    lowered = text.lower()
-
     # A breadth marker in front of a section/feature unit is a feature-level
     # task: "an entire Hero Section", "the whole checkout flow".
-    for match in _BREADTH_MARKER_RE.finditer(lowered):
-        window = lowered[match.end(): match.end() + 48]
+    for match in _BREADTH_MARKER_RE.finditer(text):
+        window = text[match.end(): match.end() + 48]
         hit = _mentions(window, _FEATURE_UNITS)
         if hit:
             signals.append(
@@ -388,19 +412,33 @@ def assess_task_boundeness(task: dict) -> tuple[bool, list[str]]:
             )
             break
 
-    # Spanning several implementation layers at once is a whole feature even
-    # without the word "entire": markup + styling + animation + tests for one
-    # section is the section, not a task.
+    # The same claim can sit in the criteria. A slice in the declared scope
+    # defends it only when that slice names the *same* feature: "Build the Hero
+    # Section markup" may require "the entire hero section" to render, but an
+    # unrelated "Implement component" cannot hide one behind its slice word.
+    if criteria:
+        for match in _BREADTH_MARKER_RE.finditer(criteria):
+            window = criteria[match.end(): match.end() + 48]
+            hit = _mentions(window, _FEATURE_UNITS)
+            if not hit:
+                continue
+            if has_slice and _mentions(declared, hit):
+                break
+            signals.append(
+                f"task acceptance criteria claim a whole feature "
+                f"({match.group(0).strip()} … {hit[0]}); split it into "
+                "bounded pieces"
+            )
+            break
+
+    # One implementation area is one bounded change. Three areas is a whole
+    # feature; when the task explicitly names the feature it is building, two
+    # areas already mean the whole feature. Verification criteria never count.
     areas = sorted({
         area for area, terms in _LAYER_AREAS.items()
-        if _mentions(lowered, terms)
+        if _mentions(text, terms)
     })
-    feature_hit = _mentions(lowered, _FEATURE_UNITS)
-    # A named feature unit spread across several areas (markup + state + tests)
-    # is that whole feature. Layers inside one area stay a bounded change.
-    # One area is one bounded change. Three areas is a whole feature. When the
-    # task explicitly names the feature it is building, two areas (e.g. its
-    # markup and its tests) already mean the whole feature.
+    feature_hit = _mentions(text, _FEATURE_UNITS)
     limit = 2 if feature_hit else _LAYER_AREA_LIMIT
     if len(areas) >= limit:
         where = f" for {feature_hit[0]}" if feature_hit else ""
@@ -411,17 +449,9 @@ def assess_task_boundeness(task: dict) -> tuple[bool, list[str]]:
 
     # A bare "<verb> the <feature unit>" with no narrowing slice qualifier is
     # "implement the Hero Section" — the whole feature as one task.
-    # Slice qualifiers count only where scope is *declared* (title/objective/
-    # action). A leftover deliverable must not launder a whole-section claim:
-    # "Implement the Hero Section" stays oversized even if some stale task
-    # field still says "component".
-    declared = " ".join(
-        str(task.get(key) or "") for key in ("title", "objective", "action")
-    ).lower()
-    has_slice = bool(_mentions(declared, _SLICE_QUALIFIERS))
     if not has_slice:
-        for match in _FEATURE_VERB_RE.finditer(lowered):
-            window = lowered[match.end(): match.end() + 40]
+        for match in _FEATURE_VERB_RE.finditer(declared):
+            window = declared[match.end(): match.end() + 40]
             hit = _mentions(window, _FEATURE_UNITS)
             if hit:
                 signals.append(

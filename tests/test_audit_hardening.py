@@ -1329,3 +1329,64 @@ def test_plan_approve_and_dispatch_read_acceptance_criteria(tmp_path):
     with pytest.raises(StateError, match="execution refused"):
         dispatch_task(apdir, "TASK-001", adapter_id="manual", config=None,
                       authorize_exec=False)
+
+
+# ---------------------------------------------------------------------------
+# Codex third review (P2): verification criteria are not implementation breadth.
+# ---------------------------------------------------------------------------
+
+def test_verification_criterion_does_not_make_a_bounded_task_oversized():
+    from aperio.bounded_tasks import assess_task_boundeness
+    from aperio.planmodel import validate_plan_input
+
+    base = {
+        "id": "TASK-001", "title": "Fix login button CSS",
+        "objective": "Fix login button CSS", "deliverables": ["login.css"],
+        "depends_on": [],
+    }
+    oversized, signals = assess_task_boundeness(base)
+    assert oversized is False, signals
+    with_tests = {**base, "acceptance_criteria": ["Unit tests pass"]}
+    oversized, signals = assess_task_boundeness(with_tests)
+    assert oversized is False, f"a test requirement must not imply breadth: {signals}"
+
+    plan = _valid_plan([{**with_tests}])
+    document = validate_plan_input(plan)
+    assert document["tasks"][0]["id"] == "TASK-001"
+
+
+def test_scope_hidden_in_criteria_is_still_blocked():
+    """R09 must keep holding: hiding scope in criteria is not a way through."""
+    from aperio.bounded_tasks import assess_task_boundeness
+
+    task = {
+        "id": "TASK-001", "title": "Implement component",
+        "objective": "Deliver component", "deliverables": ["x"],
+        "acceptance_criteria": ["Build the entire website including all pages"],
+        "depends_on": [],
+    }
+    oversized, signals = assess_task_boundeness(task)
+    assert oversized is True, signals
+
+    hero = {
+        "id": "TASK-001", "title": "Implement component",
+        "objective": "Deliver component", "deliverables": ["x"],
+        "acceptance_criteria": ["cover the entire hero section"],
+        "depends_on": [],
+    }
+    oversized, signals = assess_task_boundeness(hero)
+    assert oversized is True, signals
+
+
+def test_bounded_slice_with_a_section_criterion_stays_valid():
+    """A genuinely narrow task may still require the section to work."""
+    from aperio.bounded_tasks import assess_task_boundeness
+
+    task = {
+        "id": "TASK-001", "title": "Build the Hero Section markup",
+        "objective": "Hero Section markup", "deliverables": ["hero component"],
+        "acceptance_criteria": ["the entire hero section renders correctly"],
+        "depends_on": [],
+    }
+    oversized, signals = assess_task_boundeness(task)
+    assert oversized is False, signals
