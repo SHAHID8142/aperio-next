@@ -20,8 +20,8 @@ a prior report. Where something could not be checked, it is marked
 | Base SHA | `9773ba4cb213a2358c970c5013627b2d87bb2026` |
 | Branch | `audit/1.2-final-hardening` |
 | Base → HEAD | 31 files, +3046 / −974; commits are purely additive (count: `git rev-list --count 9773ba4..HEAD`) |
-| Audited source SHA (README pin target) | `f04232d` — code + tests, all suites green |
-| Code after the audited SHA | docs-only commits; no executable change since `f04232d` |
+| Audited source SHA (README pin target) | `4575497` — code + tests, all suites green |
+| Code after the audited SHA | docs-only commits; no executable change since `4575497` |
 | Pre-existing work | preserved; no reset, clean, force-push, or branch deletion |
 | Untracked at start | `audit-inputs/` (owner-provided reference material) |
 
@@ -51,6 +51,8 @@ onboarding facade; `git log` shows the integration commits).
 | R01 | **HIGH** | `aperio start` crashed on an existing project with no session; intent could be stored without consent | **FIXED** |
 | R02 | **HIGH** | Install approval recorded without a fingerprint authorized *any* plan (A13 bypass) | **FIXED** |
 | R03 | **HIGH** | Task-size gate applied only to tasks-less goals; one/many oversized tasks, direct plan-create, plan-approve and dispatch all bypassed it | **FIXED** |
+| R04 | **HIGH** | Wizard consent failed *open*: with no approval callback it initialized a new project and created `.aperio/` in an existing one | **FIXED (fail closed)** |
+| R05 | **HIGH** | Atomicity rule only knew whole-*project* keywords, so a whole section ("Implement the Hero Section") passed as one task | **FIXED** |
 
 ## C. Reproduction and root cause (key items)
 
@@ -122,7 +124,8 @@ captures, zero failures**, and three consecutive clean full-suite runs.
 | `src/aperio/planmodel.py` | R03 — task-size check in `validate_plan_input` (create/revise) |
 | `src/aperio/planstore.py` | R03 — task-size check in `approve_plan` |
 | `src/aperio/runtime.py` | R03 — task-size check in dispatch eligibility |
-| `src/aperio/wizard.py` | R01 — init consent on an existing project before storing intent |
+| `src/aperio/wizard.py` | R01/R04 — init consent; `_consent_granted` fails closed when the callback is missing or raises |
+| `src/aperio/bounded_tasks.py` | R05 — section/feature atomicity: breadth markers, implementation-area breadth, bare whole-feature tasks |
 | `src/aperio/cli.py` | R02 — record the reviewed plan fingerprint, not a bare scope |
 | `src/aperio/recovery.py` | A13r — task-level ceiling |
 | `src/aperio/hostcompat.py` | A10 — six verification dimensions |
@@ -142,18 +145,19 @@ captures, zero failures**, and three consecutive clean full-suite runs.
 | --- | --- |
 | Baseline suite (`9773ba4`, per prior handoff, reproduced locally) | 1,601 |
 | Hardening tests before the final remediation | 1,637 total |
-| New regression tests in the final remediation | 17 (wizard ×3, install approval ×4, task-size ×10) |
-| Tests updated for the new policy | 2 (`test_planbridge_priority`, `test_onboarding_tools`) |
-| **Final full suite** | **1,654 passed, 0 skipped** |
+| New regression tests, first remediation | 17 (wizard ×3, install approval ×4, task-size ×10) |
+| New regression tests, second remediation | 12 (wizard fail-closed ×4, section atomicity ×8) |
+| Tests updated for the new policy | 3 (`test_planbridge_priority`, `test_onboarding_tools`, hero A05 fixtures) |
+| **Final full suite** | **1,666 passed, 0 skipped** |
 
 Per-interpreter full-suite results (macOS arm64):
 
 | Python | Result |
 | --- | --- |
-| 3.11 | 1,654 passed |
-| 3.12 | 1,654 passed |
-| 3.13 | 1,654 passed |
-| 3.14 | 1,654 passed (stable after the lock fix) |
+| 3.11 | 1,666 passed |
+| 3.12 | 1,666 passed |
+| 3.13 | 1,666 passed |
+| 3.14 | 1,666 passed |
 
 ### Regression reproduction for the final remediation (R01–R03)
 
@@ -188,7 +192,7 @@ Each new test was written before its fix and failed first:
 | Method | Isolation | Verified | Notes |
 | --- | --- | --- | --- |
 | `uv tool install` (wheel) | yes | **yes** | upgrade/uninstall clean; bin on PATH |
-| `uv tool install` (git @ immutable commit) | yes | **yes** | re-verified against the audited commit `f04232d` (24-char SHA resolved, `aperio 1.2.0rc2`) |
+| `uv tool install` (git @ immutable commit) | yes | **yes** | re-verified against the audited commit `4575497` (24-char SHA resolved, `aperio 1.2.0rc2`) |
 | `pipx install` (wheel) | yes | **yes** | viable fallback |
 | venv + wheel | yes | yes | more manual |
 | PyPI | — | **N/A** | no package published |
@@ -211,9 +215,11 @@ built. Project `.aperio/` data survives upgrade and uninstall (verified).
   install (wheel built from this branch, installed outside the repo).
 - 16 relative links, all resolve. No badges, no screenshots, no placeholders.
 - The documented install command is pinned to the audited code commit
-  `f04232d` and was executed successfully from a clean environment with both
+  `4575497` and was executed successfully from a clean environment with both
   `uv tool install` and `pipx install`
-  (`Installed 1 executable: aperio` → `aperio 1.2.0rc2`).
+  (`Installed 1 executable: aperio` → `aperio 1.2.0rc2`), after the second
+  remediation. `aperio next`, and `aperio start` (PTY and non-TTY) were
+  re-run against that install.
   **Owner action after merge:** re-pin the ref to the merge commit or a
   release tag so installs always fetch the audited code.
 
@@ -225,8 +231,8 @@ built. Project `.aperio/` data survives upgrade and uninstall (verified).
 `benchmark-run`, `uv tool upgrade`, `uv tool uninstall` — all exercised on the
 installed artifact. `aperio next` confirmed to leave an empty directory empty.
 
-R01 was additionally verified end to end in a **real PTY** against the pinned
-install (`f04232d`), on an existing project with no `.aperio`:
+R01 and R04 were additionally verified end to end in a **real PTY** against
+the pinned install (`4575497`), on an existing project with no `.aperio`:
 
 - declining the init prompt printed by the wizard left the directory unchanged
   (no `.aperio`, no crash — previously it raised a lock-path `StateError`);
@@ -234,7 +240,9 @@ install (`f04232d`), on an existing project with no `.aperio`:
   existing project? [y/N]" *before* any mutation;
 - answering `y` created `.aperio/` and recorded `intent: Continue existing
   work` in the session;
-- the same command without a TTY exits with a clear message and does nothing.
+- the same command without a TTY exits with a clear message and does nothing;
+- declining the same consent prompt on the re-verified install printed
+  "nothing was changed" and left the directory byte-identical.
 
 ## L. Compatibility matrix (passive vs live)
 
@@ -250,6 +258,21 @@ Each `host-doctor` row now carries `verification` with six booleans; only
 probe. `cli_launch_tested`, `authenticated_model_call_tested`,
 `functional_handoff_tested`, `native_command_registered_and_tested` are `false`
 until a real run is recorded. No mock executable is described as a live test.
+
+### Second remediation (R04–R05) — what changed and why
+
+| ID | Defect (reproduced first) | Fix | Evidence |
+| --- | --- | --- | --- |
+| R04 | Both wizard mutation paths skipped consent when `request_approval` was `None`, so an unattended caller initialized a new project or created `.aperio/` in an existing one; the docstring claimed the opposite | `_consent_granted()` fails closed: a missing callback, a raising callback, or a falsy return is a refusal, and nothing is written | 4 tests (new project, existing project, no session, callback-approve still works); real PTY decline on the pinned install leaves the directory unchanged |
+| R05 | Atomicity only recognised whole-project keywords; "Implement the Hero Section" was accepted as one task at goal, create, approve and dispatch | Task size now also flags a breadth marker plus a feature unit, a task spanning several implementation areas, and a bare `<verb> the <feature unit>` without a narrowing slice in the declared scope | 8 tests across the four paths; CLI proof: whole-section plan rejected at `plan-create`, bounded hero slice created → approved → dispatched |
+
+Preserved on purpose (no unnecessary micro-decomposition): "Build the Hero
+Section markup", "Style the Hero responsive layout", "Add the hero heading
+copy", "Fix a typo in the README", "Update a docstring", "Build the frontend",
+"Implement the pages", "Configure the CMS", "Add an export button to the
+billing dashboard". Layers inside one area do not count as breadth, and slice
+qualifiers are read from the declared scope (title/objective/action), so a
+stale deliverable cannot launder a whole-section claim.
 
 ### Final remediation (R01–R03) — what changed and why
 
@@ -286,7 +309,7 @@ documented limitations in M. The rc2 build is **not** claimed production-ready.
 | --- | --- | --- |
 | G01 Repo state preserved | PASS | §A |
 | G02 High/critical defects fixed | PASS | §B, §D |
-| G03 Unit tests pass | PASS | 1,654 (4 interpreters) |
+| G03 Unit tests pass | PASS | 1,666 (4 interpreters) |
 | G04 Integration tests pass | PASS | e2e/onboarding suites green |
 | G05 Real onboarding journey works | PASS | §K, PTY wizard |
 | G06 Atomic execution policy enforceable | PASS | §C A05 |
@@ -315,6 +338,7 @@ Branch `audit/1.2-final-hardening`: every commit is additive on `9773ba4`
 
 ```
 docs-only  README re-pin + audit/release-notes/handoff totals (no code change)
+4575497 fix: fail closed on wizard consent; treat a whole section as non-atomic
 f04232d fix: bind install approval to the plan, gate task size on every path
 8279e1d fix(audit): bound subprocess capture, guard POSIX kill, require all prereqs, bind install approval to plan fingerprint
 d69d24a fix(audit): scan directories incrementally and read documents with a byte-bounded handle

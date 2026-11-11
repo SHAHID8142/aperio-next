@@ -8,9 +8,10 @@ omitted. Chunk-level detail for the 1.2 program lives in
 
 > **1.2 hardening audit:** an independent, adversarial audit of `main` @
 > `9773ba4` reproduced and fixed fourteen findings (including two critical),
-> then a final remediation closed three further defects (wizard init consent,
-> an install-approval fingerprint bypass, and task-size gates that only ran on
-> one of five paths). Installation was modernized to `uv tool install` and the
+> then two remediation rounds closed five further defects (wizard init consent,
+> an install-approval fingerprint bypass, task-size gates that only ran on one
+> of five paths, wizard consent that failed open, and section-sized tasks such
+> as an entire Hero Section being treated as atomic). Installation was modernized to `uv tool install` and the
 > README rewritten for beginners.
 > Full evidence, reproduction steps, gate table, and the honest remaining
 > risks are in **[audit-final.md](audit-final.md)**. That document supersedes
@@ -20,7 +21,7 @@ omitted. Chunk-level detail for the 1.2 program lives in
 
 - **Repository:** https://github.com/SHAHID8142/aperio-next
 - **Audit branch:** `audit/1.2-final-hardening` (additive commits on `9773ba4`)
-- **Audited source SHA:** `f04232d` (code + tests; the README install pins it)
+- **Audited source SHA:** `4575497` (code + tests; the README install pins it)
 - **Source histories:** `feature/master-v3-completion` @ `8a3fe94` and
   `feature/step01-universal-onboarding` @ `6bea2e2`, integrated on
   `integration/v1.2-final`. Main is updated only after the complete audit
@@ -68,13 +69,14 @@ additional CLI tests for read-only routing and resume behavior.
 
 ## D. Verification evidence
 
-- **Current (1.2 hardening audit, macOS arm64):** **1,654 passed, 0 skipped**
+- **Current (1.2 hardening audit, macOS arm64):** **1,666 passed, 0 skipped**
   on CPython **3.11, 3.12, 3.13 and 3.14**, no flake after the lock TOCTOU
   fix. Clean isolated `uv tool install` (wheel and pinned git commit) and
   `pipx` install verified outside the repo, including upgrade and uninstall.
-  The final remediation (R01–R03: wizard init consent, install-approval
-  fingerprint binding, task-size checks on create/approve/dispatch) added 17
-  regression tests, each written before its fix and failing first. See
+  The remediations added 29 regression tests, each written before its fix and
+  failing first: R01–R03 (wizard init consent, install-approval fingerprint
+  binding, task-size checks on create/approve/dispatch) and R04–R05 (fail-closed
+  wizard consent, whole-section atomicity for a Hero Section). See
   [audit-final.md](audit-final.md).
 - **Earlier integrated run (historical):** Python 3.14.7 (repo venv) — 1601
   passed, 0 skipped after integrating v1.2 and Step 01. The 1.1 line passed

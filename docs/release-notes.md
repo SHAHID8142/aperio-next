@@ -35,8 +35,13 @@ Correctness and security fixes:
   reviewed plan (an unbound legacy approval is refused); and the atomic
   task-size rule is enforced at goal assessment, plan-create, plan-approve and
   dispatch, so it cannot be bypassed.
+- **Wizard consent fails closed:** a missing or failing approval callback is a
+  refusal, never an implicit "yes".
+- **Whole sections are not atomic:** an entire Hero Section (or any feature
+  unit spanning several implementation areas) is refused as one task, while
+  bounded slices — markup-only, styling-only, a copy change — stay valid.
 
-Verification: **1,654 tests** pass on CPython 3.11, 3.12, 3.13 and 3.14
+Verification: **1,666 tests** pass on CPython 3.11, 3.12, 3.13 and 3.14
 (macOS arm64). GitHub-hosted CI still has not executed (account billing lock);
 Windows and Linux remain UNVERIFIED by this audit.
 

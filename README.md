@@ -60,7 +60,7 @@ in its own isolated environment with **uv**:
 ```sh
 # 1. Install uv (official instructions): https://docs.astral.sh/uv/
 # 2. Install Aperio from this repository, pinned to a commit or tag:
-uv tool install "git+https://github.com/SHAHID8142/aperio-next.git@f04232d"
+uv tool install "git+https://github.com/SHAHID8142/aperio-next.git@4575497"
 aperio --version
 ```
 
@@ -71,7 +71,7 @@ your project's dependencies. If `aperio` is not found, run
 **Alternative (pipx).** If you already use pipx:
 
 ```sh
-pipx install "git+https://github.com/SHAHID8142/aperio-next.git@f04232d"
+pipx install "git+https://github.com/SHAHID8142/aperio-next.git@4575497"
 ```
 
 **No published PyPI package or GitHub Release asset exists yet.** Install from
