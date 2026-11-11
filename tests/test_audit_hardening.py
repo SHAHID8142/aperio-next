@@ -1488,3 +1488,33 @@ def test_recovery_report_explains_the_task_wide_ceiling():
     guidance = " ".join(report["guidance"]).lower()
     assert "ceiling" in guidance and "retry" in guidance, guidance
     assert report["task_ceiling_reached"] is True
+
+
+# ---------------------------------------------------------------------------
+# Codex sixth review (P2): an interrupt must not leave an owned child running.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.skipif(os.name != "posix", reason="process-group semantics are POSIX-only")
+def test_interrupt_stops_and_reaps_the_captured_child(tmp_path):
+    import signal
+    import threading
+    import time as _time
+
+    from aperio.safeproc import run_captured
+
+    pidfile = tmp_path / "child.pid"
+    script = f"echo $$ > {pidfile}; exec sleep 30"
+
+    def interrupt() -> None:
+        _time.sleep(0.5)
+        os.kill(os.getpid(), signal.SIGINT)
+
+    threading.Thread(target=interrupt, daemon=True).start()
+    started = _time.monotonic()
+    with pytest.raises(KeyboardInterrupt):
+        run_captured(["/bin/sh", "-c", script], timeout_seconds=20, capture_limit=1000)
+    assert _time.monotonic() - started < 10, "the interrupt was not honoured promptly"
+
+    child_pid = int(pidfile.read_text().strip())
+    with pytest.raises(ProcessLookupError):
+        os.kill(child_pid, 0)   # still alive => the interrupt leaked the child

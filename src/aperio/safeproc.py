@@ -176,78 +176,92 @@ def run_captured(
                 pass
 
     started = time.monotonic()
-    process = subprocess.Popen(
-        list(argv),
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        cwd=cwd,
-        env=env,
-        start_new_session=(os.name == "posix"),
-        shell=False,
-    )
-    threads = [
-        threading.Thread(target=drain, args=(process.stdout, "stdout"), daemon=True),
-        threading.Thread(target=drain, args=(process.stderr, "stderr"), daemon=True),
-    ]
-    for thread in threads:
-        thread.start()
-
-    timed_out = False
+    interrupted = True
     try:
-        process.wait(timeout=timeout_seconds)
-    except subprocess.TimeoutExpired:
-        timed_out = True
-        stop_process_tree(process, force=True)
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            pass
-
-    join_deadline = time.monotonic() + max(0.0, float(drain_grace_seconds))
-    for thread in threads:
-        thread.join(timeout=max(0.0, join_deadline - time.monotonic()))
-    drain_stalled = any(t.is_alive() for t in threads)
-    if drain_stalled:
-        # A descendant still holds a pipe open. Stop what remains of the
-        # process group (killpg works on the group id even after the direct
-        # child was reaped) so the readers can reach EOF.
-        stop_process_tree(process, force=True)
-        final_deadline = time.monotonic() + 1.0
+        process = subprocess.Popen(
+            list(argv),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=cwd,
+            env=env,
+            start_new_session=(os.name == "posix"),
+            shell=False,
+        )
+        threads = [
+            threading.Thread(target=drain, args=(process.stdout, "stdout"), daemon=True),
+            threading.Thread(target=drain, args=(process.stderr, "stderr"), daemon=True),
+        ]
         for thread in threads:
-            thread.join(timeout=max(0.0, final_deadline - time.monotonic()))
-        drain_stalled = any(t.is_alive() for t in threads)
-    for stream in (process.stdout, process.stderr):
-        if stream is None:
-            continue
-        # Closing a buffered stream blocks on the reader's lock while that
-        # reader is blocked in read(); do it off-thread with a deadline so the
-        # caller is never held hostage. The reader threads are daemons, so a
-        # stream that truly cannot be closed cannot outlive the process.
-        closer = threading.Thread(target=_close_quietly, args=(stream,), daemon=True)
-        closer.start()
-        closer.join(timeout=1.0)
+            thread.start()
 
-    duration = round(time.monotonic() - started, 2)
-    with lock:
-        out_text = redact_output(
-            buffers["stdout"].decode("utf-8", errors="replace"), home=home
-        )
-        err_text = redact_output(
-            buffers["stderr"].decode("utf-8", errors="replace"), home=home
-        )
-        result = {
-            "returncode": process.returncode,
-            "timed_out": timed_out,
-            "stdout": out_text,
-            "stderr": err_text,
-            "stdout_bytes": counts["stdout"],
-            "stderr_bytes": counts["stderr"],
-            "truncated": truncated["stdout"] or truncated["stderr"],
-            "drain_stalled": drain_stalled,
-            "duration": duration,
-        }
-    return result
+        timed_out = False
+        try:
+            process.wait(timeout=timeout_seconds)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            stop_process_tree(process, force=True)
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+
+        join_deadline = time.monotonic() + max(0.0, float(drain_grace_seconds))
+        for thread in threads:
+            thread.join(timeout=max(0.0, join_deadline - time.monotonic()))
+        drain_stalled = any(t.is_alive() for t in threads)
+        if drain_stalled:
+            # A descendant still holds a pipe open. Stop what remains of the
+            # process group (killpg works on the group id even after the direct
+            # child was reaped) so the readers can reach EOF.
+            stop_process_tree(process, force=True)
+            final_deadline = time.monotonic() + 1.0
+            for thread in threads:
+                thread.join(timeout=max(0.0, final_deadline - time.monotonic()))
+            drain_stalled = any(t.is_alive() for t in threads)
+        for stream in (process.stdout, process.stderr):
+            if stream is None:
+                continue
+            # Closing a buffered stream blocks on the reader's lock while that
+            # reader is blocked in read(); do it off-thread with a deadline so the
+            # caller is never held hostage. The reader threads are daemons, so a
+            # stream that truly cannot be closed cannot outlive the process.
+            closer = threading.Thread(target=_close_quietly, args=(stream,), daemon=True)
+            closer.start()
+            closer.join(timeout=1.0)
+
+        duration = round(time.monotonic() - started, 2)
+        with lock:
+            out_text = redact_output(
+                buffers["stdout"].decode("utf-8", errors="replace"), home=home
+            )
+            err_text = redact_output(
+                buffers["stderr"].decode("utf-8", errors="replace"), home=home
+            )
+            result = {
+                "returncode": process.returncode,
+                "timed_out": timed_out,
+                "stdout": out_text,
+                "stderr": err_text,
+                "stdout_bytes": counts["stdout"],
+                "stderr_bytes": counts["stderr"],
+                "truncated": truncated["stdout"] or truncated["stderr"],
+                "drain_stalled": drain_stalled,
+                "duration": duration,
+            }
+        interrupted = False
+        return result
+    finally:
+        if interrupted:
+            # Ctrl-C (or any unwinding) must not leave an owned child
+            # running: the child has its own session on POSIX, so the
+            # terminal's interrupt never reaches it. Stop the tree and
+            # reap before the caller's handler claims nothing is owned.
+            stop_process_tree(process, force=True)
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
 
 
 def read_text_bounded(path, limit: int) -> tuple[str, bool]:
