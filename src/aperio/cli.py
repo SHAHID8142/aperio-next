@@ -5284,6 +5284,19 @@ def _register_onboarding_parsers(subparsers) -> None:
     _dir_arg(next_parser)
 
     start_parser = subparsers.add_parser(
+        "start",
+        help="interactive guided onboarding (opt-in wizard, one question at a time)",
+        description=(
+            "Opt-in interactive wizard for people who would rather answer "
+            "questions than copy question IDs. It shows one step at a time, "
+            "lets you pause/resume/revise, explains consent before the first "
+            "mutation, and requires a real terminal. 'aperio next' remains the "
+            "read-only, scriptable entry point."
+        ),
+    )
+    _dir_arg(start_parser)
+
+    start_parser = subparsers.add_parser(
         "onboarding-start",
         help="universal onboarding entry point: discover and ask ONE thing",
         description=(
@@ -5527,6 +5540,40 @@ def _onboarding_workspace(args) -> str:
 
 def _cmd_onboarding_start(args) -> None:
     _emit_onboarding(_ob_start(_onboarding_workspace(args)), args.as_json)
+
+
+def _cmd_start_wizard(args) -> None:
+    """Interactive onboarding wizard ('aperio start'). Opt-in only."""
+    from aperio import wizard
+
+    if getattr(args, "as_json", False):
+        raise ValidationError(
+            "'aperio start' is interactive and has no --json form; use "
+            "'aperio next' for the machine-readable read-only protocol"
+        )
+
+    def _consent(message: str) -> bool:
+        try:
+            answer = input(f"{message} [y/N] ").strip().lower()
+        except EOFError:
+            return False
+        return answer in {"y", "yes"}
+
+    try:
+        result = wizard.run(
+            _onboarding_workspace(args),
+            request_approval=_consent,
+        )
+    except wizard.WizardUnavailable as exc:
+        raise ValidationError(str(exc)) from None
+
+    if result.final_prompt:
+        print("")
+        print(result.final_prompt)
+    for message in result.messages:
+        print(message)
+    if not result.finished and not result.paused and not result.cancelled:
+        print("Stopped. Run 'aperio next' to see the next action.")
 
 
 def _cmd_onboarding_confirm_init(args) -> None:
@@ -6074,6 +6121,8 @@ def main(argv: list[str] | None = None) -> int:
             _cmd_review_status(args)
         elif args.command == "next":
             _cmd_onboarding_start(args)
+        elif args.command == "start":
+            _cmd_start_wizard(args)
         elif args.command == "onboarding-start":
             _cmd_onboarding_start(args)
         elif args.command == "onboarding-confirm-init":

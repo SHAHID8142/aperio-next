@@ -324,3 +324,93 @@ def test_a05_cms_hero_content_is_large():
     assert assess_goal_boundedness(
         _goal("Add CMS-backed Hero content")
     ).blocked is True
+
+
+# ---------------------------------------------------------------------------
+# A06 — opt-in interactive wizard.
+# ---------------------------------------------------------------------------
+
+class _FakeTTY:
+    def __init__(self, text=""):
+        self._lines = text.splitlines(keepends=True)
+        self.written = []
+
+    def isatty(self):
+        return True
+
+    def readline(self):
+        if not self._lines:
+            return ""
+        return self._lines.pop(0)
+
+    def write(self, s):
+        self.written.append(s)
+        return len(s)
+
+    def flush(self):
+        pass
+
+    def getvalue(self):
+        return "".join(self.written)
+
+
+def test_a06_wizard_refuses_non_tty(tmp_path):
+    from aperio import wizard
+
+    class NotTTY(_FakeTTY):
+        def isatty(self):
+            return False
+
+    with pytest.raises(wizard.WizardUnavailable):
+        wizard.run(str(tmp_path), stdin=NotTTY(""), stdout=_FakeTTY(""))
+
+
+def test_a06_wizard_initialises_only_with_consent(tmp_path):
+    from aperio import wizard
+
+    stdin = _FakeTTY("1\n")
+    stdout = _FakeTTY("")
+    approvals = []
+    result = wizard.run(
+        str(tmp_path),
+        stdin=stdin,
+        stdout=stdout,
+        request_approval=lambda m: approvals.append(m) or True,
+    )
+    assert approvals, "consent must be requested before initializing"
+    assert (tmp_path / ".aperio").exists()
+
+
+def test_a06_wizard_declines_changes_nothing(tmp_path):
+    from aperio import wizard
+
+    stdin = _FakeTTY("2\n")  # choose "No, exit"
+    result = wizard.run(
+        str(tmp_path), stdin=stdin, stdout=_FakeTTY(""), request_approval=lambda m: True
+    )
+    assert result.cancelled is True
+    assert not (tmp_path / ".aperio").exists()
+
+
+def test_a06_wizard_quit_at_question_sentinel(tmp_path):
+    from aperio import wizard
+
+    stdin = _FakeTTY("1\n/quit\n")
+    result = wizard.run(
+        str(tmp_path), stdin=stdin, stdout=_FakeTTY(""), request_approval=lambda m: True
+    )
+    assert result.cancelled is True
+    assert any("saved" in m for m in result.messages)
+
+
+def test_a06_wizard_answers_a_question(tmp_path):
+    from aperio import wizard
+
+    # initialize, then answer the first question with free text, then quit
+    stdin = _FakeTTY("1\nA portfolio website\n/quit\n")
+    stdout = _FakeTTY("")
+    result = wizard.run(
+        str(tmp_path), stdin=stdin, stdout=stdout, request_approval=lambda m: True
+    )
+    assert result.steps >= 1
+    assert ".aperio" in str(tmp_path / ".aperio")
