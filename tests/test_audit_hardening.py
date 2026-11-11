@@ -1525,3 +1525,26 @@ def test_capture_preserves_the_startup_error_when_the_child_cannot_start():
 
     with pytest.raises(FileNotFoundError):
         run_captured(["/aperio-nonexistent"], timeout_seconds=1, capture_limit=100)
+
+
+def test_breadth_marker_governs_its_own_object_not_a_later_noun():
+    from aperio.bounded_tasks import assess_task_boundeness
+    from aperio.planmodel import validate_plan_input
+
+    packaging = {
+        "id": "TASK-001", "title": "Build a Docker image for the service",
+        "objective": "Add a Dockerfile for the existing executable",
+        "deliverables": ["Dockerfile"], "acceptance_criteria": ["Image builds"],
+        "depends_on": [],
+    }
+    oversized, signals = assess_task_boundeness(packaging)
+    assert oversized is False, signals
+    assert validate_plan_input(_valid_plan([packaging]))["tasks"][0]["id"] == "TASK-001"
+
+    # The object actually governed by the marker is still a whole project.
+    assert assess_task_boundeness({
+        "title": "Build a complete app with payments", "action": "build it",
+    })[0]
+    assert assess_task_boundeness({
+        "title": "Build an entire website", "action": "build the whole site",
+    })[0]

@@ -284,6 +284,13 @@ _COMPOUND_PREFIX_RE = re.compile(
     r"(?i)\b(?:entire|whole|complete|full|from\s+scratch|build\s+(?:a|an|the))\b"
 )
 
+#: Where the object governed by a breadth marker ends: a delimiter that starts
+#: a different phrase ("build a Docker image **for the service**"). The marker
+#: governs what it is applied to, not any product noun further down the line.
+_OBJECT_BOUNDARY_RE = re.compile(
+    r"(?i)\b(?:for|in|to|of|with|using|from|that|which|so|when|and|including)\b|[,;:()\[\]]"
+)
+
 
 #: Breadth markers: "the whole X", "an entire X" describe a project or a
 #: feature-level unit, never one atomic task.
@@ -405,6 +412,9 @@ def assess_task_boundeness(task: dict) -> tuple[bool, list[str]]:
     # still the project.
     for match in _COMPOUND_PREFIX_RE.finditer(everything):
         window = everything[match.end(): match.end() + 48]
+        boundary = _OBJECT_BOUNDARY_RE.search(window)
+        if boundary is not None:
+            window = window[: boundary.start()]
         hit = _mentions(window, _COMPOUND_PROJECT_OBJECTS)
         if hit:
             signals.append(
