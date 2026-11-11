@@ -1506,14 +1506,18 @@ def test_interrupt_stops_and_reaps_the_captured_child(tmp_path):
     script = f"echo $$ > {pidfile}; exec sleep 30"
 
     def interrupt() -> None:
-        _time.sleep(0.5)
+        # Deliver the interrupt only once the child is actually running: a
+        # fixed sleep makes the test depend on machine load, not on the code.
+        deadline = _time.monotonic() + 20
+        while not pidfile.exists() and _time.monotonic() < deadline:
+            _time.sleep(0.02)
         os.kill(os.getpid(), signal.SIGINT)
 
     threading.Thread(target=interrupt, daemon=True).start()
     started = _time.monotonic()
     with pytest.raises(KeyboardInterrupt):
-        run_captured(["/bin/sh", "-c", script], timeout_seconds=20, capture_limit=1000)
-    assert _time.monotonic() - started < 10, "the interrupt was not honoured promptly"
+        run_captured(["/bin/sh", "-c", script], timeout_seconds=30, capture_limit=1000)
+    assert _time.monotonic() - started < 20, "the interrupt was not honoured promptly"
 
     child_pid = int(pidfile.read_text().strip())
     with pytest.raises(ProcessLookupError):
