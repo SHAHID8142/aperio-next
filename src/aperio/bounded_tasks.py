@@ -355,7 +355,13 @@ _LAYER_AREAS = {
 _LAYER_AREA_LIMIT = 3
 
 _BREADTH_MARKER_RE = re.compile(
-    r"\b(?:" + "|".join(m.replace("-", r"\-") for m in _SCOPE_BREADTH_MARKERS) + r")\b"
+    r"\b(?:" + "|".join(m.replace("-", r"\-") for m in _SCOPE_BREADTH_MARKERS) + r")\b(?!-)"
+)
+
+#: Dimensional adjectives that borrow a breadth word: "full-width", "full
+#: height", "full-bleed". They describe a measurement, not a whole feature.
+_DIMENSIONAL_ADJECTIVE_RE = re.compile(
+    r"(?i)[\s-]*(?:width|height|bleed|size|screen|stack|resolution)\b"
 )
 _FEATURE_VERB_RE = re.compile(
     r"\b(?:" + "|".join(_FEATURE_VERBS) + r")\b"
@@ -425,6 +431,8 @@ def assess_task_boundeness(task: dict) -> tuple[bool, list[str]]:
     # A breadth marker in front of a section/feature unit is a feature-level
     # task: "an entire Hero Section", "the whole checkout flow".
     for match in _BREADTH_MARKER_RE.finditer(text):
+        if _DIMENSIONAL_ADJECTIVE_RE.match(text[match.end(): match.end() + 16]):
+            continue
         window = text[match.end(): match.end() + 48]
         hit = _mentions(window, _FEATURE_UNITS)
         if hit:
@@ -440,6 +448,8 @@ def assess_task_boundeness(task: dict) -> tuple[bool, list[str]]:
     # unrelated "Implement component" cannot hide one behind its slice word.
     if criteria:
         for match in _BREADTH_MARKER_RE.finditer(criteria):
+            if _DIMENSIONAL_ADJECTIVE_RE.match(criteria[match.end(): match.end() + 16]):
+                continue
             window = criteria[match.end(): match.end() + 48]
             hit = _mentions(window, _FEATURE_UNITS)
             if not hit:

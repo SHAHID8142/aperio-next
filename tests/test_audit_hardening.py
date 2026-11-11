@@ -1548,3 +1548,28 @@ def test_breadth_marker_governs_its_own_object_not_a_later_noun():
     assert assess_task_boundeness({
         "title": "Build an entire website", "action": "build the whole site",
     })[0]
+
+
+def test_dimensional_adjectives_are_not_breadth_markers():
+    from aperio.bounded_tasks import assess_task_boundeness
+    from aperio.planmodel import validate_plan_input
+
+    def task(title: str) -> dict:
+        return {
+            "id": "TASK-001", "title": title,
+            "objective": "Style the banner image", "deliverables": ["login.css"],
+            "acceptance_criteria": ["Image renders"], "depends_on": [],
+        }
+
+    for title in (
+        "Add a full-width image to the login page",
+        "Add a full-height banner to the login page",
+        "Add a full-bleed photo to the login page",
+    ):
+        oversized, signals = assess_task_boundeness(task(title))
+        assert oversized is False, (title, signals)
+        assert validate_plan_input(_valid_plan([task(title)]))["tasks"][0]["id"] == "TASK-001"
+
+    # The same word meaning a whole feature is still refused.
+    assert assess_task_boundeness(task("Implement the full login page"))[0]
+    assert assess_task_boundeness(task("Implement the entire Hero Section"))[0]
