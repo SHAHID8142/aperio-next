@@ -285,3 +285,34 @@ def test_every_host_has_documented_paths_or_an_explicit_note():
         assert spec.user_skill_dir or spec.user_command_dir or spec.note, (
             spec.host_id
         )
+
+
+def test_skill_frontmatter_stays_within_host_limits():
+    """ZCode drops a skill whose description exceeds 1024 chars; Claude Code
+    truncates description+when_to_use at 1536. Regressions here would make
+    the skill silently undiscoverable."""
+    import re
+
+    from aperio.integrations import host_by_id
+
+    for host_id in ("zcode", "claude-code"):
+        body = render_skill_body(
+            host_by_id(host_id), engine_path="aperio", version="t"
+        )
+        frontmatter = body.split("---", 2)[1]
+
+        def _folded(key: str) -> str:
+            m = re.search(rf"{key}: >-\n((?:  .*\n)+)", frontmatter)
+            assert m, f"{host_id}: missing {key}"
+            return " ".join(
+                line.strip() for line in m.group(1).strip().splitlines()
+            )
+
+        description = _folded("description")
+        assert len(description) <= 1024, (host_id, len(description))
+        when_to_use = _folded("when_to_use")
+        assert len(description) + len(when_to_use) <= 1536, (
+            host_id,
+            len(description) + len(when_to_use),
+        )
+        assert "name: aperio-next" in frontmatter

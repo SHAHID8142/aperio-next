@@ -296,3 +296,15 @@ def test_existing_commands_still_work(run_cli, ws):
     assert "initialized" in out
     code, out, err = run_cli("status", str(ws))
     assert code == 0, err
+
+
+def test_status_without_session_is_clean_and_actionable(run_cli, ws):
+    """Regression: onboarding-status on a session-less project used to raise
+    NameError (NotInitializedError was not imported in cli.py), printing a
+    raw traceback. It must return a clean, actionable status instead."""
+    code, out, err = run_cli("onboarding-status", str(ws), "--json")
+    assert code == 0, err
+    assert "Traceback" not in err
+    doc = _json(out)
+    assert doc["action_required"] == "none"
+    assert "onboarding-start" in doc["prompt"]

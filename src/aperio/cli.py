@@ -134,7 +134,12 @@ from aperio.goals import (
     describe_goal,
     load_goal_file,
 )
-from aperio.errors import AperioError, StateError, ValidationError
+from aperio.errors import (
+    AperioError,
+    NotInitializedError,
+    StateError,
+    ValidationError,
+)
 from aperio.integrations import (
     HOSTS,
     IntegrationError,
@@ -5768,7 +5773,10 @@ def _cmd_onboarding_status(args) -> None:
         doc = {
             "format": "aperio-onboarding-protocol", "version": 1,
             "action_required": "none",
-            "prompt": "No onboarding session in this project.",
+            "prompt": (
+                "No onboarding session in this project. Run 'aperio next' "
+                "or 'aperio onboarding-start' to begin one."
+            ),
         }
     else:
         doc = {
