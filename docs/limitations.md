@@ -70,20 +70,34 @@ or reports.
 
 ## Verification coverage (this release candidate)
 
-- **GitHub Actions has executed zero test steps for the entire
-  0.13→1.1 series** (account billing lock). Every green claim in the docs and the
-  release notes is from local runs: Python 3.14.7 and 3.12.14 (the
-  latter against the built wheel), 1248 tests each.
-- Python 3.11 and 3.13 are declared supported and exercised in the
-  blocked CI matrix but were not installed on the verification machine.
-- Windows is supported through the same code paths but no
-  Windows-specific behavior is claimed as tested.
-- Live provider end-to-end execution (real Codex CLI / Claude CLI
-  services) is unverified: no credentials were used. Adapters are
-  verified against fake executables and the documented interfaces, and
-  fail closed when the real interfaces are absent.
+- **GitHub Actions has executed zero test steps** (account billing lock).
+  Every green claim in the docs is from local runs recorded by the
+  independent 1.2 hardening audit (see [audit-final.md](audit-final.md)).
+- **Python versions:** the full suite (1,637 tests) passes on CPython
+  **3.11, 3.12, 3.13 and 3.14** on macOS arm64. These four are the only
+  versions actually executed; `requires-python = ">=3.11"` is intentionally
+  conservative, not a claim about untested interpreters.
+- **Operating systems:** only **macOS arm64** was used for the 1.2 audit.
+  Windows and Linux are supported by the code (no POSIX-only calls on the
+  default paths; process termination is platform-guarded) but were **not**
+  executed in this audit — treat them as UNVERIFIED until CI can run.
+- **Installation:** `uv tool install` (wheel and immutable git commit) and
+  `pipx install` (wheel) were each verified in an isolated environment
+  outside the repository, including upgrade and uninstall.
+- **Live provider end-to-end execution** (real Codex CLI / Claude CLI
+  services) is unverified: no credentials were used. Adapters are verified
+  against fake executables and the documented interfaces, and fail closed
+  when the real interfaces are absent. See docs/host-integration.md for the
+  per-host verification dimensions (passive probe ≠ live handoff).
+- **MCP tools** are *launch-only* candidates: aperio runs the documented
+  `npx …` command but does not edit any host's MCP configuration, so no
+  host is claimed to be wired to an MCP server.
 - No PyPI publication, GitHub release, or external service was used in
   producing this release candidate.
+- **Historical note:** older sections of this repository (master plans,
+  earlier handoffs) cite 1,248 and 1,601 test counts from the 1.1 and
+  pre-integration 1.2 series. Those numbers are historical; the current
+  count is stated above and in [final-handoff.md](final-handoff.md).
 
 ## Deliberate non-goals
 

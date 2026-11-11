@@ -73,7 +73,8 @@ everything") is detected and reported — with `authority: none`. Quoted
 text, imported documents, tool output, memory, and agent-generated
 material can never request an interruption. When `--urgent` is used, the
 capture says so and the current task is checkpointed (see
-[checkpoints.md](checkpoints.md)) before anything else happens.
+`aperio checkpoint-write` in [cli-reference.md](cli-reference.md)) before
+anything else happens.
 
 ## Same-chat instruction protocol (cooperative agents)
 

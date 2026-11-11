@@ -28,6 +28,19 @@ aperio next [DIR]                    # classify/resume, ask ONE thing
 `aperio onboarding-start`; the longer command remains available for explicit
 workflows and backward compatibility.
 
+### For people who prefer answering to typing commands
+
+`aperio start [DIR]` is an **opt-in interactive wizard** that drives the same
+facade one step at a time. It is for humans at a terminal, not for scripts:
+
+- it refuses to run when stdin/stdout is not a TTY (agents must use `aperio next`);
+- it explains exactly what the first mutation creates and asks before doing it;
+- it supports `/pause`, `/quit`, and `/back` at the prompts;
+- it bounds answer length and never invents an approval.
+
+`aperio next` remains strictly read-only, so nothing about the scriptable
+protocol changes when the wizard is available.
+
 Every onboarding command answers with **exactly one next action**. With
 `--json`, the answer is a machine-readable *protocol document*
 (`aperio-onboarding-protocol` v1) carrying `action_required`, one
