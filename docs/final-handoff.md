@@ -55,8 +55,9 @@ additional CLI tests for read-only routing and resume behavior.
 ## D. Verification evidence
 
 - **Local (this machine, macOS arm64):**
-  - Python 3.14.7 (repo venv): **1600 passed, 1 skipped** after integrating
-    v1.2, Step 01, and the canonical `aperio next` tests.
+  - Python 3.14.7 (repo venv): **1601 passed, 0 skipped** after integrating
+    v1.2, Step 01, and the canonical `aperio next` tests. Final review removed
+    a stale conditional skip in the plan-reconstruction fixture.
   - The earlier 1.2 line passed 1403 tests and the isolated Step 01 line
     passed its own full suite before integration; those counts are historical,
     not substituted for the integrated run above.

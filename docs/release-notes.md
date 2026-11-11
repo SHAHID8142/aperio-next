@@ -19,9 +19,10 @@ universal-onboarding implementation.
   index, where both document entries were retained.
 - **Release identity:** version advanced from 1.2.0rc1 to 1.2.0rc2 so the
   integrated artifact cannot be confused with the earlier unintegrated RC.
-- **Verification:** 1600 passed, 1 skipped on Python 3.14.7 after integration;
-  the focused onboarding/security and v1.2 planning/recovery/host suites also
-  pass together.
+- **Verification:** 1601 passed with no skips on Python 3.14.7 after
+  integration. The audit removed a stale Step 01 schema-compatibility skip by
+  updating its fixture to the current task contract, restoring coverage of
+  reconstruction from a real Aperio plan.
 
 The external verification limits remain: GitHub-hosted CI has not executed,
 live provider calls were not run, and Windows/Linux/Python 3.11/3.13 were not
