@@ -51,7 +51,7 @@ Correctness and security fixes:
 - **Tests are not treated as scope:** requiring "unit tests pass" no longer
   makes a bounded task look like a whole feature.
 
-Verification: **1,689 tests** pass on CPython 3.11, 3.12, 3.13 and 3.14
+Verification: **1,690 tests** pass on CPython 3.11, 3.12, 3.13 and 3.14
 (macOS arm64). GitHub-hosted CI still has not executed (account billing lock);
 Windows and Linux remain UNVERIFIED by this audit.
 
