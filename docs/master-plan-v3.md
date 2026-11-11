@@ -37,6 +37,16 @@ regression, one coherent commit each.
 - `feature/master-v3-completion` — THIS assignment's branch, off main
   @ `83af3f5`.
 
+## Final integration follow-up (completed 2026-11-11)
+
+The previously isolated Step 01 history at `6bea2e2` was preserved on
+`feature/step01-universal-onboarding`, pushed to origin, and merged with the
+v1.2 completion line on `integration/v1.2-final`. The merge retained both
+documentation additions and combined the independently developed CLI changes.
+The canonical `aperio next` command was then added as a read-only route through
+the onboarding facade, with tests proving equivalence to `onboarding-start`,
+no mutation in an empty workspace, and session-safe resume behavior.
+
 ## Chunk table (branch `feature/master-v3-completion`)
 
 | Chunk | Directive section | Commit | Content | Tests |
@@ -76,12 +86,11 @@ are the deltas.
   fake executables at the real process boundary.
 - Windows, Linux, Python 3.11/3.13: declared supported, not tested on
   this machine.
-- Step 01 onboarding: implemented and tested on its branch (1504
-  tests) but **not merged** and not live-verified inside any AI host —
-  the terminal CLI is the only runtime-enforced path.
-- `aperio next` canonical entry command: deferred until the Step 01
-  branch integrates (it routes through that facade; building it on
-  main alone would duplicate or stub the flow).
+- Step 01 onboarding is integrated and locally tested. It is not
+  live-verified inside any commercial AI host; the terminal CLI remains the
+  only runtime-enforced path.
+- `aperio next` is implemented as the canonical read-only entry command and
+  routes through the Step 01 facade.
 
 ## Requirement → evidence quick map
 
@@ -96,4 +105,4 @@ are the deltas.
 | Cross-agent portability (§12) | exchange/portable/memportable (existing) + roadmap now portable | test_roadmap.py roundtrip, test_portable.py |
 | Fresh-machine install (§17) | docs/install.md + clean-venv verification | wheel install journey (this session) |
 | Release safety (§18-J) | no new deps (stdlib-only unchanged), no-secrets suite green | test_no_secrets.py, pyproject |
-| Version/packaging | pyproject 1.2.0rc1 == `aperio.__version__` | test_version.py |
+| Version/packaging | pyproject 1.2.0rc2 == `aperio.__version__` | test_version.py |

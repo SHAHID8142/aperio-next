@@ -10,6 +10,7 @@ fresh-machine path (Windows/macOS/Linux):
 ```sh
 python -m pip install -e ".[dev]"     # or: pip install <the built wheel>
 aperio --version
+aperio next .                         # canonical read-only first action
 ```
 
 ## First run in five minutes (non-coding example)

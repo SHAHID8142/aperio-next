@@ -111,3 +111,31 @@ marked *(read-only)*.
 | 1 | operational error (unsafe path, unreadable state, refused operation) |
 | 2 | usage error (argparse) |
 | 130 | interrupted |
+
+## Universal onboarding (Step 01)
+
+| Command | Purpose |
+| --- | --- |
+| `aperio next [DIR] [--json]` | canonical read-only entry point; route through the onboarding facade and return exactly one next action |
+| `aperio onboarding-start [DIR] [--json]` | classify the workspace and ask exactly one next thing *(read-only; resumes a session)* |
+| `aperio onboarding-confirm-init DIR --approve [--intent TEXT]` | operator-approved initialization (non-destructive; never overwrites) |
+| `aperio onboarding-decline [DIR]` | exit onboarding; change nothing |
+| `aperio onboarding-intent DIR --choice ID [--note TEXT]` | record the Rule-8 intent for an existing project |
+| `aperio onboarding-status DIR [--json]` | show session state *(read-only)* |
+| `aperio onboarding-answer DIR QUESTION_ID --answer TEXT` | record one answer; returns the next single question |
+| `aperio onboarding-revise DIR QUESTION_ID --answer TEXT` | revise a previous answer (history preserved) |
+| `aperio onboarding-pause DIR` | pause (state is already durable) |
+| `aperio onboarding-cancel DIR --confirm` | explicit cancellation (state preserved) |
+| `aperio onboarding-reconstruct DIR [--output F --force] [--json]` | read-only document reconstruction with attribution |
+| `aperio onboarding-propose-standardization DIR [--output F --force] [--json]` | build the transformation proposal *(read-only)* |
+| `aperio onboarding-apply-standardization DIR --proposal ID --approve` | apply an approved proposal (new files only) |
+| `aperio onboarding-discover-tools DIR [--user-config] [--probe TOOL] [--json]` | host/tool/MCP discovery *(read-only; probe is opt-in)* |
+| `aperio onboarding-recommend-tools DIR [--category TEXT] [--json]` | project-relevant recommendations from a static registry |
+| `aperio onboarding-tool-plan DIR TOOL_ID [--json]` | the ten-item install plan (installs nothing) |
+| `aperio onboarding-tool-install DIR TOOL_ID --approve --authorize-install` | execute an approved plan (two gates; fixed argv) |
+| `aperio onboarding-readiness DIR [--json]` | evaluate the completion gate |
+| `aperio onboarding-report DIR [--output F --force] [--json]` | generate the 20-area readiness report |
+
+All `onboarding-*` commands accept `--json`; the JSON is the documented
+host-integration protocol (`aperio-onboarding-protocol` v1). See
+[Onboarding](onboarding.md) for the full contract and honest limitations.

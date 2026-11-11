@@ -318,6 +318,50 @@ from aperio.reviews import (
     submit_review,
 )
 from aperio.progress import update_phase
+from aperio.onboarding_discovery import discover_workspace as _ob_discover_workspace
+from aperio.onboarding import (
+    INTENT_CHOICES as _OB_INTENT_CHOICES,
+    INIT_ACTION as _OB_INIT_ACTION,
+    answer as _ob_answer,
+    cancel as _ob_cancel,
+    confirm_initialization as _ob_confirm_initialization,
+    decline_initialization as _ob_decline_initialization,
+    pause as _ob_pause,
+    record_intent as _ob_record_intent,
+    revise as _ob_revise,
+    start as _ob_start,
+    store_reconstruction as _ob_store_reconstruction,
+)
+from aperio.onboarding_interview import interview_progress as _ob_interview_progress
+from aperio.onboarding_readiness import (
+    build_report as _ob_build_report,
+    evaluate_readiness as _ob_evaluate_readiness,
+    render_report_markdown as _ob_render_report_markdown,
+)
+from aperio.onboarding_reconstruct import reconstruct_workspace as _ob_reconstruct_workspace
+from aperio.onboarding_session import (
+    read_session as _ob_read_session,
+    record_approval as _ob_record_approval,
+    session_exists as _ob_session_exists,
+)
+from aperio.onboarding_standardize import (
+    APPLY_ACTION as _OB_APPLY_ACTION,
+    apply_standardization as _ob_apply_standardization,
+    load_proposal as _ob_load_proposal,
+    propose_standardization as _ob_propose_standardization,
+    render_proposal_markdown as _ob_render_proposal_markdown,
+    save_proposal as _ob_save_proposal,
+    verify_standardization as _ob_verify_standardization,
+)
+from aperio.onboarding_tools import (
+    INSTALL_ACTION as _OB_INSTALL_ACTION,
+    build_install_plan as _ob_build_install_plan,
+    discover_tools as _ob_discover_tools,
+    execute_install as _ob_execute_install,
+    probe_tool as _ob_probe_tool,
+    recommend_tools as _ob_recommend_tools,
+)
+from aperio.project import require_supported_state as _ob_require_supported_state
 from aperio.upgrade import apply_upgrade, plan_upgrade
 from aperio.project import (
     APERIO_DIR_NAME,
@@ -2386,6 +2430,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--json", dest="as_json", action="store_true",
         help="emit the status as machine-readable JSON",
     )
+
+    # --- Step 01: universal onboarding ------------------------------------
+    _register_onboarding_parsers(subparsers)
 
     return parser
 
@@ -5205,6 +5252,655 @@ def _cmd_review_status(args) -> None:
         )
 
 
+# ---- Step 01 onboarding: parser registration (inserted into build_parser) ----
+
+def _register_onboarding_parsers(subparsers) -> None:
+    """Register the Step 01 universal onboarding command family.
+
+    Formatting and flag plumbing only; all behavior lives in the
+    onboarding_* modules (the CLI never contains business logic).
+    """
+
+    def _dir_arg(parser, name="DIR"):
+        parser.add_argument(
+            name, nargs="?", default=".",
+            metavar="DIR",
+            help="project directory (default: current directory)",
+        )
+        parser.add_argument(
+            "--json", dest="as_json", action="store_true",
+            help="emit the machine-readable onboarding protocol document",
+        )
+
+    next_parser = subparsers.add_parser(
+        "next",
+        help="show the next onboarding action (canonical read-only entry point)",
+        description=(
+            "Canonical universal entry point. Routes through the Step 01 "
+            "onboarding facade and returns exactly one next action. It "
+            "never initializes, installs, or modifies project state."
+        ),
+    )
+    _dir_arg(next_parser)
+
+    start_parser = subparsers.add_parser(
+        "onboarding-start",
+        help="universal onboarding entry point: discover and ask ONE thing",
+        description=(
+            "Step 01 universal entry point. Strictly read-only: classifies "
+            "the workspace and returns exactly one next action (confirm "
+            "initialization, choose intent, answer a question, or resolve "
+            "an ambiguous state). Never mutates anything. Resumes an "
+            "existing onboarding session when one is present."
+        ),
+    )
+    _dir_arg(start_parser)
+
+    confirm_parser = subparsers.add_parser(
+        "onboarding-confirm-init",
+        help="operator-approved initialization (the only sanctioned first mutation)",
+        description=(
+            "Runs the existing safe init mechanism after explicit operator "
+            "approval (--approve). Non-destructive by construction: only "
+            "missing scaffolding is created, existing files are never "
+            "overwritten, and a repeated call never destroys data."
+        ),
+    )
+    _dir_arg(confirm_parser)
+    confirm_parser.add_argument(
+        "--approve", action="store_true",
+        help="explicit operator approval to initialize (required)",
+    )
+    confirm_parser.add_argument(
+        "--intent", metavar="TEXT",
+        help="stated purpose for existing projects (recorded in the session)",
+    )
+
+    decline_parser = subparsers.add_parser(
+        "onboarding-decline",
+        help="decline onboarding: exit gracefully, change nothing",
+    )
+    _dir_arg(decline_parser)
+
+    intent_parser = subparsers.add_parser(
+        "onboarding-intent",
+        help="record the operator's chosen intent for an existing project",
+    )
+    _dir_arg(intent_parser)
+    intent_parser.add_argument(
+        "--choice", required=True,
+        choices=[c["id"] for c in _OB_INTENT_CHOICES],
+        help="which suggested response the operator chose",
+    )
+    intent_parser.add_argument(
+        "--note", metavar="TEXT",
+        help="free-text detail (used for 'other')",
+    )
+
+    status_parser = subparsers.add_parser(
+        "onboarding-status",
+        help="show onboarding session state (read-only)",
+    )
+    _dir_arg(status_parser)
+
+    answer_parser = subparsers.add_parser(
+        "onboarding-answer",
+        help="record ONE operator answer; returns the next single question",
+    )
+    _dir_arg(answer_parser)
+    answer_parser.add_argument("question_id", metavar="QUESTION_ID")
+    answer_parser.add_argument(
+        "--answer", required=True, metavar="TEXT",
+        help="the operator's verbatim answer ('Not sure yet' and 'Decide "
+             "later' are recorded as such)",
+    )
+
+    revise_parser = subparsers.add_parser(
+        "onboarding-revise",
+        help="revise a previous answer (history is preserved)",
+    )
+    _dir_arg(revise_parser)
+    revise_parser.add_argument("question_id", metavar="QUESTION_ID")
+    revise_parser.add_argument("--answer", required=True, metavar="TEXT")
+
+    pause_parser = subparsers.add_parser(
+        "onboarding-pause",
+        help="pause onboarding (state is already durable)",
+    )
+    _dir_arg(pause_parser)
+
+    cancel_parser = subparsers.add_parser(
+        "onboarding-cancel",
+        help="explicitly cancel onboarding (state preserved, marked cancelled)",
+    )
+    _dir_arg(cancel_parser)
+    cancel_parser.add_argument(
+        "--confirm", action="store_true",
+        help="explicit operator confirmation (required)",
+    )
+
+    reconstruct_parser = subparsers.add_parser(
+        "onboarding-reconstruct",
+        help="read-only reconstruction of existing project context",
+        description=(
+            "Inventories relevant documents, extracts pending-work claims "
+            "with provenance, detects claim conflicts and untrusted-content "
+            "risks, and reports coverage gaps that drive the gap interview. "
+            "Never modifies project files. When an onboarding session "
+            "exists, a bounded summary is recorded in the session."
+        ),
+    )
+    _dir_arg(reconstruct_parser)
+    reconstruct_parser.add_argument(
+        "--output", metavar="FILE", help="also write the report to a file",
+    )
+    reconstruct_parser.add_argument(
+        "--force", action="store_true", help="allow overwriting --output",
+    )
+
+    propose_parser = subparsers.add_parser(
+        "onboarding-propose-standardization",
+        help="build the standardization proposal (read-only)",
+    )
+    _dir_arg(propose_parser)
+    propose_parser.add_argument(
+        "--output", metavar="FILE", help="write the Markdown preview to a file",
+    )
+    propose_parser.add_argument("--force", action="store_true")
+
+    apply_parser = subparsers.add_parser(
+        "onboarding-apply-standardization",
+        help="apply an approved standardization proposal",
+        description=(
+            "Applies the proposal: creates only NEW files (init repair + "
+            "mapping record) after an explicit approval scoped to the "
+            "exact proposal id is recorded in the session. Existing files "
+            "are never modified."
+        ),
+    )
+    _dir_arg(apply_parser)
+    apply_parser.add_argument(
+        "--proposal", required=True, metavar="ID", help="proposal id to apply",
+    )
+    apply_parser.add_argument(
+        "--approve", action="store_true",
+        help="explicit operator approval for THIS proposal id (required)",
+    )
+
+    discover_parser = subparsers.add_parser(
+        "onboarding-discover-tools",
+        help="discover hosts, tools, and MCP configuration (read-only)",
+    )
+    _dir_arg(discover_parser)
+    discover_parser.add_argument(
+        "--user-config", action="store_true",
+        help="opt-in: also scan documented user-level config paths",
+    )
+    discover_parser.add_argument(
+        "--probe", metavar="TOOL",
+        help="opt-in: run one bounded version probe for this executable",
+    )
+
+    recommend_parser = subparsers.add_parser(
+        "onboarding-recommend-tools",
+        help="project-relevant tool recommendations (static, honest registry)",
+    )
+    _dir_arg(recommend_parser)
+    recommend_parser.add_argument(
+        "--category", metavar="TEXT",
+        help="project category (e.g. 'Web application') to tailor relevance",
+    )
+
+    plan_parser = subparsers.add_parser(
+        "onboarding-tool-plan",
+        help="build a reviewable install plan (installs nothing)",
+    )
+    _dir_arg(plan_parser)
+    plan_parser.add_argument("tool_id", metavar="TOOL_ID")
+
+    install_parser = subparsers.add_parser(
+        "onboarding-tool-install",
+        help="execute an approved install plan",
+    )
+    _dir_arg(install_parser)
+    install_parser.add_argument("tool_id", metavar="TOOL_ID")
+    install_parser.add_argument(
+        "--approve", action="store_true",
+        help="explicit operator approval for installing THIS tool (required)",
+    )
+    install_parser.add_argument(
+        "--authorize-install", action="store_true",
+        help="second independent authorization gate (required)",
+    )
+
+    readiness_parser = subparsers.add_parser(
+        "onboarding-readiness",
+        help="evaluate the onboarding completion gate",
+    )
+    _dir_arg(readiness_parser)
+
+    report_parser = subparsers.add_parser(
+        "onboarding-report",
+        help="generate the structured readiness report",
+    )
+    _dir_arg(report_parser)
+    report_parser.add_argument(
+        "--output", metavar="FILE", help="write the Markdown report to a file",
+    )
+    report_parser.add_argument("--force", action="store_true")
+
+
+# ---- Step 01 onboarding: command handlers (inserted before main) ----
+
+def _emit_onboarding(doc: dict, as_json: bool) -> None:
+    if as_json:
+        sys.stdout.write(json.dumps(doc, ensure_ascii=False, indent=2) + "\n")
+        return
+    sys.stdout.write(f"{doc.get('prompt', '')}\n")
+    question = doc.get("question")
+    if question:
+        sys.stdout.write(f"\nQuestion [{question['id']} — {question['category']}]:\n")
+        sys.stdout.write(f"  {question['prompt']}\n")
+        sys.stdout.write(f"  (why: {question['purpose']})\n")
+        if question.get("suggestions"):
+            sys.stdout.write("  Suggestions: " + "; ".join(question["suggestions"]) + "\n")
+        sys.stdout.write(
+            "  Answer with: aperio onboarding-answer DIR "
+            f"{question['id']} --answer \"...\" (or 'Not sure yet' / 'Decide later')\n"
+        )
+    choices = doc.get("choices")
+    if choices:
+        sys.stdout.write("  Options:\n")
+        for choice in choices:
+            label = choice.get("label", choice.get("id"))
+            sys.stdout.write(f"    - {choice.get('id')}: {label}\n")
+    progress = doc.get("progress")
+    if progress and progress.get("outstanding_required"):
+        sys.stdout.write(
+            "  Outstanding required: " + ", ".join(progress["outstanding_required"]) + "\n"
+        )
+
+
+def _onboarding_workspace(args) -> str:
+    return getattr(args, "DIR", ".") or "."
+
+
+def _cmd_onboarding_start(args) -> None:
+    _emit_onboarding(_ob_start(_onboarding_workspace(args)), args.as_json)
+
+
+def _cmd_next(args) -> None:
+    """Canonical read-only route through the onboarding facade."""
+    _cmd_onboarding_start(args)
+
+
+def _cmd_onboarding_confirm_init(args) -> None:
+    if not args.approve:
+        doc = {
+            "format": "aperio-onboarding-protocol", "version": 1,
+            "action_required": "confirm_initialization",
+            "prompt": (
+                "Initialization requires explicit approval. The operator must "
+                "choose first; re-run with --approve only after they consent. "
+                "Nothing was modified."
+            ),
+        }
+        _emit_onboarding(doc, args.as_json)
+        return
+    doc = _ob_confirm_initialization(_onboarding_workspace(args), intent=args.intent)
+    _emit_onboarding(doc, args.as_json)
+
+
+def _cmd_onboarding_decline(args) -> None:
+    _emit_onboarding(_ob_decline_initialization(_onboarding_workspace(args)), args.as_json)
+
+
+def _cmd_onboarding_intent(args) -> None:
+    apdir = Path(args.DIR) / ".aperio" if args.DIR else Path(".aperio")
+    doc = _ob_record_intent(apdir, args.choice, custom_text=args.note)
+    _emit_onboarding(doc, args.as_json)
+
+
+def _cmd_onboarding_status(args) -> None:
+    apdir = (Path(args.DIR or ".") / ".aperio")
+    try:
+        session = _ob_read_session(apdir)
+    except NotInitializedError:
+        session = None
+    if session is None:
+        doc = {
+            "format": "aperio-onboarding-protocol", "version": 1,
+            "action_required": "none",
+            "prompt": "No onboarding session in this project.",
+        }
+    else:
+        doc = {
+            "format": "aperio-onboarding-protocol", "version": 1,
+            "session_id": session.get("session_id"),
+            "stage": session.get("stage"),
+            "classification": session.get("classification"),
+            "project_category": session.get("project_category"),
+            "intent": session.get("intent"),
+            "answers_recorded": len(session.get("answers", {})),
+            "unresolved_open": len(
+                [u for u in session.get("unresolved", []) if u.get("resolved_at") is None]
+            ),
+            "cancelled": session.get("cancelled"),
+            "action_required": "none",
+            "prompt": (
+                f"Onboarding session {session.get('session_id')} — stage: "
+                f"{session.get('stage')}, answers: {len(session.get('answers', {}))}."
+            ),
+        }
+    _emit_onboarding(doc, args.as_json)
+
+
+def _cmd_onboarding_answer(args) -> None:
+    apdir = (Path(args.DIR or ".") / ".aperio")
+    doc = _ob_answer(apdir, args.question_id, args.answer)
+    _emit_onboarding(doc, args.as_json)
+
+
+def _cmd_onboarding_revise(args) -> None:
+    apdir = (Path(args.DIR or ".") / ".aperio")
+    doc = _ob_revise(apdir, args.question_id, args.answer)
+    _emit_onboarding(doc, args.as_json)
+
+
+def _cmd_onboarding_pause(args) -> None:
+    apdir = (Path(args.DIR or ".") / ".aperio")
+    _emit_onboarding(_ob_pause(apdir), args.as_json)
+
+
+def _cmd_onboarding_cancel(args) -> None:
+    if not args.confirm:
+        doc = {
+            "format": "aperio-onboarding-protocol", "version": 1,
+            "action_required": "confirm_cancellation",
+            "prompt": "Cancellation requires --confirm from the operator. Nothing was modified.",
+        }
+        _emit_onboarding(doc, args.as_json)
+        return
+    apdir = (Path(args.DIR or ".") / ".aperio")
+    _emit_onboarding(_ob_cancel(apdir), args.as_json)
+
+
+def _cmd_onboarding_reconstruct(args) -> None:
+    workspace = _onboarding_workspace(args)
+    discovery = _ob_discover_workspace(workspace)
+    result = _ob_reconstruct_workspace(workspace, discovery)
+    apdir = Path(workspace) / ".aperio"
+    recorded = False
+    if _ob_session_exists(apdir):
+        summary = _ob_store_reconstruction(apdir, result)
+        recorded = True
+    payload = result.to_dict()
+    payload["recorded_in_session"] = recorded
+    if args.as_json:
+        sys.stdout.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+        return
+    lines = [
+        f"Reconstruction of {workspace} ({len(result.documents)} documents, read-only):",
+        f"  Documented pending tasks (claims, not approved): {len(result.pending_tasks)}",
+        f"  Documented completed claims (unverified): {len(result.completed_claims)}",
+        f"  Claim conflicts: {len(result.claim_conflicts)}",
+        f"  Untrusted-content risk findings: {len(result.risk_findings)}",
+        f"  Topics with no documented coverage: {', '.join(result.missing_topics) or 'none'}",
+    ]
+    if recorded:
+        lines.append("  Summary recorded in the onboarding session (gap interview updated).")
+    sys.stdout.write("\n".join(lines) + "\n")
+    if args.output:
+        from aperio.onboarding_reconstruct import RECONSTRUCTION_FORMAT
+
+        publish_text_atomic(
+            Path(args.output), json.dumps(payload, indent=2) + "\n",
+            force=args.force, what="reconstruction report",
+        )
+        print(f"Report written to {args.output}")
+
+
+def _cmd_onboarding_propose_standardization(args) -> None:
+    workspace = _onboarding_workspace(args)
+    discovery = _ob_discover_workspace(workspace)
+    reconstruction = _ob_reconstruct_workspace(workspace, discovery)
+    proposal = _ob_propose_standardization(discovery, reconstruction)
+    apdir = Path(workspace) / ".aperio"
+    saved = None
+    if require_supported_state_ok(apdir):
+        saved = _ob_save_proposal(apdir, proposal)
+    doc = {
+        "format": "aperio-onboarding-protocol", "version": 1,
+        "action_required": "review_proposal",
+        "proposal_id": proposal.proposal_id,
+        "saved_to": str(saved) if saved else None,
+        "prompt": (
+            f"Proposal {proposal.proposal_id} built (read-only). Review the "
+            "preview, then apply with 'aperio onboarding-apply-standardization "
+            f"--proposal {proposal.proposal_id} --approve'. Existing files are "
+            "never modified."
+        ),
+    }
+    if args.as_json:
+        doc["proposal"] = proposal.to_dict()
+        sys.stdout.write(json.dumps(doc, ensure_ascii=False, indent=2) + "\n")
+    else:
+        sys.stdout.write(_ob_render_proposal_markdown(proposal))
+        sys.stdout.write(f"\n{doc['prompt']}\n")
+        if saved:
+            print(f"Proposal saved to {saved}")
+    if args.output:
+        publish_text_atomic(
+            Path(args.output), _ob_render_proposal_markdown(proposal),
+            force=args.force, what="standardization preview",
+        )
+        print(f"Preview written to {args.output}")
+
+
+def _cmd_onboarding_apply_standardization(args) -> None:
+    apdir = (Path(args.DIR or ".") / ".aperio")
+    proposal = _ob_load_proposal(apdir, args.proposal)
+    if not args.approve:
+        doc = {
+            "format": "aperio-onboarding-protocol", "version": 1,
+            "action_required": "approve_standardization",
+            "prompt": (
+                "Applying requires explicit operator approval (--approve). "
+                "Nothing was modified."
+            ),
+        }
+        _emit_onboarding(doc, args.as_json)
+        return
+    _ob_record_approval(apdir, action=_OB_APPLY_ACTION, scope=proposal.proposal_id)
+    result = _ob_apply_standardization(apdir, proposal)
+    verification = _ob_verify_standardization(
+        apdir, proposal,
+        {d["path"]: d["sha256"] for d in proposal.existing_documents},
+    )
+    doc = {
+        "format": "aperio-onboarding-protocol", "version": 1,
+        "action_required": "none",
+        "applied": result,
+        "verification": verification,
+        "prompt": (
+            f"Applied {proposal.proposal_id}. Created: "
+            f"{', '.join(result['created'])}. Verification: "
+            f"{'all checks passed' if verification['all_ok'] else 'DRIFT REPORTED (see verification)'}"
+        ),
+    }
+    _emit_onboarding(doc, args.as_json)
+
+
+def _cmd_onboarding_discover_tools(args) -> None:
+    workspace = _onboarding_workspace(args)
+    discovery = _ob_discover_workspace(workspace)
+    report = _ob_discover_tools(workspace, discovery, include_user_config=args.user_config)
+    if args.probe:
+        probed = _ob_probe_tool(report, args.probe)
+        report.executables = [
+            probed if t.tool_id == args.probe else t for t in report.executables
+        ]
+    payload = report.to_dict()
+    if args.as_json:
+        sys.stdout.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+        return
+    lines = [f"Tool discovery for {workspace} (read-only):"]
+    for finding in report.project_local:
+        lines.append(f"  [{finding.status}] {finding.tool_id}: {'; '.join(finding.evidence) or finding.detail}")
+    installed = [t.tool_id for t in report.executables if t.status == "installed"]
+    missing = [t.tool_id for t in report.executables if t.status == "missing"]
+    lines.append(f"  Installed on PATH: {', '.join(installed) or 'none'}")
+    lines.append(f"  Missing: {', '.join(missing) or 'none'}")
+    for host in report.hosts:
+        marker = "detected" if host["detected_in_project"] else "not detected"
+        lines.append(f"  Host {host['host_id']}: {host['support']} ({marker})")
+    for note in payload["notes"]:
+        lines.append(f"  Note: {note}")
+    sys.stdout.write("\n".join(lines) + "\n")
+
+
+def _cmd_onboarding_recommend_tools(args) -> None:
+    workspace = _onboarding_workspace(args)
+    discovery = _ob_discover_workspace(workspace)
+    reconstruction = _ob_reconstruct_workspace(workspace, discovery)
+    report = _ob_discover_tools(workspace, discovery)
+    category = args.category
+    if category is None:
+        apdir = Path(workspace) / ".aperio"
+        if _ob_session_exists(apdir):
+            session = _ob_read_session(apdir)
+            category = session.get("project_category")
+    recs = _ob_recommend_tools(discovery, reconstruction, report, project_category=category)
+    if args.as_json:
+        sys.stdout.write(json.dumps({"recommendations": recs}, indent=2) + "\n")
+        return
+    lines = [f"Tool recommendations for {workspace} (category: {category or 'unknown'}):"]
+    for rec in recs:
+        lines.append(f"  {rec['name']} ({rec['tool_id']}): {rec['purpose']}")
+        lines.append(f"    Relevance: {rec['relevance']}")
+        lines.append(f"    Compatibility: {rec['compatibility']}")
+        lines.append(f"    Source: {rec['declared_source']}")
+        lines.append(f"    Plan: aperio onboarding-tool-plan DIR {rec['tool_id']}")
+    if not recs:
+        lines.append("  (no recommendations for this project)")
+    sys.stdout.write("\n".join(lines) + "\n")
+
+
+def _cmd_onboarding_tool_plan(args) -> None:
+    workspace = _onboarding_workspace(args)
+    discovery = _ob_discover_workspace(workspace)
+    report = _ob_discover_tools(workspace, discovery)
+    plan = _ob_build_install_plan(args.tool_id, report)
+    if args.as_json:
+        sys.stdout.write(json.dumps(plan, ensure_ascii=False, indent=2) + "\n")
+        return
+    lines = [
+        f"Install plan for {plan['1_name']} ({args.tool_id}):",
+        f"  Purpose: {plan['2_intended_purpose']}",
+        f"  Source: {plan['3_source']}",
+        f"  Version: {plan['4_candidate_version']}",
+        f"  Compatibility: {plan['5_compatibility']}",
+        f"  Permissions: {plan['6_required_permissions']}",
+        f"  Network: {plan['7_required_network_access']}",
+        f"  Command: {plan['8_install_command'] or '(manual-only)'}",
+        f"  Security: {plan['9_security_considerations']}",
+        f"  Removal: {plan['10_removal']}",
+        f"  Manual fallback: {plan['manual_fallback']}",
+        f"  Execution: {plan['execution']}",
+    ]
+    sys.stdout.write("\n".join(lines) + "\n")
+
+
+def _cmd_onboarding_tool_install(args) -> None:
+    if not args.approve or not args.authorize_install:
+        doc = {
+            "format": "aperio-onboarding-protocol", "version": 1,
+            "action_required": "approve_install",
+            "prompt": (
+                "Installation requires BOTH --approve (operator decision) and "
+                "--authorize-install. Nothing was executed."
+            ),
+        }
+        _emit_onboarding(doc, args.as_json)
+        return
+    apdir = (Path(args.DIR or ".") / ".aperio")
+    workspace = _onboarding_workspace(args)
+    discovery = _ob_discover_workspace(workspace)
+    report = _ob_discover_tools(workspace, discovery)
+    plan = _ob_build_install_plan(args.tool_id, report)
+    _ob_record_approval(apdir, action=_OB_INSTALL_ACTION, scope=args.tool_id)
+    record = _ob_execute_install(apdir, plan, authorize_install=True)
+    doc = {
+        "format": "aperio-onboarding-protocol", "version": 1,
+        "action_required": "none",
+        "record": record,
+        "prompt": (
+            f"Install command for {args.tool_id} completed. Installed state is "
+            "NOT verified by this result: re-run 'aperio onboarding-discover-tools' "
+            "to reassess honestly."
+        ),
+    }
+    _emit_onboarding(doc, args.as_json)
+
+
+def _cmd_onboarding_readiness(args) -> None:
+    apdir = (Path(args.DIR or ".") / ".aperio")
+    session = _ob_read_session(apdir)
+    result = _ob_evaluate_readiness(session)
+    if args.as_json:
+        sys.stdout.write(json.dumps(result.to_dict(), indent=2) + "\n")
+        return
+    lines = [
+        f"Onboarding readiness: {result.outcome}",
+    ]
+    lines += [f"  - {r}" for r in result.reasons]
+    if result.outstanding_required:
+        lines.append(f"  Outstanding required: {', '.join(result.outstanding_required)}")
+    if result.open_critical:
+        lines.append(f"  Open critical: {', '.join(result.open_critical)}")
+    sys.stdout.write("\n".join(lines) + "\n")
+
+
+def _cmd_onboarding_report(args) -> None:
+    apdir = (Path(args.DIR or ".") / ".aperio")
+    session = _ob_read_session(apdir)
+    workspace = _onboarding_workspace(args)
+    discovery = _ob_discover_workspace(workspace)
+    reconstruction = _ob_reconstruct_workspace(workspace, discovery)
+    tools_report = _ob_discover_tools(workspace, discovery)
+    readiness = _ob_evaluate_readiness(session)
+    recommendations = _ob_recommend_tools(
+        discovery, reconstruction, tools_report,
+        project_category=session.get("project_category"),
+    )
+    report = _ob_build_report(
+        session,
+        discovery=discovery,
+        reconstruction=reconstruction,
+        tools_report=tools_report,
+        recommendations=recommendations,
+        readiness=readiness,
+    )
+    if args.as_json:
+        sys.stdout.write(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+        return
+    markdown = _ob_render_report_markdown(report)
+    sys.stdout.write(markdown)
+    if args.output:
+        publish_text_atomic(
+            Path(args.output), markdown, force=args.force, what="onboarding report"
+        )
+        print(f"Report written to {args.output}")
+
+
+def require_supported_state_ok(apdir) -> bool:
+    try:
+        _ob_require_supported_state(apdir)
+        return True
+    except AperioError:
+        return False
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point. Returns a process exit code."""
     parser = build_parser()
@@ -5381,6 +6077,44 @@ def main(argv: list[str] | None = None) -> int:
             _cmd_review_list(args)
         elif args.command == "review-status":
             _cmd_review_status(args)
+        elif args.command == "next":
+            _cmd_next(args)
+        elif args.command == "onboarding-start":
+            _cmd_onboarding_start(args)
+        elif args.command == "onboarding-confirm-init":
+            _cmd_onboarding_confirm_init(args)
+        elif args.command == "onboarding-decline":
+            _cmd_onboarding_decline(args)
+        elif args.command == "onboarding-intent":
+            _cmd_onboarding_intent(args)
+        elif args.command == "onboarding-status":
+            _cmd_onboarding_status(args)
+        elif args.command == "onboarding-answer":
+            _cmd_onboarding_answer(args)
+        elif args.command == "onboarding-revise":
+            _cmd_onboarding_revise(args)
+        elif args.command == "onboarding-pause":
+            _cmd_onboarding_pause(args)
+        elif args.command == "onboarding-cancel":
+            _cmd_onboarding_cancel(args)
+        elif args.command == "onboarding-reconstruct":
+            _cmd_onboarding_reconstruct(args)
+        elif args.command == "onboarding-propose-standardization":
+            _cmd_onboarding_propose_standardization(args)
+        elif args.command == "onboarding-apply-standardization":
+            _cmd_onboarding_apply_standardization(args)
+        elif args.command == "onboarding-discover-tools":
+            _cmd_onboarding_discover_tools(args)
+        elif args.command == "onboarding-recommend-tools":
+            _cmd_onboarding_recommend_tools(args)
+        elif args.command == "onboarding-tool-plan":
+            _cmd_onboarding_tool_plan(args)
+        elif args.command == "onboarding-tool-install":
+            _cmd_onboarding_tool_install(args)
+        elif args.command == "onboarding-readiness":
+            _cmd_onboarding_readiness(args)
+        elif args.command == "onboarding-report":
+            _cmd_onboarding_report(args)
         else:  # pragma: no cover - argparse enforces required subcommand
             parser.error(f"unknown command: {args.command!r}")
     except AperioError as exc:

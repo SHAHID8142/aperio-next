@@ -436,6 +436,25 @@ of a mention is a warning, never a confirmed failure; cited sources are
 reported as `unknown` support, never verified. No memory writes, no
 content alteration, no governance authority. See `docs/quality.md`.
 
+## Step 01 — Universal onboarding (implemented 2026-11)
+
+Originally implemented on `feature/step01-universal-onboarding` and now
+integrated into the v1.2 release candidate. Read-only workspace discovery
+and classification; durable onboarding sessions with atomic publish,
+lock + CAS updates, resume, and refuse-don't-rewrite corruption handling;
+a deterministic one-question-per-turn adaptive interview with 13
+extensible domain profiles and provenance-tracked answers; existing-
+project reconstruction with source attribution, claim-conflict detection,
+and untrusted-content risk findings; controlled standardization with
+scoped approvals, new-files-only application, and post-apply drift
+verification; tool/MCP/host discovery with honest status separation and
+a two-gate install executor with a permanent manual fallback; a
+readiness gate (CANCELLED / BLOCKED / IN_PROGRESS / READY_WITH_PENDING /
+READY) and a 20-area readiness report. Security regression suite and
+seven automated end-to-end scenarios included. Documentation:
+`docs/onboarding.md`. Live AI-host integration remains unverified; the
+terminal CLI is the supported path.
+
 ## Next (requires independent review and explicit instruction)
 
 - Remaining M3 hardening whatever the review confirms (for example goal

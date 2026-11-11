@@ -1,4 +1,4 @@
-# Final handoff — Aperio Next 1.2.0rc1 (for independent audit)
+# Final handoff — Aperio Next 1.2.0rc2 (for independent audit)
 
 Prepared per the product-completion directives. Every claim names its
 evidence location; unverifiable items are labeled unverifiable, not
@@ -9,22 +9,11 @@ omitted. Chunk-level detail for the 1.2 program lives in
 ## A. Exact source identity
 
 - **Repository:** https://github.com/SHAHID8142/aperio-next
-- **Branches:**
-  - `main` @ `83af3f5` — 1.1.0rc1 (fast-forward pushes only; no
-    force-push, ever).
-  - `feature/master-v3-completion` — the 1.2.0rc1 release candidate:
-    `83af3f5` + `cb417f1` (two-level roadmap) + `ff01c1c` (bounded
-    retry) + `8b96079` (host-doctor) + `9044fbe` (install docs) + the
-    1.2.0rc1 packaging/handoff commit. **Not merged to main** (merging
-    shared branches was outside this assignment's authorization).
-  - `feature/step01-universal-onboarding` — a separate agent's Step 01
-    universal-onboarding implementation (18 `onboarding-*` commands,
-    discovery/interview/reconstruction/standardization/tool-gates,
-    security + E2E suites; 1504 tests green at `6bea2e2`). **Not
-    merged**; its integration is the first follow-up chunk, together
-    with the `aperio next` entry command that routes through its
-    facade.
-- **Release version:** 1.2.0rc1 (pyproject.toml == `aperio.__version__`,
+- **Source histories:** `feature/master-v3-completion` @ `8a3fe94` and
+  `feature/step01-universal-onboarding` @ `6bea2e2`, integrated on
+  `integration/v1.2-final`. Main is updated only after the complete audit
+  passes; no force-push is used.
+- **Release version:** 1.2.0rc2 (pyproject.toml == `aperio.__version__`,
   asserted by tests/test_version.py)
 - **Working tree:** clean at the handoff commit; `dist/` artifacts are
   build outputs and are not committed.
@@ -39,6 +28,7 @@ omitted. Chunk-level detail for the 1.2 program lives in
 | Bounded retry | `recovery.py` + runtime gate | `run-start --remediation`, `recovery-report` | Max 3 attempts per deterministic problem signature; retries require declared new evidence/hypothesis (verbatim repeats refused); 4th attempt refused with escalation guidance (blocked, report, decision-add, doctor, operator); enforced in the Python boundary | Signature keys on recorded outcome text — two causes with identical presentation share a budget; coordination boundary, not a root-cause analyzer | test_recovery.py (17) |
 | Host compatibility doctor | `hostcompat.py` | `host-doctor [--probe]` | Six-level vocabulary; `native_verified`/`experimental` defined but **never emitted** (no verified native integration exists; none invented); provider CLIs passively probed; every host names its fallback | A clean probe proves a binary runs, not that a session works; cooperative hosts are `not_yet_tested` by design | test_hostcompat.py (13) |
 | Fresh-machine install | docs/install.md | — | Verified clean-venv wheel install (3.14, macOS arm64): version/host-doctor/init/status + package data | Windows/Linux/3.11/3.13 documented as not tested | manual verification |
+| Universal onboarding | `onboarding*.py` | `next`; 18 `onboarding-*` commands | Read-only discovery, durable adaptive interview, controlled standardization/tool gates, and honest readiness reporting | No native commercial-host integration claimed | `test_onboarding_*.py` |
 
 ### 1.1 base (unchanged; see master-plan-v2.md)
 
@@ -57,22 +47,24 @@ handoff) is exercised END-TO-END in `tests/test_e2e_website.py`
 covered by their own suites (`test_roadmap.py`, `test_recovery.py`,
 `test_hostcompat.py`), including the CLI roundtrips and governance
 paths. Install instructions: [install.md](install.md) (fresh machine)
-or README "Install (development)". The Step 01 onboarding journey
-(new/existing project, interview, readiness) is exercised by the
-seven automated scenarios on its branch (tests/test_onboarding_e2e.py)
-— pending integration.
+or README "Install (development)". The integrated Step 01 onboarding journey
+(new/existing project, interview, readiness) is exercised by the seven
+automated scenarios in `tests/test_onboarding_e2e.py`; `aperio next` has
+additional CLI tests for read-only routing and resume behavior.
 
 ## D. Verification evidence
 
 - **Local (this machine, macOS arm64):**
-  - Python 3.14.7 (repo venv): **1403 passed** on
-    `feature/master-v3-completion` after Chunk D (1344 baseline + 59
-    new); each chunk ran the full suite before its commit.
-  - Clean venv, built wheel (1.1.0rc1 artifact at audit time — rebuild
-    for 1.2.0rc1): install + `--version` + `host-doctor --json` +
-    `init` + `status` journey verified; skill packs and benchmark
-    cases confirmed as package data. The 1.1 wheel also passed the
-    full 1344-test suite on Python 3.12.14 (prior program).
+  - Python 3.14.7 (repo venv): **1600 passed, 1 skipped** after integrating
+    v1.2, Step 01, and the canonical `aperio next` tests.
+  - The earlier 1.2 line passed 1403 tests and the isolated Step 01 line
+    passed its own full suite before integration; those counts are historical,
+    not substituted for the integrated run above.
+  - A clean 1.2.0rc2 wheel was built and installed into a fresh Python 3.14
+    venv. `--version`, `next` on an empty workspace, and `host-doctor --json`
+    passed; the installed artifact contained all 11 skill packs and 14
+    benchmark cases. The 1.1 wheel also passed the full 1344-test suite on
+    Python 3.12.14 (prior program).
 - **CI:** GitHub Actions executed **zero** test steps for the entire
   0.13→1.2 series — the account billing lock ("The job was not started
   because your account is locked due to a billing issue"). This is an
@@ -91,7 +83,6 @@ seven automated scenarios on its branch (tests/test_onboarding_e2e.py)
 | Risk | Severity | Evidence | Impact | Next action |
 | --- | --- | --- | --- | --- |
 | CI billing lock (zero CI runs) | high (verification gap, not a code defect) | `gh run list` — every run fails at start | No independent CI verification; local-only evidence | Owner resolves billing; re-run the matrix |
-| Step 01 branch unmerged (integration debt) | high (coordination, not a code defect) | branch list; master-plan-v3 topology section | Two branches to reconcile (cli.py additions on both sides) before `aperio next` exists | Authorized integration: merge main into the Step 01 branch, resolve, run both suites, then add `aperio next` |
 | Timing-sensitive concurrency tests flaked twice under heavy local load (planstore unique-ids; intake suite once) | medium | master-plan-v2 Chunk 02 note | Possible intermittent CI failure after unblocking | De-flake (widen bounded waits or mark retry) |
 | Keyword triage misroutes | medium (by design, labeled) | test_intake.py honesty labels | An operator may misread routing as understanding | The honesty label renders everywhere; skill/prompt guidance reinforces review |
 | Live provider execution unverified | medium | providers.md states it plainly | Adapters may need real-world flag drift fixes | Run `agent-doctor` + authorized dispatch with credentials when available |
@@ -104,22 +95,23 @@ seven automated scenarios on its branch (tests/test_onboarding_e2e.py)
 **RELEASE CANDIDATE — EXTERNAL VALIDATION PENDING.**
 
 The documented local product workflow is installed, tested, and usable
-(1403 tests on the 1.2 branch, two interpreters through the 1.1
+(the integrated suite on Python 3.14, two interpreters through the 1.1
 programs, clean wheel-install journey), and every external-integration
-boundary (CI, live providers, additional platforms, Step 01
-integration) is stated with its blocker rather than claimed. What
+boundary (CI, live providers, additional platforms) is stated with its
+blocker rather than claimed. What
 remains before unrestricted deployment claims: CI execution (billing),
-live provider validation, the additional platform matrix, and the
-Step 01 branch integration — all external to this branch's code.
+live provider validation, and the additional platform matrix.
 
 ## Audit reproduction guide
 
 ```sh
 git clone https://github.com/SHAHID8142/aperio-next && cd aperio-next
-git checkout feature/master-v3-completion
+git checkout main
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/python -m pytest          # full suite (1403 tests, ~1 min)
+.venv/bin/python -m pytest          # full integrated suite
 .venv/bin/python -m pytest tests/test_roadmap.py tests/test_recovery.py tests/test_hostcompat.py
+.venv/bin/python -m pytest tests/test_onboarding_cli.py tests/test_onboarding_e2e.py tests/test_onboarding_security.py
+.venv/bin/python -m aperio next . --json              # canonical read-only entry
 .venv/bin/python -m aperio host-doctor --json          # compatibility matrix
 .venv/bin/python -m aperio --help                      # full command surface
 python -m pip wheel . --no-deps -w dist/               # packaging check

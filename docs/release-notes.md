@@ -1,5 +1,32 @@
 # Release notes
 
+## 1.2.0rc2 — Step 01 integration release candidate
+
+This candidate integrates the two previously separate completion lines:
+the v1.2 roadmap/recovery/host-compatibility work and the complete Step 01
+universal-onboarding implementation.
+
+- **Canonical entry:** `aperio next [DIR] [--json]` is a strictly read-only
+  route through the onboarding facade. It classifies or resumes the workspace
+  and returns exactly one next action; it never initializes or installs.
+- **Universal onboarding:** all 18 `onboarding-*` commands are included:
+  discovery, durable sessions, adaptive interview, reconstruction,
+  standardization, tool discovery/recommendation, two-gate installation,
+  readiness, and reporting.
+- **Integrated history:** `feature/master-v3-completion` and
+  `feature/step01-universal-onboarding` were merged on a dedicated integration
+  branch before main; the only textual merge conflict was the README document
+  index, where both document entries were retained.
+- **Release identity:** version advanced from 1.2.0rc1 to 1.2.0rc2 so the
+  integrated artifact cannot be confused with the earlier unintegrated RC.
+- **Verification:** 1600 passed, 1 skipped on Python 3.14.7 after integration;
+  the focused onboarding/security and v1.2 planning/recovery/host suites also
+  pass together.
+
+The external verification limits remain: GitHub-hosted CI has not executed,
+live provider calls were not run, and Windows/Linux/Python 3.11/3.13 were not
+tested in this integration session.
+
 ## 1.2.0rc1 — master-directive v3 release candidate
 
 The third master directive (product integration, universal agent
