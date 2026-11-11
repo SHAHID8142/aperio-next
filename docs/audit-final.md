@@ -20,8 +20,8 @@ a prior report. Where something could not be checked, it is marked
 | Base SHA | `9773ba4cb213a2358c970c5013627b2d87bb2026` |
 | Branch | `audit/1.2-final-hardening` |
 | Base → HEAD | 32 files changed; commits are purely additive. Exact totals: `git diff --shortstat 9773ba4..HEAD`, `git rev-list --count 9773ba4..HEAD` |
-| Audited source SHA (README pin target) | `66ed17f` — code + tests, all suites green |
-| Code after the audited SHA | docs-only commits; no executable change since `66ed17f` |
+| Audited source SHA (README pin target) | `f9b9d3f` — code + tests, all suites green |
+| Code after the audited SHA | docs-only commits; no executable change since `f9b9d3f` |
 | Pre-existing work | preserved; no reset, clean, force-push, or branch deletion |
 | Untracked at start | `audit-inputs/` (owner-provided reference material) |
 
@@ -55,6 +55,8 @@ onboarding facade; `git log` shows the integration commits).
 | R05 | **HIGH** | Atomicity rule only knew whole-*project* keywords, so a whole section ("Implement the Hero Section") passed as one task | **FIXED** |
 | R06 | **HIGH** | `run_captured` could hang far past its deadline: a descendant holding the pipes kept the readers blocked, then `stream.close()` waited on them (9.0s for a 0.2s timeout) | **FIXED (drain deadline)** |
 | R07 | **MEDIUM** | Wizard `/back` overwrote the previous genuine answer with `Not sure yet` and never re-offered the question | **FIXED (`withdraw`)** |
+| R08 | **MEDIUM** | Bounded work was refused just for naming a product ("Fix a typo in the website") | **FIXED (bounded operation wins)** |
+| R09 | **MEDIUM** | Native plan tasks keep criteria in `acceptance_criteria`, which the atomicity check ignored — scope could hide there | **FIXED (both keys read)** |
 
 ## C. Reproduction and root cause (key items)
 
@@ -149,18 +151,18 @@ captures, zero failures**, and three consecutive clean full-suite runs.
 | Hardening tests before the final remediation | 1,637 total |
 | New regression tests, first remediation | 17 (wizard ×3, install approval ×4, task-size ×10) |
 | New regression tests, second remediation | 12 (wizard fail-closed ×4, section atomicity ×8) |
-| New regression tests, Codex review round | 4 (`/back` ×3, drain deadline ×1) |
+| New regression tests, Codex review rounds | 14 (`/back` ×3, drain deadline ×1, product mentions ×8, criteria keys ×2) |
 | Tests updated for the new policy | 3 (`test_planbridge_priority`, `test_onboarding_tools`, hero A05 fixtures) |
-| **Final full suite** | **1,670 passed, 0 skipped** |
+| **Final full suite** | **1,680 passed, 0 skipped** |
 
 Per-interpreter full-suite results (macOS arm64):
 
 | Python | Result |
 | --- | --- |
-| 3.11 | 1,670 passed |
-| 3.12 | 1,670 passed |
-| 3.13 | 1,670 passed |
-| 3.14 | 1,670 passed |
+| 3.11 | 1,680 passed |
+| 3.12 | 1,680 passed |
+| 3.13 | 1,680 passed |
+| 3.14 | 1,680 passed |
 
 ### Regression reproduction for the final remediation (R01–R03)
 
@@ -195,7 +197,7 @@ Each new test was written before its fix and failed first:
 | Method | Isolation | Verified | Notes |
 | --- | --- | --- | --- |
 | `uv tool install` (wheel) | yes | **yes** | upgrade/uninstall clean; bin on PATH |
-| `uv tool install` (git @ immutable commit) | yes | **yes** | re-verified against the audited commit `66ed17f` (24-char SHA resolved, `aperio 1.2.0rc2`) |
+| `uv tool install` (git @ immutable commit) | yes | **yes** | re-verified against the audited commit `f9b9d3f` (24-char SHA resolved, `aperio 1.2.0rc2`) |
 | `pipx install` (wheel) | yes | **yes** | viable fallback |
 | venv + wheel | yes | yes | more manual |
 | PyPI | — | **N/A** | no package published |
@@ -218,7 +220,7 @@ built. Project `.aperio/` data survives upgrade and uninstall (verified).
   install (wheel built from this branch, installed outside the repo).
 - 16 relative links, all resolve. No badges, no screenshots, no placeholders.
 - The documented install command is pinned to the audited code commit
-  `66ed17f` and was executed successfully from a clean environment with both
+  `f9b9d3f` and was executed successfully from a clean environment with both
   `uv tool install` and `pipx install`
   (`Installed 1 executable: aperio` → `aperio 1.2.0rc2`), after the second
   remediation and the Codex review round. `aperio next`, `aperio --help`, and
@@ -236,7 +238,7 @@ built. Project `.aperio/` data survives upgrade and uninstall (verified).
 installed artifact. `aperio next` confirmed to leave an empty directory empty.
 
 R01 and R04 were additionally verified end to end in a **real PTY** against
-the pinned install (`4575497`, and again at `66ed17f`), on an existing project
+the pinned install (`4575497`, `66ed17f`, `f9b9d3f`), on an existing project
 with no `.aperio`:
 
 - declining the init prompt printed by the wizard left the directory unchanged
@@ -263,6 +265,13 @@ Each `host-doctor` row now carries `verification` with six booleans; only
 probe. `cli_launch_tested`, `authenticated_model_call_tested`,
 `functional_handoff_tested`, `native_command_registered_and_tested` are `false`
 until a real run is recorded. No mock executable is described as a live test.
+
+### Codex re-review round (R08–R09) — what changed and why
+
+| ID | Defect (reproduced first) | Fix | Evidence |
+| --- | --- | --- | --- |
+| R08 | Scale inference required *no* large-scope term, so "Fix a typo in the website" was project-scale and the bridge refused it | A bounded operation wins over the product it mentions; breadth markers, multiple distinct large terms, or a long objective still mean large | 8 tests (4 allowed, 4 still blocked); CLI on the pinned install bridges the typo goal to a draft plan |
+| R09 | `_task_text` read only `completion_criteria` (goal schema); plan tasks use `acceptance_criteria`, so scope hidden there passed create/approve/dispatch | Both criterion keys are read | 2 tests, including a hand-forced approval stamp proving dispatch refuses on its own |
 
 ### Codex review round (R06–R07) on PR #1 — what changed and why
 
@@ -321,7 +330,7 @@ documented limitations in M. The rc2 build is **not** claimed production-ready.
 | --- | --- | --- |
 | G01 Repo state preserved | PASS | §A |
 | G02 High/critical defects fixed | PASS | §B, §D |
-| G03 Unit tests pass | PASS | 1,670 (4 interpreters) |
+| G03 Unit tests pass | PASS | 1,680 (4 interpreters) |
 | G04 Integration tests pass | PASS | e2e/onboarding suites green |
 | G05 Real onboarding journey works | PASS | §K, PTY wizard |
 | G06 Atomic execution policy enforceable | PASS | §C A05 |

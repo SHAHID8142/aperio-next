@@ -44,8 +44,12 @@ Correctness and security fixes:
   longer hold a call past its deadline (`drain_grace_seconds`, `drain_stalled`).
 - **Wizard `/back` re-prompts:** going back withdraws the previous answer
   instead of overwriting it with a placeholder.
+- **Bounded work is not confused with its location:** "Fix a typo in the
+  website" bridges normally, while "an entire website" stays blocked.
+- **One atomicity rule for both schemas:** plan tasks are checked through
+  `acceptance_criteria` as well as `completion_criteria`.
 
-Verification: **1,670 tests** pass on CPython 3.11, 3.12, 3.13 and 3.14
+Verification: **1,680 tests** pass on CPython 3.11, 3.12, 3.13 and 3.14
 (macOS arm64). GitHub-hosted CI still has not executed (account billing lock);
 Windows and Linux remain UNVERIFIED by this audit.
 
