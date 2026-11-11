@@ -19,9 +19,9 @@ a prior report. Where something could not be checked, it is marked
 | --- | --- |
 | Base SHA | `9773ba4cb213a2358c970c5013627b2d87bb2026` |
 | Branch | `audit/1.2-final-hardening` |
-| Base → HEAD | 16 commits, 31 files, +3033 / −974 |
+| Base → HEAD | 18 commits, 31 files, +3035 / −974 |
 | Audited source SHA (README pin target) | `f04232d` — code + tests, all suites green |
-| Documentation head | `e8ee461` — docs only, no executable change |
+| Documentation head | `45c3022` — docs only, no executable change |
 | Pre-existing work | preserved; no reset, clean, force-push, or branch deletion |
 | Untracked at start | `audit-inputs/` (owner-provided reference material) |
 
@@ -299,9 +299,11 @@ with hosts, and the code and docs say so. It is not marketed as done.
 
 ## Q. Branch and commits
 
-Branch `audit/1.2-final-hardening`, 16 commits on `9773ba4` (last three):
+Branch `audit/1.2-final-hardening`, 18 commits on `9773ba4` (last three):
 
 ```
+45c3022 docs(audit): correct the branch commit and file totals
+<docs: commit-count fix>
 e8ee461 docs: refresh release notes and stale test counts to the final audited numbers
 716bd5f docs(audit): re-pin install to the audited commit and record the R01–R03 remediation
 f04232d fix: bind install approval to the plan, gate task size on every path
