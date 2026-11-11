@@ -40,6 +40,7 @@ marked *(read-only)*.
 | `aperio agent-list [DIR] [--json]` | adapter registry |
 | `aperio agent-doctor DIR --agent ID [--config F] [--json]` | passive capability probe |
 | `aperio host-doctor [--probe] [--json]` | per-host compatibility matrix with honest levels *(read-only; no project needed)* |
+| `aperio integrations [status\|install\|remove] [--host ID]… [--scope user\|project\|both] [--json] [DIR]` | install/inspect/remove managed `aperio-next` skill assets in hosts' documented skills/commands locations; refuses foreign files; `--scope project` requires a managed project *(status is read-only)* |
 | `aperio run-preview / run-start / run-status / runs-list / run-cancel / runs-reconcile / run-report / run-handoff` | execution records, dispatch (`--authorize-exec` required for real processes; `--authorize-write` for write-capable provider modes); retries require `run-start --remediation` |
 | `aperio recovery-report DIR TASK [--json]` | failure history for one task, grouped by problem signature, with the bounded-retry verdict *(read-only)* |
 

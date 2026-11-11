@@ -6,6 +6,18 @@ omitted. Chunk-level detail for the 1.2 program lives in
 [master-plan-v3.md](master-plan-v3.md); the 1.1 program in
 [master-plan-v2.md](master-plan-v2.md).
 
+> **Universal agent integration program (2026-11-12, branch
+> `feat/universal-agent-integration`):** added native skill registration
+> (`aperio integrations`, six hosts at their documented locations,
+> managed-marker ownership rules, 20 tests), a zero-dependency npm
+> launcher (`aperio-next install|doctor|update|uninstall`, clean-room
+> verified from the packed tgz), an actionable-error fix for
+> session-less onboarding commands, and the beginner-first README +
+> [docs/integrations.md](integrations.md). Per-scenario evidence:
+> **[universal-integration-evidence.md](universal-integration-evidence.md)**.
+> Live in-session skill activation is verified in ZCode only; all other
+> hosts are registration-verified. 1713 tests green.
+
 > **1.2 hardening audit:** an independent, adversarial audit of `main` @
 > `9773ba4` reproduced and fixed fourteen findings (including two critical),
 > then two remediation rounds closed five further defects (wizard init consent,

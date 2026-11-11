@@ -2,10 +2,13 @@
 
 **A local-first command-line companion that keeps AI-assisted projects organized, reviewable, and portable — even when you switch AI coding agents.**
 
-> **Release status:** `1.2.0rc2`, a release candidate. The Python CLI, onboarding
-> flow, and installation were tested on macOS arm64 with Python 3.11–3.14.
-> Live authenticated integrations with specific AI agents, Windows, and Linux
-> were **not** verified in this audit. See [what is verified](docs/final-handoff.md).
+> **Release status:** `1.2.0rc2` on branch `feat/universal-agent-integration`, a
+> release candidate. The Python CLI, onboarding flow, installation, and the
+> new agent-skill registration were tested on macOS arm64 (Python 3.14; full
+> suite: 1713 tests). **Skill registration** is file-level verified for six
+> hosts; **live in-session activation** has been exercised only in ZCode
+> (this session's host) so far. Windows and Linux were **not** executed.
+> See [what is verified](docs/final-handoff.md).
 
 ## What is Aperio?
 
@@ -26,11 +29,12 @@ It works without any agent too: you can use it purely to organize a project.
 - People using AI agents who lose context when they switch tools or sessions.
 - Teams that need a written record of decisions and what "done" means.
 
-You do not need to know Python or Git to use Aperio. You do need to be able to
-type commands in a terminal.
+You do not need to know Python or Git to use Aperio.
 
 ## What can it do today?
 
+- **Install once, activate in your agent** — a one-command installer registers
+  a native `aperio-next` skill in the coding agents it finds (see below).
 - **Understand a workspace** — tell an empty folder from an existing project
   without changing anything.
 - **Guide discovery** — ask one question at a time and save the answers so you
@@ -47,36 +51,69 @@ type commands in a terminal.
 ## What it does NOT do today
 
 - It does not build or deploy your website or app for you.
-- It does not register a native `/aperio` command inside every AI app. Only the
-  terminal CLI is fully verified (see [agent compatibility](#ai-agent-compatibility)).
+- It does not intercept or control any agent's chat. The skill is
+  *cooperative*: it instructs the agent to run the real engine. Runtime
+  guarantees come from the CLI, not from the skill text.
 - It does not guarantee a task's output is correct; it requires recorded
   evidence and a separate review, which is not the same as proof.
 
 ## Installation
 
-Aperio is a Python package (Python 3.11 or newer). The recommended way keeps it
-in its own isolated environment with **uv**:
+**One command** (requires Node 18+ and Python 3.11+; nothing else):
 
 ```sh
-# 1. Install uv (official instructions): https://docs.astral.sh/uv/
-# 2. Install Aperio from this repository, pinned to a commit or tag:
-uv tool install "git+https://github.com/SHAHID8142/aperio-next.git@6399a81"  # main, verified
+npx aperio-next install
+```
+
+> The npm package is **not published yet** — the command above is the target
+> experience. Until it is published, install from the repository's packed
+> artifact:
+>
+> ```sh
+> git clone https://github.com/SHAHID8142/aperio-next.git
+> cd aperio-next && ./scripts/build-npm-package.sh
+> npx ./dist/aperio-next-<version>.tgz install
+> ```
+
+The installer creates an isolated engine environment in `~/.aperio-next/`,
+installs and verifies the `aperio` CLI, then registers skill assets **only**
+in the documented skills/commands locations of the agents it detects. Files
+it did not create are never touched, undetected hosts are reported as
+pending (never as installed), and the summary prints only verified facts.
+
+After installing, `aperio-next doctor` reports engine, runtime, and
+per-host integration health; `aperio-next update` refreshes everything;
+`aperio-next uninstall` removes skills and the engine while **keeping every
+project's `.aperio/` data**.
+
+**Alternative (Python tooling).** If you prefer uv or pipx directly:
+
+```sh
+uv tool install "git+https://github.com/SHAHID8142/aperio-next.git@<REF>"
 aperio --version
 ```
 
-`uv tool install` puts an `aperio` executable on your `PATH` and does not touch
-your project's dependencies. If `aperio` is not found, run
-`uv tool update-shell`, or open a new terminal.
+Operating-system notes, upgrades, and removal:
+[docs/install.md](docs/install.md). Integration details:
+[docs/integrations.md](docs/integrations.md).
 
-**Alternative (pipx).** If you already use pipx:
+## Activate Aperio Next in your agent
 
-```sh
-pipx install "git+https://github.com/SHAHID8142/aperio-next.git@6399a81"
-```
+Open your project in any supported agent and use its native mechanism:
 
-**No published PyPI package or GitHub Release asset exists yet.** Install from
-git as shown above, or from a locally built wheel. Operating-system notes,
-upgrades, and removal are in [docs/install.md](docs/install.md).
+| Host | Activation |
+| --- | --- |
+| ZCode | `/aperio-next` or mention the skill |
+| Claude Code | `/aperio-next` |
+| OpenCode | `/aperio-next` or `@aperio-next` |
+| Codex CLI | `$aperio-next` |
+| Gemini CLI | `/aperio-next` |
+| Cursor | `/aperio-next` |
+
+The skill runs the real engine read-only first (`aperio next <project>
+--json`), walks you through consent-gated onboarding for new projects, and
+resumes from durable state in managed ones. Project data, approvals, and
+verification stay under your control at every step.
 
 ## Quick start — a new project
 
@@ -124,17 +161,28 @@ Use `aperio onboarding-reconstruct .` to inventory what already exists.
 
 ## AI agent compatibility
 
-`aperio host-doctor` prints an honest matrix. In short:
+`aperio integrations status` reports registration per host;
+`aperio host-doctor` reports engine/provider compatibility. The levels are
+kept separate on purpose — "registered" (file written to the host's
+documented location) is not "activated" (a live session actually invoked
+it):
 
-| Host | What is verified |
-| --- | --- |
-| Terminal CLI (any OS) | **Fully verified** — this is Aperio itself |
-| Codex CLI, Claude Code | CLI adapter tested against **simulated** processes; no live account run |
-| OpenCode, Cline, Cursor, Kilo, ZCode, Goose, Antigravity, Pi | **Cooperative fallback** — the agent runs Aperio's commands and reads JSON; no native integration |
+| Host | Skill registered at | Activation | Live-activated tested |
+| --- | --- | --- | --- |
+| ZCode | `~/.zcode/skills/`, `~/.zcode/commands/` | `/aperio-next` or skill mention | yes (this host) |
+| Claude Code | `~/.claude/skills/`, `~/.claude/commands/` | `/aperio-next` | registration only |
+| OpenCode | `~/.config/opencode/skills/`, `commands/` | `/aperio-next`, `@aperio-next` | registration only |
+| Codex CLI | `~/.agents/skills/` | `$aperio-next` | registration only |
+| Gemini CLI | `~/.gemini/skills/`, `commands/` (TOML) | `/aperio-next` | registration only |
+| Cursor | `~/.cursor/skills/` | `/aperio-next` | registration only |
 
-"Executable found" is not the same as "authenticated session verified". The
-doctor reports six separate facts per host so this cannot be misread. Details
-and fallbacks: [docs/host-integration.md](docs/host-integration.md).
+Every path above is that host's **officially documented** mechanism
+(sources in [docs/integrations.md](docs/integrations.md)). Codex, Gemini,
+Cursor, and ZCode also scan the cross-tool `~/.agents/skills/` path, so a
+Codex install makes the skill visible there too. Any agent can always use
+the cooperative fallback: run `aperio` commands in a terminal.
+[docs/host-integration.md](docs/host-integration.md) explains the level
+vocabulary.
 
 ## Security and limitations
 
@@ -150,11 +198,18 @@ and fallbacks: [docs/host-integration.md](docs/host-integration.md).
 
 ## Troubleshooting
 
-- **`aperio: command not found`** — run `uv tool update-shell` or open a new
-  terminal, then `uv tool list` to confirm the install.
+- **`aperio: command not found`** — the npm installer's engine lives in
+  `~/.aperio-next/bin`; add it to PATH (`export PATH="$HOME/.aperio-next/bin:$PATH"`)
+  or use the full path. For uv installs, run `uv tool update-shell`.
+- **`aperio-next doctor` shows "conflict: foreign file"** — a file aperio did
+  not create occupies the skill slot. Aperio never overwrites foreign files:
+  rename or remove it yourself, then re-run `aperio-next install`.
 - **`aperio next` says the project state is ambiguous** — Aperio will not guess
   or overwrite. Inspect the reported reasons; see
   [docs/troubleshooting.md](docs/troubleshooting.md).
+- **The skill does not trigger in your agent** — registration is verified by
+  `aperio-next doctor`; activation depends on the host (restart the agent
+  session so it re-scans its skills, then invoke `/aperio-next` explicitly).
 - **An agent shows in `host-doctor` but won't connect** — a probe does not log
   in or make a model request. See [docs/providers.md](docs/providers.md).
 - **You want to start over on a project** — Aperio never deletes your files.
@@ -163,8 +218,12 @@ and fallbacks: [docs/host-integration.md](docs/host-integration.md).
 ## Upgrading and uninstalling
 
 ```sh
-uv tool upgrade aperio-next     # upgrade
-uv tool uninstall aperio-next   # remove the program (your project files stay)
+aperio-next update       # refresh engine + skill assets
+aperio-next uninstall    # remove skills + engine (your project files stay)
+
+# uv/pipx installs:
+uv tool upgrade aperio-next
+uv tool uninstall aperio-next
 ```
 
 Your project data lives in `.aperio/` and is never touched by upgrade or
