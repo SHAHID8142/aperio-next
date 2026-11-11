@@ -1518,3 +1518,10 @@ def test_interrupt_stops_and_reaps_the_captured_child(tmp_path):
     child_pid = int(pidfile.read_text().strip())
     with pytest.raises(ProcessLookupError):
         os.kill(child_pid, 0)   # still alive => the interrupt leaked the child
+
+
+def test_capture_preserves_the_startup_error_when_the_child_cannot_start():
+    from aperio.safeproc import run_captured
+
+    with pytest.raises(FileNotFoundError):
+        run_captured(["/aperio-nonexistent"], timeout_seconds=1, capture_limit=100)

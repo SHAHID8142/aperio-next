@@ -177,6 +177,7 @@ def run_captured(
 
     started = time.monotonic()
     interrupted = True
+    process: subprocess.Popen | None = None
     try:
         process = subprocess.Popen(
             list(argv),
@@ -252,7 +253,7 @@ def run_captured(
         interrupted = False
         return result
     finally:
-        if interrupted:
+        if interrupted and process is not None:
             # Ctrl-C (or any unwinding) must not leave an owned child
             # running: the child has its own session on POSIX, so the
             # terminal's interrupt never reaches it. Stop the tree and
