@@ -439,12 +439,19 @@ def record_approval(
     action: str,
     scope: str,
     method: str = "cli",
+    fingerprint: str | None = None,
 ) -> dict:
     """Append an explicit operator approval record.
 
     An approval is scoped: ``scope`` names exactly what was approved
     (e.g. ``standardization.apply:README.md``). Approval for one action is
     never read as approval for another.
+
+    ``fingerprint`` optionally binds the approval to the exact artifact that
+    was reviewed (for example an install plan's command/source/permission
+    hash). Callers that bind a fingerprint refuse to act on anything whose
+    fingerprint differs, so an approved plan cannot be swapped for a
+    different executable.
     """
     for name, value in (("action", action), ("scope", scope)):
         if not isinstance(value, str) or not value.strip():
@@ -453,6 +460,11 @@ def record_approval(
             raise ValidationError(f"approval {name} exceeds 300 characters")
     if "\n" in action or "\r" in action or "\n" in scope or "\r" in scope:
         raise ValidationError("approval action and scope must be single-line strings")
+    if fingerprint is not None:
+        if not isinstance(fingerprint, str) or not fingerprint.strip():
+            raise ValidationError("approval fingerprint must be a non-empty string")
+        if len(fingerprint) > 128:
+            raise ValidationError("approval fingerprint exceeds 128 characters")
 
     def mutate(data: dict) -> dict:
         approvals = data.setdefault("approvals", [])
@@ -463,6 +475,8 @@ def record_approval(
             "granted_at": utc_now_iso(),
             "method": method,
         }
+        if fingerprint is not None:
+            entry["fingerprint"] = fingerprint.strip()
         approvals.append(entry)
         _append_history(data, "approval.recorded", f"{action}:{scope}")
         return data
@@ -471,7 +485,6 @@ def record_approval(
 
 
 def has_approval(aperio_dir: Path, action: str, scope: str) -> bool:
-    """Whether an exact (action, scope) approval has been recorded."""
     try:
         data = read_session(aperio_dir)
     except NotInitializedError:
@@ -479,7 +492,30 @@ def has_approval(aperio_dir: Path, action: str, scope: str) -> bool:
     return any(
         a.get("action") == action and a.get("scope") == scope
         for a in data.get("approvals", [])
+        if isinstance(a, dict)
     )
+
+
+def approved_plan_fingerprint(
+    aperio_dir: Path, action: str, scope: str
+) -> str | None:
+    """Fingerprint bound to the most recent approval for (action, scope).
+
+    Returns ``None`` when the approval predates fingerprint binding, in which
+    case callers fall back to the historical (action, scope) check only.
+    """
+    try:
+        data = read_session(aperio_dir)
+    except NotInitializedError:
+        return None
+    bound = None
+    for entry in data.get("approvals", []):
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("action") == action and entry.get("scope") == scope:
+            value = entry.get("fingerprint")
+            bound = value if isinstance(value, str) else None
+    return bound
 
 
 def add_unresolved(
