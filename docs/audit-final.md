@@ -19,7 +19,7 @@ a prior report. Where something could not be checked, it is marked
 | --- | --- |
 | Base SHA | `9773ba4cb213a2358c970c5013627b2d87bb2026` |
 | Branch | `audit/1.2-final-hardening` |
-| Base → HEAD | 31 files, +3046 / −974; commits are purely additive (count: `git rev-list --count 9773ba4..HEAD`) |
+| Base → HEAD | 31 files, +3438 / −974; commits are purely additive (count: `git rev-list --count 9773ba4..HEAD`) |
 | Audited source SHA (README pin target) | `4575497` — code + tests, all suites green |
 | Code after the audited SHA | docs-only commits; no executable change since `4575497` |
 | Pre-existing work | preserved; no reset, clean, force-push, or branch deletion |
@@ -114,7 +114,7 @@ captures, zero failures**, and three consecutive clean full-suite runs.
 | File | Change |
 | --- | --- |
 | `src/aperio/safeproc.py` | **new** — bounded capture, redaction, cross-platform stop, bounded reads |
-| `src/aperio/bounded_tasks.py` | **new** — A05 scale/decomposition assessment |
+| `src/aperio/bounded_tasks.py` | **new** — A05 scale/decomposition assessment; R03/R05 task-, plan- and section-level atomicity |
 | `src/aperio/wizard.py` | **new** — A06 opt-in interactive wizard |
 | `src/aperio/onboarding_tools.py` | A01/A03/A04/A08/A13 — safe run, all-prereqs, redaction, fingerprint |
 | `src/aperio/onboarding_session.py` | A13 — fingerprint-bound `record_approval`, `approved_plan_fingerprint` |
@@ -125,7 +125,6 @@ captures, zero failures**, and three consecutive clean full-suite runs.
 | `src/aperio/planstore.py` | R03 — task-size check in `approve_plan` |
 | `src/aperio/runtime.py` | R03 — task-size check in dispatch eligibility |
 | `src/aperio/wizard.py` | R01/R04 — init consent; `_consent_granted` fails closed when the callback is missing or raises |
-| `src/aperio/bounded_tasks.py` | R05 — section/feature atomicity: breadth markers, implementation-area breadth, bare whole-feature tasks |
 | `src/aperio/cli.py` | R02 — record the reviewed plan fingerprint, not a bare scope |
 | `src/aperio/recovery.py` | A13r — task-level ceiling |
 | `src/aperio/hostcompat.py` | A10 — six verification dimensions |
