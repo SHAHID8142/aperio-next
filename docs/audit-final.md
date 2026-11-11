@@ -19,7 +19,7 @@ a prior report. Where something could not be checked, it is marked
 | --- | --- |
 | Base SHA | `9773ba4cb213a2358c970c5013627b2d87bb2026` |
 | Branch | `audit/1.2-final-hardening` |
-| Base → HEAD | 31 files, +3437 / −974; commits are purely additive (count: `git rev-list --count 9773ba4..HEAD`) |
+| Base → HEAD | 32 files, +3635 / −974; commits are purely additive (count: `git rev-list --count 9773ba4..HEAD`) |
 | Audited source SHA (README pin target) | `66ed17f` — code + tests, all suites green |
 | Code after the audited SHA | docs-only commits; no executable change since `66ed17f` |
 | Pre-existing work | preserved; no reset, clean, force-push, or branch deletion |
@@ -122,6 +122,7 @@ captures, zero failures**, and three consecutive clean full-suite runs.
 | `src/aperio/onboarding_session.py` | A13 — fingerprint-bound `record_approval`, `approved_plan_fingerprint`; R07 `withdraw_answer` |
 | `src/aperio/onboarding_discovery.py` | A07 — incremental scandir |
 | `src/aperio/onboarding_reconstruct.py` | A07 — bounded byte read |
+| `src/aperio/onboarding.py` | R07 — `withdraw()` clears state derived from a withdrawn answer |
 | `src/aperio/planbridge.py` | A05 — gate at the bridge |
 | `src/aperio/planmodel.py` | R03 — task-size check in `validate_plan_input` (create/revise) |
 | `src/aperio/planstore.py` | R03 — task-size check in `approve_plan` |
