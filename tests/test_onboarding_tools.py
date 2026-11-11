@@ -18,6 +18,7 @@ from aperio.onboarding_tools import (
     build_install_plan,
     discover_tools,
     execute_install,
+    install_plan_fingerprint,
     probe_tool,
     recommend_tools,
 )
@@ -251,6 +252,11 @@ def test_execution_runs_fixed_argv_and_records_honestly(apdir, ws):
         "5_compatibility": "found",
         "8_install_command": [python3, "-c", "print('install simulation')"],
     }
+    # Approval must be bound to the exact reviewed plan (fingerprint).
+    record_approval(
+        apdir, action=INSTALL_ACTION, scope="echo-probe",
+        fingerprint=install_plan_fingerprint(plan),
+    )
     record = execute_install(apdir, plan, authorize_install=True)
     assert record["status"] == "install_command_completed"
     # Honesty: completion is not verification.

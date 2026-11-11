@@ -56,9 +56,14 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from aperio import safeproc
 from aperio.errors import StateError, ValidationError
 from aperio.onboarding_discovery import DiscoveryResult
-from aperio.onboarding_session import add_tool_record, has_approval
+from aperio.onboarding_session import (
+    add_tool_record,
+    approved_plan_fingerprint,
+    has_approval,
+)
 
 TOOLS_FORMAT = "aperio-onboarding-tools"
 TOOLS_VERSION = 1
@@ -307,8 +312,8 @@ def _parse_mcp_config(path: Path) -> list[dict]:
     key is ever interpreted as an instruction.
     """
     try:
-        raw = path.read_bytes()[:MAX_CONFIG_BYTES]
-        data = json.loads(raw.decode("utf-8"))
+        text, _truncated = safeproc.read_text_bounded(path, MAX_CONFIG_BYTES)
+        data = json.loads(text)
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return []
     servers = []
@@ -347,31 +352,33 @@ def probe_tool(
     if len(argv) > 8 or any(not isinstance(a, str) for a in argv):
         raise ValidationError("probe argv must be a tuple of at most 8 strings")
     try:
-        proc = subprocess.run(
+        result = safeproc.run_captured(
             list(argv),
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            timeout=PROBE_TIMEOUT_SECONDS,
-            check=False,
-        )
-        output = (proc.stdout[:MAX_PROBE_OUTPUT_BYTES] + proc.stderr[:MAX_PROBE_OUTPUT_BYTES])
-        version = output.decode("utf-8", errors="replace").splitlines()[0][:120] if output else ""
-        status = "verified_by_probe" if proc.returncode == 0 else "unknown"
-        detail = f"probe exit {proc.returncode}; proves only that the binary runs"
-        return ToolFinding(
-            tool_id, "executable", status, (*target.evidence, f"probe: {' '.join(argv)}"),
-            path=target.path, version=version or None, detail=detail,
-        )
-    except subprocess.TimeoutExpired:
-        return ToolFinding(
-            tool_id, "executable", "unknown", (*target.evidence, "probe timed out"),
-            path=target.path, detail=f"probe exceeded {PROBE_TIMEOUT_SECONDS:g}s",
+            timeout_seconds=PROBE_TIMEOUT_SECONDS,
+            capture_limit=MAX_PROBE_OUTPUT_BYTES,
+            home=str(Path.home()),
         )
     except OSError as exc:
         return ToolFinding(
             tool_id, "executable", "unknown", (*target.evidence, f"probe failed: {exc}"),
             path=target.path,
         )
+    if result["timed_out"]:
+        return ToolFinding(
+            tool_id, "executable", "unknown", (*target.evidence, "probe timed out"),
+            path=target.path, detail=f"probe exceeded {PROBE_TIMEOUT_SECONDS:g}s",
+        )
+    version = ""
+    for text in (result["stdout"], result["stderr"]):
+        if text.strip():
+            version = text.splitlines()[0][:120]
+            break
+    status = "verified_by_probe" if result["returncode"] == 0 else "unknown"
+    detail = f"probe exit {result['returncode']}; proves only that the binary runs"
+    return ToolFinding(
+        tool_id, "executable", status, (*target.evidence, f"probe: {' '.join(argv)}"),
+        path=target.path, version=version or None, detail=detail,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -396,6 +403,14 @@ class ToolCandidate:
     # is one of these (empty tuple = topics never apply). None = topics
     # apply to every category.
     topic_categories: tuple[str, ...] | None = None
+    # How far the declared install command actually gets us. An MCP server
+    # *launch* (`npx pkg`) is not a host registration, so it must never be
+    # reported as an installed integration.
+    integration_level: str = "manual-registration"  # launch-only | manual-registration | none
+    # True only when the recorded install command proves the capability is
+    # registered AND reachable from the host. False for every current
+    # candidate, because aperio does not edit host MCP config files.
+    verifies_installation: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -410,6 +425,8 @@ class ToolCandidate:
             "prerequisites": list(self.prerequisites),
             "security_notes": self.security_notes,
             "removal": self.removal,
+            "integration_level": self.integration_level,
+            "verifies_installation": self.verifies_installation,
         }
 
 
@@ -422,11 +439,13 @@ CANDIDATES: tuple[ToolCandidate, ...] = (
         ("web_app", "website", "mobile_app", "saas", "testing"),
         "Declared: Microsoft Playwright project (npm package @playwright/mcp); verify before trusting",
         ("npx", "@playwright/mcp@latest"),
-        ("node", "npm"),
+        ("node", "npm", "npx"),
         "Runs local browsers; browser automation can act on any page it is pointed at. "
         "Scope it deliberately and never point it at credentials-bearing sessions.",
         "Remove the dependency from package.json / MCP config; no global changes made by aperio.",
         ("web_app", "website", "saas", "mobile_app"),
+        integration_level="launch-only",
+        verifies_installation=False,
     ),
     ToolCandidate(
         "chrome-devtools-mcp",
@@ -436,11 +455,13 @@ CANDIDATES: tuple[ToolCandidate, ...] = (
         ("web_app", "website", "hosting"),
         "Declared: Google Chrome DevTools team (npm package chrome-devtools-mcp); verify before trusting",
         ("npx", "chrome-devtools-mcp@latest"),
-        ("node", "npm"),
+        ("node", "npm", "npx"),
         "Connects to a local Chromium instance; can read page contents and network traffic. "
         "Do not attach it to sessions containing credentials.",
         "Remove the dependency / MCP config entry; aperio makes no global changes.",
         ("web_app", "website"),
+        integration_level="launch-only",
+        verifies_installation=False,
     ),
     ToolCandidate(
         "pytest",
@@ -523,6 +544,38 @@ def recommend_tools(
 # Install plan + authorization-gated execution.
 # ---------------------------------------------------------------------------
 
+def _prerequisites_satisfied(
+    prerequisites: tuple[str, ...], report: ToolsReport
+) -> tuple[bool, list[str]]:
+    """All declared prerequisites must be installed; return the missing ones.
+
+    Finding *one* prerequisite is not enough: ``node`` without ``npm`` or
+    ``npx`` cannot run an ``npx``-based install, so that combination must be
+    classified incompatible rather than compatible.
+    """
+    installed = {t.tool_id for t in report.executables if t.status == "installed"}
+    missing = [p for p in prerequisites if p not in installed]
+    return (not missing), missing
+
+
+def install_plan_fingerprint(plan: dict) -> str:
+    """Hash of the security-relevant fields of an install plan.
+
+    Approval is bound to this value so a plan cannot be swapped for an
+    unrelated executable between approval and execution.
+    """
+    import hashlib
+
+    material = {
+        "tool_id": plan.get("tool_id"),
+        "command": plan.get("8_install_command"),
+        "source": plan.get("3_source"),
+        "permissions": plan.get("6_required_permissions"),
+    }
+    blob = json.dumps(material, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()
+
+
 def build_install_plan(
     tool_id: str,
     report: ToolsReport,
@@ -534,11 +587,8 @@ def build_install_plan(
     if candidate is None:
         raise ValidationError(f"unknown tool candidate {tool_id!r}")
 
-    installed = next(
-        (t for t in report.executables if t.tool_id in candidate.prerequisites),
-        None,
-    )
-    prereq_status = "found" if installed and installed.status == "installed" else "missing"
+    satisfied, missing = _prerequisites_satisfied(candidate.prerequisites, report)
+    prereq_status = "found" if satisfied else "missing"
 
     plan = {
         "format": "aperio-onboarding-install-plan",
@@ -560,17 +610,29 @@ def build_install_plan(
         ),
         "execution": (
             "plan-only by default. Execution requires BOTH a recorded session "
-            f"approval (action '{INSTALL_ACTION}' scoped to '{candidate.tool_id}') "
-            "AND the --authorize-install flag."
+            f"approval (action '{INSTALL_ACTION}' scoped to '{candidate.tool_id}', "
+            "bound to this plan's fingerprint) AND the --authorize-install flag."
         ),
+        "integration_level": candidate.integration_level,
+        "verifies_installation_claim": (
+            "the install command completes a package install/launch only; aperio "
+            "does not edit host MCP configuration, so this is NOT a claim that a "
+            "host is wired to the server"
+            if candidate.integration_level == "launch-only"
+            else "no installation claim is made"
+        ),
+        "_missing_prerequisites": missing,
     }
+    plan["_fingerprint"] = install_plan_fingerprint(plan)
     if candidate.install_argv is None:
         plan["execution"] = (
             "manual-only: no safe portable install is implemented for this tool; "
             "aperio will never pretend it was installed."
         )
     if prereq_status == "missing":
-        plan["execution"] = "blocked: prerequisites missing; install them first"
+        plan["execution"] = (
+            "blocked: prerequisites missing (" + ", ".join(missing) + "); install them first"
+        )
     return plan
 
 
@@ -612,35 +674,40 @@ def execute_install(
             "aperio will not pretend it was installed"
         )
     if plan.get("5_compatibility") != "found":
-        raise StateError("install blocked: prerequisites missing; nothing was executed")
+        missing = plan.get("_missing_prerequisites") or []
+        detail = (" (" + ", ".join(missing) + ")") if missing else ""
+        raise StateError(
+            f"install blocked: prerequisites missing{detail}; nothing was executed"
+        )
+
+    # A13: approval is bound to this plan's fingerprint. A plan whose command,
+    # source or permissions changed after approval must be refused outright,
+    # and an approval that carries no fingerprint at all (a "legacy" approval
+    # recorded before this binding existed) must NOT authorize execution — the
+    # operator has to re-approve the exact reviewed plan.
+    fingerprint = install_plan_fingerprint(plan)
+    approved_fingerprint = approved_plan_fingerprint(apdir, INSTALL_ACTION, tool_id)
+    if approved_fingerprint is None:
+        raise StateError(
+            "the recorded approval is not bound to a specific install plan "
+            "(no fingerprint); re-approve the exact plan before running it. "
+            "Nothing was executed."
+        )
+    if approved_fingerprint != fingerprint:
+        raise StateError(
+            "install plan does not match the approved plan (command, source or "
+            "permissions changed after approval); nothing was executed"
+        )
 
     started = time.monotonic()
     try:
-        proc = subprocess.Popen(
+        result = safeproc.run_captured(
             argv,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            start_new_session=True,
+            timeout_seconds=INSTALL_TIMEOUT_SECONDS,
+            capture_limit=MAX_INSTALL_OUTPUT_BYTES,
             cwd=str(apdir.parent),
+            home=str(Path.home()),
         )
-        try:
-            out, err = proc.communicate(timeout=INSTALL_TIMEOUT_SECONDS)
-        except subprocess.TimeoutExpired:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            out, err = proc.communicate()
-            record = {
-                "name": tool_id,
-                "action": "install",
-                "status": "failed_timeout",
-                "detail": f"install exceeded {INSTALL_TIMEOUT_SECONDS:g}s and was killed",
-                "recorded_at": _utc_now(),
-            }
-            add_tool_record(apdir, record)
-            raise StateError(
-                f"install of {tool_id!r} exceeded {INSTALL_TIMEOUT_SECONDS:g}s and was "
-                "terminated; no completion claim is made"
-            ) from None
     except FileNotFoundError:
         record = {
             "name": tool_id, "action": "install", "status": "failed",
@@ -653,15 +720,31 @@ def execute_install(
     except OSError as exc:
         raise StateError(f"install failed to start: {exc}; nothing was executed") from None
 
-    combined = (out or b"")[:MAX_INSTALL_OUTPUT_BYTES] + (err or b"")[:MAX_INSTALL_OUTPUT_BYTES]
-    tail = combined.decode("utf-8", errors="replace")[-400:]
     duration = round(time.monotonic() - started, 2)
-    if proc.returncode == 0:
+    if result["timed_out"]:
+        record = {
+            "name": tool_id,
+            "action": "install",
+            "status": "failed_timeout",
+            "detail": f"install exceeded {INSTALL_TIMEOUT_SECONDS:g}s and was killed",
+            "recorded_at": _utc_now(),
+        }
+        add_tool_record(apdir, record)
+        raise StateError(
+            f"install of {tool_id!r} exceeded {INSTALL_TIMEOUT_SECONDS:g}s and was "
+            "terminated; no completion claim is made"
+        ) from None
+
+    returncode = result["returncode"]
+    # Only a redacted tail is retained; the raw stream never leaves this frame.
+    combined = (result["stdout"] or "") + (result["stderr"] or "")
+    tail = safeproc.redact_output(combined[-400:], home=str(Path.home()))
+    if returncode == 0:
         status = "install_command_completed"
         detail = f"exit 0 in {duration}s; installed state NOT verified by this result alone"
     else:
         status = "install_command_failed"
-        detail = f"exit {proc.returncode} in {duration}s"
+        detail = f"exit {returncode} in {duration}s"
     record = {
         "name": tool_id,
         "action": "install",
@@ -669,12 +752,14 @@ def execute_install(
         "detail": detail,
         "command": list(argv),
         "output_tail": tail,
+        "output_redacted": True,
+        "integration_level": plan.get("integration_level"),
         "recorded_at": _utc_now(),
     }
     add_tool_record(apdir, record)
-    if proc.returncode != 0:
+    if returncode != 0:
         raise StateError(
-            f"install command exited {proc.returncode}; aperio makes no "
+            f"install command exited {returncode}; aperio makes no "
             "installed-state claim. Re-run 'aperio onboarding-discover-tools' "
             "to reassess honestly."
         )

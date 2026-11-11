@@ -220,6 +220,28 @@ _COOPERATIVE_FALLBACK = (
 )
 
 
+def _verification_dimensions(row: dict) -> dict:
+    """Break a compatibility row into independently true/false facts.
+
+    Finding A10: the single ``level`` label cannot distinguish "the binary
+    exists" from "a live, authenticated model call succeeded". These
+    dimensions are separate so no reader has to infer one from the other.
+    Today no host has a live functional handoff recorded, so every dimension
+    past ``executable_present`` is honestly false or unknown.
+    """
+    family = row.get("family")
+    present = family == "canonical" or bool(row.get("executable"))
+    return {
+        "executable_present": present,
+        "supported_flags_detected": family == "canonical"
+        or row.get("level") == "cli_verified",
+        "cli_launch_tested": False,
+        "authenticated_model_call_tested": False,
+        "functional_handoff_tested": False,
+        "native_command_registered_and_tested": False,
+    }
+
+
 def inspect_hosts(*, probes: dict[str, dict | None] | None = None) -> dict:
     """Build the compatibility matrix (pure; no filesystem access).
 
@@ -355,6 +377,8 @@ def inspect_hosts(*, probes: dict[str, dict | None] | None = None) -> dict:
         raise AssertionError(
             f"compatibility report emitted reserved level(s): {unexpected}"
         )
+    for row in rows:
+        row["verification"] = _verification_dimensions(row)
     return {
         "command": "host-doctor",
         "levels": list(COMPATIBILITY_LEVELS),
@@ -371,6 +395,12 @@ def inspect_hosts(*, probes: dict[str, dict | None] | None = None) -> dict:
             "No live integration test was performed by this diagnostic; "
             "native/CLI/cooperative distinctions come from documented "
             "interfaces only.",
+            "Per-host 'verification' records six separate facts. Only "
+            "'executable_present' and 'supported_flags_detected' can be "
+            "true from passive probing; 'cli_launch_tested', "
+            "'authenticated_model_call_tested', 'functional_handoff_tested' "
+            "and 'native_command_registered_and_tested' are false until a "
+            "live run is actually recorded.",
         ],
     }
 

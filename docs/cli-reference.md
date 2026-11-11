@@ -117,6 +117,7 @@ marked *(read-only)*.
 | Command | Purpose |
 | --- | --- |
 | `aperio next [DIR] [--json]` | canonical read-only entry point; route through the onboarding facade and return exactly one next action |
+| `aperio start [DIR]` | **opt-in interactive wizard** for beginners: one step at a time, `/pause` `/quit` `/back`, explains consent before the first mutation, requires a real terminal (no `--json`) |
 | `aperio onboarding-start [DIR] [--json]` | classify the workspace and ask exactly one next thing *(read-only; resumes a session)* |
 | `aperio onboarding-confirm-init DIR --approve [--intent TEXT]` | operator-approved initialization (non-destructive; never overwrites) |
 | `aperio onboarding-decline [DIR]` | exit onboarding; change nothing |

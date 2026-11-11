@@ -881,12 +881,14 @@ time.sleep(60)
         start_new_session=True,
     )
     started = fake.with_suffix(".started")
-    deadline = time.monotonic() + 10
+    # Generous deadlines: the interrupt path is what is under test, not how
+    # fast this machine can import Python under load.
+    deadline = time.monotonic() + 30
     while not started.exists() and time.monotonic() < deadline:
         time.sleep(0.05)
     assert started.exists(), "provider child never started"
     os.kill(cli.pid, signal.SIGINT)
-    out, err = cli.communicate(timeout=10)
+    out, err = cli.communicate(timeout=30)
     assert cli.returncode == 130
     assert "interrupted" in err
     assert "Traceback" not in err

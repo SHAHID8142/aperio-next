@@ -1,19 +1,51 @@
-# Quick start (no project, no code, no API key)
+# Quick start
 
-Aperio helps you prepare work for any AI agent, check the result, remember
-what you learned, and carry everything to the next agent — through
-ordinary files and copy/paste.
+This page has two tracks. **Track A** is a new project with no code and no API
+key. **Track B** is a task you hand to any AI agent through a portable brief.
 
-Install (development), or see [install.md](install.md) for the full
-fresh-machine path (Windows/macOS/Linux):
+For how to install Aperio on your operating system, see [install.md](install.md).
+
+## Track A — start a project (about five minutes)
+
+The easiest path is the guided wizard. It shows one question at a time, lets
+you pause and resume, and asks before it creates anything.
 
 ```sh
-python -m pip install -e ".[dev]"     # or: pip install <the built wheel>
-aperio --version
-aperio next .                         # canonical read-only first action
+mkdir my-project
+cd my-project
+aperio next .        # read-only: what to do next for this folder
+aperio start .       # opt-in interactive wizard (needs a real terminal)
 ```
 
-## First run in five minutes (non-coding example)
+The wizard first explains that it will create the `.aperio/` folder and asks for
+your approval. During the interview:
+
+- type an answer in your own words;
+- type `Not sure yet` or `Decide later` when you do not know;
+- type `/pause` to save and stop, `/quit` to cancel, `/back` to revise where offered.
+
+Run `aperio start .` again later to resume.
+
+### Scripted or agent-driven form
+
+`aperio next` stays a strictly read-only protocol, so scripts and agents can
+drive onboarding without a terminal:
+
+```sh
+aperio next .                                            # one next action, JSON with --json
+aperio onboarding-confirm-init . --approve               # the only first mutation
+aperio onboarding-answer . project.category --answer "Website"
+aperio onboarding-answer . foundation.goal --answer "Build a portfolio site"
+aperio onboarding-readiness .                            # are the required answers in?
+```
+
+Onboarding gathers information and checks readiness. It does **not** build or
+deploy anything; those are separate, explicitly authorized steps.
+
+## Track B — hand a task to any agent
+
+Aperio does not need a project for this part. Write down the assignment, check
+it, then produce a paste-ready brief for whichever agent you use.
 
 **1. Write down the assignment** — save as `poster-goal.json`:
 

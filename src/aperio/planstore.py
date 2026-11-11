@@ -44,6 +44,7 @@ from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 from aperio import __version__
+from aperio.bounded_tasks import assess_plan_boundeness
 from aperio.errors import NotInitializedError, PathError, StateError, ValidationError
 from aperio.inputs import check_no_foreign_line_separators
 from aperio.locks import LOCK_TIMEOUT_SECONDS, acquire_lock, release_lock
@@ -755,8 +756,7 @@ def approve_plan(
     )
     def mutate(snapshot: dict):
         current_version = snapshot["plan_version"]
-        if revision is not None and revision != current_version:
-            raise StateError(
+        if revision is not None and revision != current_version:            raise StateError(
                 f"plan moved on: current plan_version is {current_version}, "
                 f"but approval was requested for revision {revision}. "
                 "Nothing was modified."
@@ -774,6 +774,16 @@ def approve_plan(
                     "revision. Nothing was modified."
                 )
         new_document = dict(snapshot)
+        # A05: approval must not bless a plan made of whole-project tasks.
+        # This is checked at approval as well as at create, so a plan that
+        # predates the rule (or was written by hand) cannot be approved into
+        # executable state.
+        assessment = assess_plan_boundeness(snapshot)
+        if assessment.blocked:
+            raise StateError(
+                "plan-approve: " + assessment.reason + " ("
+                + "; ".join(assessment.signals) + "). Nothing was modified."
+            )
         new_document["approval"] = {
             "status": "approved",
             "approved_revision": current_version,

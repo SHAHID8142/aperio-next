@@ -40,6 +40,7 @@ import re
 from pathlib import Path
 
 from aperio.errors import ValidationError
+from aperio.bounded_tasks import assess_goal_boundedness
 from aperio.goals import goal_authority, goal_identity
 
 PROPOSAL_FORMAT = "aperio-plan-proposal"
@@ -83,6 +84,17 @@ def plan_proposal_from_goal(goal: dict, *, actor: str | None = None) -> dict:
         )
     work = goal.get("work") or {}
     goal_tasks = list(work.get("tasks") or [])
+
+    # A05: large work must be decomposed into independently verifiable tasks.
+    # This runs for *every* goal, decomposed or not: a project-scale goal that
+    # declares a single token task is still undecomposed, and the per-task plan
+    # gates cannot see that. Genuinely small goals still pass undecomposed.
+    assessment = assess_goal_boundedness(goal)
+    if assessment.blocked:
+        detail = "; ".join(assessment.signals) or "no decomposition declared"
+        raise ValidationError(
+            "plan-bridge: " + assessment.reason + " (" + detail + ")"
+        )
 
     if len(goal_tasks) > MAX_PROPOSED_TASKS:
         raise ValidationError(
@@ -171,7 +183,6 @@ def plan_proposal_from_goal(goal: dict, *, actor: str | None = None) -> dict:
             "the goal declares no work decomposition; a single task was "
             "derived from the objective (Aperio did not decompose it)"
         )
-
     plan_input = {
         "objective": objective,
         "expected_outcome": expected_outcome,

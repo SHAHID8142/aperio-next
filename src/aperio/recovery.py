@@ -48,6 +48,12 @@ from aperio.errors import StateError, ValidationError
 
 MAX_ATTEMPTS_PER_SIGNATURE = 3
 
+#: Hard ceiling on *all* failed attempts for one task, regardless of how the
+#: error text, exit code or adapter varies between attempts. Signatures can
+#: be reset by genuinely different-looking failures (or an adapter switch);
+#: this task-level budget prevents that from becoming an unbounded loop.
+MAX_ATTEMPTS_PER_TASK = 8
+
 #: Bounded excerpt of a recorded outcome used for signature text.
 _SIGNATURE_TEXT_LIMIT = 280
 
@@ -131,6 +137,21 @@ def retry_gate(
     failed = failed_runs_for_task(runs, task_id)
     if not failed:
         return {"signature": None, "attempt_no": 1, "prior_failures": 0}
+
+    # Task-level ceiling: bounded even when error text, exit code, or the
+    # adapter changes between attempts and resets the per-signature counter.
+    if len(failed) >= MAX_ATTEMPTS_PER_TASK:
+        raise StateError(
+            f"task {task_id}: the task-level retry ceiling is exhausted — "
+            f"{len(failed)} failed attempts across all problem signatures "
+            f"(limit {MAX_ATTEMPTS_PER_TASK}). Varying error text, exit codes "
+            "or adapters does not earn more attempts. Safe next steps: mark "
+            f"the task blocked ('aperio task-status <dir> {task_id} "
+            "--status blocked --reason \"exhausted task retry ceiling\"'), "
+            f"preserve the history ('aperio recovery-report <dir> {task_id}'), "
+            "then change the approach materially, revise the plan, or "
+            "escalate to the operator. Nothing was modified."
+        )
 
     latest = failed[-1]
     signature = signature_of_run(latest)
@@ -254,13 +275,18 @@ def recovery_report(runs: list[dict], task_id: str) -> dict:
             }
         )
     exhausted = [entry for entry in signatures if entry["exhausted"]]
+    # The task-wide ceiling blocks dispatch even when no single signature is
+    # exhausted; the report must say so, or it sends operators back to retry.
+    ceiling_reached = len(failed) >= MAX_ATTEMPTS_PER_TASK
     return {
         "task_id": task_id,
         "max_attempts_per_signature": MAX_ATTEMPTS_PER_SIGNATURE,
+        "max_attempts_per_task": MAX_ATTEMPTS_PER_TASK,
+        "task_ceiling_reached": ceiling_reached,
         "signature_count": len(signatures),
         "failed_run_count": len(failed),
         "signatures": signatures,
-        "verdict": "exhausted" if exhausted else (
+        "verdict": "exhausted" if (exhausted or ceiling_reached) else (
             "failed_runs_present" if failed else "no_failed_runs"
         ),
         "guidance": (
@@ -273,6 +299,17 @@ def recovery_report(runs: list[dict], task_id: str) -> dict:
                 "or switch adapter after 'aperio agent-doctor'."
             ]
             if exhausted
+            else [
+                f"The task-wide ceiling is exhausted: {len(failed)} failed "
+                f"attempts across all signatures (limit "
+                f"{MAX_ATTEMPTS_PER_TASK}). No retry is available, and new "
+                "problem signatures do not earn more attempts. Mark the task "
+                f"blocked with 'aperio task-status <dir> {task_id} --status "
+                "blocked --reason ...', preserve the history ('aperio "
+                "recovery-report'), then change the approach materially, "
+                "revise the plan, or escalate to the operator."
+            ]
+            if ceiling_reached
             else (
                 [
                     "Failures are recorded; retries require a declared "

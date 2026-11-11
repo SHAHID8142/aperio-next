@@ -1,5 +1,60 @@
 # Release notes
 
+## 1.2.0rc2 — hardening audit (final)
+
+An independent, evidence-driven audit of `main` @ `9773ba4` produced fixes for
+fourteen findings (three critical/high severity areas), a modernized
+installation path, and a rewritten beginner README. Full detail, per-finding
+reproduction and evidence: [audit-final.md](audit-final.md).
+
+Correctness and security fixes:
+
+- **Bounded subprocess output** everywhere Aperio runs an external tool —
+  limits are enforced *while* output is produced, not after buffering.
+- **Windows-safe process termination** — the process-group kill is POSIX-only
+  and platform-guarded; a vanished lock is no longer misread as a non-file
+  occupant (a real concurrency TOCTOU that caused intermittent intake failures).
+- **Complete prerequisite validation** for tool installs (`node`+`npm`+`npx`
+  are all required) and **approval bound to the exact plan fingerprint**, so an
+  approved plan cannot be swapped for a different command.
+- **Secret redaction** before any tool output reaches shareable session state.
+- **Bounded-task gate:** project-scale goals that are not decomposed into
+  verifiable tasks are refused at the plan bridge instead of collapsing into
+  one self-certified task.
+- **Task-level retry ceiling** so varying error text or adapter switches cannot
+  reset the per-signature budget.
+- **Incremental directory scanning** and byte-bounded file reads.
+- **Opt-in interactive wizard** (`aperio start`) for beginners; `aperio next`
+  stays read-only and scriptable.
+- **Honest host compatibility:** each host row now records six separate
+  verification facts, so a passive probe is never read as a live integration.
+- **Installation modernized** to `uv tool install` (verified from wheel and an
+  immutable git commit) with a `pipx` fallback; all verified on macOS arm64.
+- **Final remediation:** `aperio start` asks for initialization consent on an
+  existing project instead of crashing; install approval is bound to the exact
+  reviewed plan (an unbound legacy approval is refused); and the atomic
+  task-size rule is enforced at goal assessment, plan-create, plan-approve and
+  dispatch, so it cannot be bypassed.
+- **Wizard consent fails closed:** a missing or failing approval callback is a
+  refusal, never an implicit "yes".
+- **Whole sections are not atomic:** an entire Hero Section (or any feature
+  unit spanning several implementation areas) is refused as one task, while
+  bounded slices — markup-only, styling-only, a copy change — stay valid.
+- **Bounded subprocess drain:** a descendant that keeps a pipe open can no
+  longer hold a call past its deadline (`drain_grace_seconds`, `drain_stalled`).
+- **Wizard `/back` re-prompts:** going back withdraws the previous answer
+  instead of overwriting it with a placeholder.
+- **Bounded work is not confused with its location:** "Fix a typo in the
+  website" bridges normally, while "an entire website" stays blocked.
+- **One atomicity rule for both schemas:** plan tasks are checked through
+  `acceptance_criteria` as well as `completion_criteria`.
+- **Tests are not treated as scope:** requiring "unit tests pass" no longer
+  makes a bounded task look like a whole feature.
+
+Verification: **1,691 tests** pass on CPython 3.11, 3.12, 3.13 and 3.14
+(macOS arm64). GitHub-hosted CI still has not executed (account billing lock);
+Windows and Linux remain UNVERIFIED by this audit.
+
 ## 1.2.0rc2 — Step 01 integration release candidate
 
 This candidate integrates the two previously separate completion lines:

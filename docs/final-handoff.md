@@ -6,9 +6,22 @@ omitted. Chunk-level detail for the 1.2 program lives in
 [master-plan-v3.md](master-plan-v3.md); the 1.1 program in
 [master-plan-v2.md](master-plan-v2.md).
 
+> **1.2 hardening audit:** an independent, adversarial audit of `main` @
+> `9773ba4` reproduced and fixed fourteen findings (including two critical),
+> then two remediation rounds closed five further defects (wizard init consent,
+> an install-approval fingerprint bypass, task-size gates that only ran on one
+> of five paths, wizard consent that failed open, and section-sized tasks such
+> as an entire Hero Section being treated as atomic). Installation was modernized to `uv tool install` and the
+> README rewritten for beginners.
+> Full evidence, reproduction steps, gate table, and the honest remaining
+> risks are in **[audit-final.md](audit-final.md)**. That document supersedes
+> any older test count below.
+
 ## A. Exact source identity
 
 - **Repository:** https://github.com/SHAHID8142/aperio-next
+- **Audit branch:** `audit/1.2-final-hardening` (additive commits on `9773ba4`)
+- **Audited source SHA:** `5715380` (code + tests; the README install pins it)
 - **Source histories:** `feature/master-v3-completion` @ `8a3fe94` and
   `feature/step01-universal-onboarding` @ `6bea2e2`, integrated on
   `integration/v1.2-final`. Main is updated only after the complete audit
@@ -17,6 +30,8 @@ omitted. Chunk-level detail for the 1.2 program lives in
   asserted by tests/test_version.py)
 - **Working tree:** clean at the handoff commit; `dist/` artifacts are
   build outputs and are not committed.
+- **Verdict:** **RELEASE CANDIDATE — SPECIFIC VALIDATION PENDING** (Windows,
+  Linux, live authenticated agent runs, and hosted CI remain unverified).
 
 ## B. Completed capabilities (feature → modules → commands → guarantee → tests)
 
@@ -54,18 +69,30 @@ additional CLI tests for read-only routing and resume behavior.
 
 ## D. Verification evidence
 
-- **Local (this machine, macOS arm64):**
-  - Python 3.14.7 (repo venv): **1601 passed, 0 skipped** after integrating
-    v1.2, Step 01, and the canonical `aperio next` tests. Final review removed
-    a stale conditional skip in the plan-reconstruction fixture.
-  - The earlier 1.2 line passed 1403 tests and the isolated Step 01 line
-    passed its own full suite before integration; those counts are historical,
-    not substituted for the integrated run above.
-  - A clean 1.2.0rc2 wheel was built and installed into a fresh Python 3.14
-    venv. `--version`, `next` on an empty workspace, and `host-doctor --json`
-    passed; the installed artifact contained all 11 skill packs and 14
-    benchmark cases. The 1.1 wheel also passed the full 1344-test suite on
-    Python 3.12.14 (prior program).
+- **Current (1.2 hardening audit, macOS arm64):** **1,691 passed, 0 skipped**
+  on CPython **3.11, 3.12, 3.13 and 3.14**, no flake after the lock TOCTOU
+  fix. Clean isolated `uv tool install` (wheel and pinned git commit) and
+  `pipx` install verified outside the repo, including upgrade and uninstall.
+  The remediations added 54 regression tests, each written before its fix and
+  failing first: R01–R03 (wizard init consent, install-approval fingerprint
+  binding, task-size checks on create/approve/dispatch), R04–R05 (fail-closed
+  wizard consent, whole-section atomicity for a Hero Section), and R06–R07
+  (deadline-bounded subprocess drain, `/back` that re-prompts instead of
+  overwriting), and R08–R09 from the Codex re-review (bounded work that names a
+  product, and scope hidden in native plan `acceptance_criteria`), and R10
+  (verification criteria wrongly counted as implementation breadth), plus
+  R11–R12 (test-only work as a slice, `/back` returning to the intent
+  chooser), and R13–R14 (goal assessment for declared decompositions, recovery
+  report agreeing with the task-wide ceiling), and R15 (an interrupt leaving a
+  captured child running, the guard for a child that never started, and the
+  breadth marker governing only its own object, and dimensional adjectives not
+  counting as breadth). See [audit-final.md](audit-final.md).
+- **Earlier integrated run (historical):** Python 3.14.7 (repo venv) — 1601
+  passed, 0 skipped after integrating v1.2 and Step 01. The 1.1 line passed
+  1344 tests on Python 3.12.14; those counts are historical.
+  - A clean 1.2.0rc2 wheel was installed into a fresh Python 3.14 venv;
+    `--version`, `next` on an empty workspace, and `host-doctor --json`
+    passed; the wheel contained all 11 skill packs and 14 benchmark cases.
 - **CI:** GitHub Actions executed **zero** test steps for the entire
   0.13→1.2 series — the account billing lock ("The job was not started
   because your account is locked due to a billing issue"). This is an
@@ -79,7 +106,14 @@ additional CLI tests for read-only routing and resume behavior.
 - **Python 3.11/3.13, Windows:** declared supported, not installed/
   tested on this machine.
 
-## E. Open risks
+## E. Independent review status
+
+Automated third-party review of this branch ran eight rounds. Every finding
+was reproduced first, fixed with a regression test that failed before the fix,
+and re-checked by the following round. The final round, against the audited
+code commit `5715380`, reported **no findings**.
+
+## F. Open risks
 
 | Risk | Severity | Evidence | Impact | Next action |
 | --- | --- | --- | --- | --- |
@@ -91,7 +125,7 @@ additional CLI tests for read-only routing and resume behavior.
 | 3.11/3.13/Windows untested | low-medium | release notes, install.md | Unknown platform behavior | Extend the verification matrix when environments exist |
 | Loopback UI token visible to same-machine processes | low | limitations.md | Local-only exposure | Run only on trusted machines; CLI is the alternative |
 
-## F. Release verdict
+## G. Release verdict
 
 **RELEASE CANDIDATE — EXTERNAL VALIDATION PENDING.**
 

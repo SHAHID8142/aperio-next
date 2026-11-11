@@ -32,6 +32,7 @@ Guarantees and limitations (accurate):
 from __future__ import annotations
 
 import os
+import stat
 import time
 from pathlib import Path
 
@@ -57,16 +58,32 @@ def acquire_lock(
     :raises StateError: when the lock cannot be acquired within the
         bounded wait, or the lock file cannot be created/written.
     """
-    if os.path.islink(path):
-        raise PathError(
-            f"refusing to follow symlink at {path}; "
-            "remove it and re-run 'aperio init' to repair"
-        )
-    if path.exists() and not path.is_file():
-        raise PathError(
-            f"cannot lock {artifact}: a non-file occupant exists at {path}; "
-            "remove it and re-run 'aperio init' to repair"
-        )
+    # Classify the lock path with a SINGLE lstat. Two separate checks
+    # (exists() then is_file()) race against a concurrent release: another
+    # writer can unlink the lock in between, making is_file() return False
+    # for a path that no longer exists and turning normal contention into a
+    # spurious "non-file occupant" failure. A vanished path is simply
+    # unoccupied.
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        info = None
+    except OSError as exc:
+        raise StateError(
+            f"cannot inspect the {artifact} lock at {path}: "
+            f"{exc.strerror or exc}"
+        ) from None
+    if info is not None:
+        if stat.S_ISLNK(info.st_mode):
+            raise PathError(
+                f"refusing to follow symlink at {path}; "
+                "remove it and re-run 'aperio init' to repair"
+            )
+        if not stat.S_ISREG(info.st_mode):
+            raise PathError(
+                f"cannot lock {artifact}: a non-file occupant exists at {path}; "
+                "remove it and re-run 'aperio init' to repair"
+            )
 
     token = f"{os.getpid()}:{time.time_ns()}"
     deadline = time.monotonic() + timeout

@@ -358,6 +358,7 @@ from aperio.onboarding_tools import (
     build_install_plan as _ob_build_install_plan,
     discover_tools as _ob_discover_tools,
     execute_install as _ob_execute_install,
+    install_plan_fingerprint as _ob_install_plan_fingerprint,
     probe_tool as _ob_probe_tool,
     recommend_tools as _ob_recommend_tools,
 )
@@ -5272,6 +5273,13 @@ def _register_onboarding_parsers(subparsers) -> None:
             help="emit the machine-readable onboarding protocol document",
         )
 
+    def _dir_only_arg(parser, name="DIR"):
+        parser.add_argument(
+            name, nargs="?", default=".",
+            metavar="DIR",
+            help="project directory (default: current directory)",
+        )
+
     next_parser = subparsers.add_parser(
         "next",
         help="show the next onboarding action (canonical read-only entry point)",
@@ -5282,6 +5290,19 @@ def _register_onboarding_parsers(subparsers) -> None:
         ),
     )
     _dir_arg(next_parser)
+
+    start_parser = subparsers.add_parser(
+        "start",
+        help="interactive guided onboarding (opt-in wizard, one question at a time)",
+        description=(
+            "Opt-in interactive wizard for people who would rather answer "
+            "questions than copy question IDs. It shows one step at a time, "
+            "lets you pause/resume/revise, explains consent before the first "
+            "mutation, and requires a real terminal. 'aperio next' remains the "
+            "read-only, scriptable entry point."
+        ),
+    )
+    _dir_only_arg(start_parser)
 
     start_parser = subparsers.add_parser(
         "onboarding-start",
@@ -5527,6 +5548,40 @@ def _onboarding_workspace(args) -> str:
 
 def _cmd_onboarding_start(args) -> None:
     _emit_onboarding(_ob_start(_onboarding_workspace(args)), args.as_json)
+
+
+def _cmd_start_wizard(args) -> None:
+    """Interactive onboarding wizard ('aperio start'). Opt-in only."""
+    from aperio import wizard
+
+    if getattr(args, "as_json", False):
+        raise ValidationError(
+            "'aperio start' is interactive and has no --json form; use "
+            "'aperio next' for the machine-readable read-only protocol"
+        )
+
+    def _consent(message: str) -> bool:
+        try:
+            answer = input(f"{message} [y/N] ").strip().lower()
+        except EOFError:
+            return False
+        return answer in {"y", "yes"}
+
+    try:
+        result = wizard.run(
+            _onboarding_workspace(args),
+            request_approval=_consent,
+        )
+    except wizard.WizardUnavailable as exc:
+        raise ValidationError(str(exc)) from None
+
+    if result.final_prompt:
+        print("")
+        print(result.final_prompt)
+    for message in result.messages:
+        print(message)
+    if not result.finished and not result.paused and not result.cancelled:
+        print("Stopped. Run 'aperio next' to see the next action.")
 
 
 def _cmd_onboarding_confirm_init(args) -> None:
@@ -5823,7 +5878,15 @@ def _cmd_onboarding_tool_install(args) -> None:
     discovery = _ob_discover_workspace(workspace)
     report = _ob_discover_tools(workspace, discovery)
     plan = _ob_build_install_plan(args.tool_id, report)
-    _ob_record_approval(apdir, action=_OB_INSTALL_ACTION, scope=args.tool_id)
+    # Bind the operator's approval to the exact reviewed plan (command,
+    # source, permissions). execute_install refuses a stale or unbound
+    # approval, so this fingerprint must be the one that gets recorded.
+    _ob_record_approval(
+        apdir,
+        action=_OB_INSTALL_ACTION,
+        scope=args.tool_id,
+        fingerprint=_ob_install_plan_fingerprint(plan),
+    )
     record = _ob_execute_install(apdir, plan, authorize_install=True)
     doc = {
         "format": "aperio-onboarding-protocol", "version": 1,
@@ -6074,6 +6137,8 @@ def main(argv: list[str] | None = None) -> int:
             _cmd_review_status(args)
         elif args.command == "next":
             _cmd_onboarding_start(args)
+        elif args.command == "start":
+            _cmd_start_wizard(args)
         elif args.command == "onboarding-start":
             _cmd_onboarding_start(args)
         elif args.command == "onboarding-confirm-init":

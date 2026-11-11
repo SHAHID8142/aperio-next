@@ -30,3 +30,6 @@ htmlcov/
 .env.*
 *.pem
 *.key
+
+# uv (used only for the verified install/test path, not for library locking)
+uv.lock

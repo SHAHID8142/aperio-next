@@ -73,6 +73,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 
+from aperio.bounded_tasks import assess_plan_boundeness
 from aperio.errors import StateError, ValidationError
 from aperio.inputs import check_no_foreign_line_separators
 
@@ -279,6 +280,14 @@ def validate_plan_input(data: object) -> dict:
         for index, task in enumerate(tasks_input)
     ]
     validate_dependency_graph(plan["tasks"])
+    # A05: the same bounded-task rule that gates goal bridging also applies to
+    # a plan created (or revised) directly. A plan made of whole-project tasks
+    # is refused here, so the rule cannot be bypassed by skipping the bridge.
+    assessment = assess_plan_boundeness(plan)
+    if assessment.blocked:
+        raise ValidationError(
+            "plan: " + assessment.reason + " (" + "; ".join(assessment.signals) + ")"
+        )
     return plan
 
 

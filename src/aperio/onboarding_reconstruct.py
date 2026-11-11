@@ -36,6 +36,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from aperio import safeproc
 from aperio.errors import ValidationError
 from aperio.onboarding_discovery import (
     APERIO_DIR_NAME,
@@ -332,7 +333,9 @@ def _read_document(
         result.skipped_oversized.append(rel)
         return None
     try:
-        raw = path.read_bytes()[:MAX_DOCUMENT_BYTES]
+        # Bounded read from the handle: the file may have grown between the
+        # stat above and this open, so never trust stat for the byte budget.
+        raw, _truncated = safeproc.read_bytes_bounded(path, MAX_DOCUMENT_BYTES)
     except OSError:
         return None
     try:

@@ -108,11 +108,18 @@ def test_bridge_lists_missing_information_never_invents() -> None:
 
 
 def test_bridge_without_decomposition_yields_one_derived_task() -> None:
-    g = goal(work=None)
+    # A genuinely small, bounded change may still be derived as one task.
+    g = goal(objective="Fix a typo in the README", work=None)
     proposal = plan_proposal_from_goal(g)
     assert len(proposal["plan_input"]["tasks"]) == 1
     assert "no work decomposition" in proposal["decomposition_note"]
-    assert any("no decomposition" in m for m in proposal["missing"])
+
+
+def test_bridge_refuses_large_undecomposed_goal() -> None:
+    # A05: project-scale work must be decomposed, not collapsed into one
+    # self-certified task.
+    with pytest.raises(ValidationError, match="decomposition"):
+        plan_proposal_from_goal(goal(work=None))
 
 
 def test_bridge_refuses_untrusted_goals() -> None:
@@ -125,7 +132,8 @@ def test_bridge_handles_goal_scale(tmp_path: Path) -> None:
     # the goal schema caps work.tasks at 200; the bridge handles a full
     # 200-task decomposition and renumbers every id
     big = goal(work={"tasks": [
-        {"id": f"t{n}", "title": f"Task {n}", "action": f"Do {n}"}
+        {"id": f"t{n}", "title": f"Task {n}", "action": f"Do {n}",
+         "completion_criteria": [f"unit tests for task {n} pass"]}
         for n in range(200)
     ]})
     proposal = plan_proposal_from_goal(big)
