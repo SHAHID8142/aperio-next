@@ -225,6 +225,17 @@ built. Project `.aperio/` data survives upgrade and uninstall (verified).
 `benchmark-run`, `uv tool upgrade`, `uv tool uninstall` — all exercised on the
 installed artifact. `aperio next` confirmed to leave an empty directory empty.
 
+R01 was additionally verified end to end in a **real PTY** against the pinned
+install (`f04232d`), on an existing project with no `.aperio`:
+
+- declining the init prompt printed by the wizard left the directory unchanged
+  (no `.aperio`, no crash — previously it raised a lock-path `StateError`);
+- the wizard asks, verbatim, "Create Aperio's .aperio/ scaffolding in this
+  existing project? [y/N]" *before* any mutation;
+- answering `y` created `.aperio/` and recorded `intent: Continue existing
+  work` in the session;
+- the same command without a TTY exits with a clear message and does nothing.
+
 ## L. Compatibility matrix (passive vs live)
 
 | Host | Level | Live authenticated call? |
