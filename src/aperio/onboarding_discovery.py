@@ -318,70 +318,80 @@ class _ScanState:
 
 
 def _scan_tree(workspace: Path) -> _ScanState:
-    """Walk the workspace within bounds; never follow symlinks; never mutate."""
+    """Walk the workspace within bounds; never follow symlinks; never mutate.
+
+    Entries are iterated incrementally with ``os.scandir`` used as a context
+    manager so a directory with millions of entries is never materialised as
+    a Python list; the global entry cap is checked before each entry is
+    recorded.
+    """
     state = _ScanState()
     workspace_str = str(workspace)
     stack: list[tuple[Path, int]] = [(workspace, 0)]
 
     while stack:
         current, depth = stack.pop()
+        if depth >= MAX_SCAN_DEPTH:
+            state.truncated = True
+            continue
         try:
-            entries = list(os.scandir(current))
+            it = os.scandir(current)
         except OSError:
             # An unreadable directory is reported honestly via truncation;
             # classification proceeds on the evidence gathered so far.
             state.truncated = True
             continue
 
-        for entry in entries:
-            state.total_entries += 1
-            if state.total_entries > MAX_SCAN_ENTRIES or depth >= MAX_SCAN_DEPTH:
-                state.truncated = True
-                stack.clear()
-                break
+        with it as scan:
+            for entry in scan:
+                if state.total_entries >= MAX_SCAN_ENTRIES:
+                    state.truncated = True
+                    stack.clear()
+                    break
+                state.total_entries += 1
 
-            rel = os.path.relpath(entry.path, workspace_str)
-            if depth == 0:
-                state.top_level_names.append(entry.name)
+                rel = os.path.relpath(entry.path, workspace_str)
+                if depth == 0:
+                    state.top_level_names.append(entry.name)
 
-            try:
-                is_link = entry.is_symlink()
-                is_dir = entry.is_dir(follow_symlinks=False)
-                is_file = entry.is_file(follow_symlinks=False)
-            except OSError:
-                state.truncated = True
-                continue
+                try:
+                    is_link = entry.is_symlink()
+                    is_dir = entry.is_dir(follow_symlinks=False)
+                    is_file = entry.is_file(follow_symlinks=False)
+                except OSError:
+                    state.truncated = True
+                    continue
 
-            if is_link:
-                state.symlinks.append(_describe_symlink(workspace, rel, entry.path))
-                continue
+                if is_link:
+                    state.symlinks.append(_describe_symlink(workspace, rel, entry.path))
+                    continue
 
-            if is_dir:
-                state.dir_names.append(rel)
-                if depth == 0 or entry.name not in IGNORED_DIRECTORY_NAMES:
-                    # Depth-0 subdirectories are always reported; deeper ones
-                    # only when their name carries meaning (dirs inside
-                    # ignored trees are unreachable by construction).
-                    if entry.name not in IGNORED_DIRECTORY_NAMES:
-                        stack.append((Path(entry.path), depth + 1))
-                continue
+                if is_dir:
+                    state.dir_names.append(rel)
+                    if depth == 0 or entry.name not in IGNORED_DIRECTORY_NAMES:
+                        # Depth-0 subdirectories are always reported; deeper
+                        # ones only when their name carries meaning (dirs
+                        # inside ignored trees are unreachable by construction).
+                        if entry.name not in IGNORED_DIRECTORY_NAMES:
+                            stack.append((Path(entry.path), depth + 1))
+                    continue
 
-            if is_file:
-                ext = os.path.splitext(entry.name)[1].lower()
-                if ext in SOURCE_EXTENSIONS:
-                    state.source_files += 1
-                elif ext in DOC_EXTENSIONS:
-                    state.doc_files += 1
-                elif ext in CONFIG_EXTENSIONS:
-                    state.config_files += 1
-                else:
-                    state.other_files += 1
-                state.file_names.append(rel)
-                continue
+                if is_file:
+                    ext = os.path.splitext(entry.name)[1].lower()
+                    if ext in SOURCE_EXTENSIONS:
+                        state.source_files += 1
+                    elif ext in DOC_EXTENSIONS:
+                        state.doc_files += 1
+                    elif ext in CONFIG_EXTENSIONS:
+                        state.config_files += 1
+                    else:
+                        state.other_files += 1
+                    state.file_names.append(rel)
+                    continue
 
-            # Not a link, dir, or regular file (device, fifo, socket): report
-            # as an entry but do not interact with it.
-            state.other_files += 1
+                # Not a link, dir, or regular file (device, fifo, socket):
+                # report as an entry but do not interact with it.
+                state.other_files += 1
 
     return state
 

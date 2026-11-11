@@ -206,3 +206,46 @@ def test_a01_mcp_candidates_are_registration_only():
             # The install argv launches a server; it does not register with a host.
             assert candidate.integration_level in {"launch-only", "manual-registration"}
             assert candidate.verifies_installation is False
+
+
+# ---------------------------------------------------------------------------
+# A07 — discovery does not materialise a whole directory before bounding.
+# ---------------------------------------------------------------------------
+
+def test_a07_directory_scan_is_incremental(tmp_path, monkeypatch):
+    from aperio import onboarding_discovery as od
+
+    monkeypatch.setattr(od, "MAX_SCAN_ENTRIES", 5)
+    for i in range(50):
+        (tmp_path / f"f{i}.py").write_text("x", encoding="utf-8")
+    state = od._scan_tree(tmp_path)
+    assert state.truncated is True
+    assert state.total_entries <= 5
+
+
+def test_a07_scandir_is_not_materialised_as_list(tmp_path, monkeypatch):
+    from aperio import onboarding_discovery as od
+
+    for i in range(5):
+        (tmp_path / f"f{i}.md").write_text("x", encoding="utf-8")
+
+    real_scandir = os.scandir
+
+    class NoList:
+        def __init__(self, it):
+            self._it = it
+
+        def __iter__(self):
+            return iter(self._it)
+
+        def __enter__(self):
+            if hasattr(self._it, "__enter__"):
+                self._it = self._it.__enter__()
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(od.os, "scandir", lambda p: NoList(real_scandir(p)))
+    state = od._scan_tree(tmp_path)
+    assert state.total_entries == 5

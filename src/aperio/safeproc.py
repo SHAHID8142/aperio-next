@@ -232,3 +232,14 @@ def read_text_bounded(path, limit: int) -> tuple[str, bool]:
     truncated = len(raw) > limit
     text = raw[:limit].decode("utf-8", errors="replace")
     return text, truncated
+
+
+def read_bytes_bounded(path, limit: int) -> tuple[bytes, bool]:
+    """Read at most ``limit`` bytes from ``path``; never loads the rest.
+
+    Returns ``(raw, truncated)``. Unlike :func:`read_text_bounded` the bytes
+    are preserved exactly, so callers that hash file contents stay accurate.
+    """
+    with open(path, "rb") as handle:
+        raw = handle.read(limit + 1)
+    return raw[:limit], len(raw) > limit
