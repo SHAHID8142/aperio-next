@@ -1,0 +1,69 @@
+# aperio-next
+
+**One command. Any AI coding agent. Durable project orchestration.**
+
+Aperio Next keeps a project's brief, decisions, plan, tasks, checkpoints,
+and handoffs inside the project's `.aperio/` folder — so every agent
+session (and every agent you switch to) recovers the full context instead
+of starting from zero.
+
+This npm package is the installer: it bootstraps the local Python engine
+(stdlib-only, no accounts, no services) and registers a native
+`aperio-next` skill in every supported coding agent it finds on your
+machine.
+
+## Install
+
+```sh
+npx aperio-next install
+```
+
+Requires Node 18+ and Python 3.11+ (no other dependencies). The installer:
+
+1. Creates an isolated engine environment in `~/.aperio-next/`.
+2. Installs the bundled `aperio` CLI engine and verifies it runs.
+3. Registers skill assets **only** in the documented skills/commands
+   locations of detected hosts (ZCode, Claude Code, OpenCode, Codex,
+   Gemini CLI, Cursor). Existing files it did not create are never
+   touched.
+4. Prints exactly what was verified — hosts it could not detect are
+   reported as pending, never as installed.
+
+## Activate
+
+| Host | Command |
+| --- | --- |
+| ZCode | `/aperio-next` or mention the skill |
+| Claude Code | `/aperio-next` |
+| OpenCode | `/aperio-next` or `@aperio-next` |
+| Codex CLI | `$aperio-next` |
+| Gemini CLI | `/aperio-next` |
+| Cursor | `/aperio-next` |
+
+The skill runs the real engine: `aperio next <project> --json` gives the
+agent one machine-readable next action (read-only), the onboarding flow is
+consent-gated, and plan approval, execution authorization, verification,
+and recovery stay human-controlled and engine-enforced.
+
+## Use in a project
+
+Open your project in any supported agent and activate. In a new project
+the agent walks you through onboarding (nothing is written until you
+approve); in an Aperio-managed project it resumes from durable state.
+
+## Health, updates, removal
+
+```sh
+aperio-next doctor      # engine, Python, and per-host integration health
+aperio-next update      # refresh engine + skill assets
+aperio-next uninstall   # remove skills + engine; your projects' .aperio/ data is kept
+```
+
+## Honesty notes
+
+- Installing a skill file is *registration*. Whether a given agent session
+  activates it depends on the host — `aperio-next doctor` separates
+  registered from activated, and the engine never claims runtime
+  enforcement inside a third-party host.
+- Not published to npm yet? Install from a local packed artifact:
+  `npm pack` this directory, then `npx ./aperio-next-<version>.tgz install`.

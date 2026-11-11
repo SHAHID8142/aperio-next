@@ -1,0 +1,33 @@
+{
+  "name": "aperio-next",
+  "version": "1.2.0-rc.2",
+  "description": "One-line installer for Aperio Next: bootstraps the Python orchestration engine and registers native aperio-next skills in your installed AI coding agents (ZCode, Claude Code, OpenCode, Codex, Gemini CLI, Cursor).",
+  "license": "MIT",
+  "bin": {
+    "aperio-next": "bin/aperio-next.js"
+  },
+  "files": [
+    "bin/",
+    "engine/",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "ai-agents",
+    "coding-agents",
+    "orchestration",
+    "skills",
+    "claude-code",
+    "codex",
+    "zcode",
+    "opencode",
+    "gemini",
+    "cursor"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SHAHID8142/aperio-next.git"
+  }
+}
