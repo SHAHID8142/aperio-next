@@ -20,8 +20,8 @@ a prior report. Where something could not be checked, it is marked
 | Base SHA | `9773ba4cb213a2358c970c5013627b2d87bb2026` |
 | Branch | `audit/1.2-final-hardening` |
 | Base → HEAD | 32 files changed; commits are purely additive. Exact totals: `git diff --shortstat 9773ba4..HEAD`, `git rev-list --count 9773ba4..HEAD` |
-| Audited source SHA (README pin target) | `e611df6` — code + tests, all suites green |
-| Code after the audited SHA | docs-only commits; no executable change since `e611df6` |
+| Audited source SHA (README pin target) | `5e63c2a` — code + tests, all suites green |
+| Code after the audited SHA | docs-only commits; no executable change since `5e63c2a` |
 | Pre-existing work | preserved; no reset, clean, force-push, or branch deletion |
 | Untracked at start | `audit-inputs/` (owner-provided reference material) |
 
@@ -62,6 +62,7 @@ onboarding facade; `git log` shows the integration commits).
 | R12 | **MEDIUM** | `/back` at the first question claimed to return to intent but withdrew nothing (intent is a session field, not an answer) | **FIXED (re-opens the chooser)** |
 | R13 | **MEDIUM** | Any declared task disabled the goal-level assessment, so "Build an entire website" + one token task bridged into an accepted plan | **FIXED (assessed for every goal)** |
 | R14 | **MEDIUM** | `recovery_report()` ignored the task-wide retry ceiling and offered retry guidance while dispatch was permanently refused | **FIXED (report carries the ceiling)** |
+| R15 | **MEDIUM** | Ctrl-C during a captured probe leaked the child: `start_new_session=True` hides the interrupt and the supervision body had no unwind path, yet the CLI claimed the children were stopped | **FIXED (kill group + reap on unwinding)** |
 
 ## C. Reproduction and root cause (key items)
 
@@ -156,18 +157,18 @@ captures, zero failures**, and three consecutive clean full-suite runs.
 | Hardening tests before the final remediation | 1,637 total |
 | New regression tests, first remediation | 17 (wizard ×3, install approval ×4, task-size ×10) |
 | New regression tests, second remediation | 12 (wizard fail-closed ×4, section atomicity ×8) |
-| New regression tests, Codex review rounds | 21 (`/back` ×4, drain deadline ×1, product mentions ×8, criteria keys ×2, criteria breadth ×3, test-only ×1, decomposition ×1, ceiling report ×1) |
+| New regression tests, Codex review rounds | 22 (`/back` ×4, drain deadline ×1, product mentions ×8, criteria keys ×2, criteria breadth ×3, test-only ×1, decomposition ×1, ceiling report ×1, interrupt ×1) |
 | Tests updated for the new policy | 3 (`test_planbridge_priority`, `test_onboarding_tools`, hero A05 fixtures) |
-| **Final full suite** | **1,687 passed, 0 skipped** |
+| **Final full suite** | **1,688 passed, 0 skipped** |
 
 Per-interpreter full-suite results (macOS arm64):
 
 | Python | Result |
 | --- | --- |
-| 3.11 | 1,687 passed |
-| 3.12 | 1,687 passed |
-| 3.13 | 1,687 passed |
-| 3.14 | 1,687 passed |
+| 3.11 | 1,688 passed |
+| 3.12 | 1,688 passed |
+| 3.13 | 1,688 passed |
+| 3.14 | 1,688 passed |
 
 ### Regression reproduction for the final remediation (R01–R03)
 
@@ -202,7 +203,7 @@ Each new test was written before its fix and failed first:
 | Method | Isolation | Verified | Notes |
 | --- | --- | --- | --- |
 | `uv tool install` (wheel) | yes | **yes** | upgrade/uninstall clean; bin on PATH |
-| `uv tool install` (git @ immutable commit) | yes | **yes** | re-verified against the audited commit `e611df6` (24-char SHA resolved, `aperio 1.2.0rc2`) |
+| `uv tool install` (git @ immutable commit) | yes | **yes** | re-verified against the audited commit `5e63c2a` (24-char SHA resolved, `aperio 1.2.0rc2`) |
 | `pipx install` (wheel) | yes | **yes** | viable fallback |
 | venv + wheel | yes | yes | more manual |
 | PyPI | — | **N/A** | no package published |
@@ -225,7 +226,7 @@ built. Project `.aperio/` data survives upgrade and uninstall (verified).
   install (wheel built from this branch, installed outside the repo).
 - 16 relative links, all resolve. No badges, no screenshots, no placeholders.
 - The documented install command is pinned to the audited code commit
-  `e611df6` and was executed successfully from a clean environment with both
+  `5e63c2a` and was executed successfully from a clean environment with both
   `uv tool install` and `pipx install`
   (`Installed 1 executable: aperio` → `aperio 1.2.0rc2`), after the second
   remediation and the Codex review round. `aperio next`, `aperio --help`, and
@@ -243,7 +244,7 @@ built. Project `.aperio/` data survives upgrade and uninstall (verified).
 installed artifact. `aperio next` confirmed to leave an empty directory empty.
 
 R01 and R04 were additionally verified end to end in a **real PTY** against
-the pinned install (`4575497`, `66ed17f`, `f9b9d3f`, `3dc3207`, `5b30fba`, `e611df6`), on an existing
+the pinned install (`4575497`, `66ed17f`, `f9b9d3f`, `3dc3207`, `5b30fba`, `e611df6`, `5e63c2a`), on an existing
 project with no `.aperio`:
 
 - declining the init prompt printed by the wizard left the directory unchanged
@@ -270,6 +271,12 @@ Each `host-doctor` row now carries `verification` with six booleans; only
 probe. `cli_launch_tested`, `authenticated_model_call_tested`,
 `functional_handoff_tested`, `native_command_registered_and_tested` are `false`
 until a real run is recorded. No mock executable is described as a live test.
+
+### Sixth Codex review round (R15) — what changed and why
+
+| ID | Defect (reproduced first) | Fix | Evidence |
+| --- | --- | --- | --- |
+| R15 | Ctrl-C while a probe was captured raised out of `run_captured()` and left the child running (own session ⇒ no terminal SIGINT), while the CLI claimed owned children were stopped | the child and supervision body are inside `try/finally`; unwinding kills the process group, reaps, and re-raises | 1 test with a real child and a real SIGINT, verified to fail when the unwind path is disabled |
 
 ### Fifth Codex review round (R13–R14) — what changed and why
 
@@ -355,7 +362,7 @@ documented limitations in M. The rc2 build is **not** claimed production-ready.
 | --- | --- | --- |
 | G01 Repo state preserved | PASS | §A |
 | G02 High/critical defects fixed | PASS | §B, §D |
-| G03 Unit tests pass | PASS | 1,687 (4 interpreters) |
+| G03 Unit tests pass | PASS | 1,688 (4 interpreters) |
 | G04 Integration tests pass | PASS | e2e/onboarding suites green |
 | G05 Real onboarding journey works | PASS | §K, PTY wizard |
 | G06 Atomic execution policy enforceable | PASS | §C A05 |

@@ -21,7 +21,7 @@ omitted. Chunk-level detail for the 1.2 program lives in
 
 - **Repository:** https://github.com/SHAHID8142/aperio-next
 - **Audit branch:** `audit/1.2-final-hardening` (additive commits on `9773ba4`)
-- **Audited source SHA:** `e611df6` (code + tests; the README install pins it)
+- **Audited source SHA:** `5e63c2a` (code + tests; the README install pins it)
 - **Source histories:** `feature/master-v3-completion` @ `8a3fe94` and
   `feature/step01-universal-onboarding` @ `6bea2e2`, integrated on
   `integration/v1.2-final`. Main is updated only after the complete audit
@@ -69,11 +69,11 @@ additional CLI tests for read-only routing and resume behavior.
 
 ## D. Verification evidence
 
-- **Current (1.2 hardening audit, macOS arm64):** **1,687 passed, 0 skipped**
+- **Current (1.2 hardening audit, macOS arm64):** **1,688 passed, 0 skipped**
   on CPython **3.11, 3.12, 3.13 and 3.14**, no flake after the lock TOCTOU
   fix. Clean isolated `uv tool install` (wheel and pinned git commit) and
   `pipx` install verified outside the repo, including upgrade and uninstall.
-  The remediations added 50 regression tests, each written before its fix and
+  The remediations added 51 regression tests, each written before its fix and
   failing first: R01–R03 (wizard init consent, install-approval fingerprint
   binding, task-size checks on create/approve/dispatch), R04–R05 (fail-closed
   wizard consent, whole-section atomicity for a Hero Section), and R06–R07
@@ -83,8 +83,8 @@ additional CLI tests for read-only routing and resume behavior.
   (verification criteria wrongly counted as implementation breadth), plus
   R11–R12 (test-only work as a slice, `/back` returning to the intent
   chooser), and R13–R14 (goal assessment for declared decompositions, recovery
-  report agreeing with the task-wide ceiling). See
-  [audit-final.md](audit-final.md).
+  report agreeing with the task-wide ceiling), and R15 (an interrupt leaving a
+  captured child running). See [audit-final.md](audit-final.md).
 - **Earlier integrated run (historical):** Python 3.14.7 (repo venv) — 1601
   passed, 0 skipped after integrating v1.2 and Step 01. The 1.1 line passed
   1344 tests on Python 3.12.14; those counts are historical.
