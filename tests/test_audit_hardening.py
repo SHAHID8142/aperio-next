@@ -467,3 +467,52 @@ def test_a10_probed_host_still_reports_passive_only():
     assert row["level"] == "cli_verified"          # passive flag check
     assert row["verification"]["cli_launch_tested"] is False
     assert row["verification"]["authenticated_model_call_tested"] is False
+
+
+# ---------------------------------------------------------------------------
+# Concurrency — lock acquisition must not misread a released lock.
+# ---------------------------------------------------------------------------
+
+def test_lock_acquire_tolerates_vanished_path(tmp_path):
+    """A lock unlinked between checks must read as unoccupied, not non-file.
+
+    Regression for a TOCTOU between exists() and is_file() that surfaced as
+    a spurious PathError under concurrent intake captures.
+    """
+    from aperio.locks import acquire_lock, release_lock
+
+    lock = tmp_path / "inbox.lock"
+    token = acquire_lock(lock, artifact="test")
+    release_lock(lock, token)
+    # A second acquisition on the now-absent path must succeed.
+    token2 = acquire_lock(lock, artifact="test")
+    release_lock(lock, token2)
+
+
+def test_intake_concurrent_captures_never_spuriously_fail(tmp_path):
+    import threading
+    from aperio.project import init_project
+    from aperio.intake import capture, IntakeLog
+
+    proj = tmp_path / "p"
+    init_project(str(proj))
+    ap = proj / ".aperio"
+
+    errors: list[str] = []
+
+    def worker(i: int) -> None:
+        try:
+            capture(ap, f"Thought {i} for the hero.", actor=f"op-{i}")
+        except Exception as exc:  # pragma: no cover - would be the defect
+            errors.append(f"{type(exc).__name__}: {exc}")
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == []
+    state = IntakeLog(ap).read()
+    assert state["counts"]["captures"] == 8
+    assert not state["damaged"]
