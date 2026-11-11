@@ -358,6 +358,7 @@ from aperio.onboarding_tools import (
     build_install_plan as _ob_build_install_plan,
     discover_tools as _ob_discover_tools,
     execute_install as _ob_execute_install,
+    install_plan_fingerprint as _ob_install_plan_fingerprint,
     probe_tool as _ob_probe_tool,
     recommend_tools as _ob_recommend_tools,
 )
@@ -5877,7 +5878,15 @@ def _cmd_onboarding_tool_install(args) -> None:
     discovery = _ob_discover_workspace(workspace)
     report = _ob_discover_tools(workspace, discovery)
     plan = _ob_build_install_plan(args.tool_id, report)
-    _ob_record_approval(apdir, action=_OB_INSTALL_ACTION, scope=args.tool_id)
+    # Bind the operator's approval to the exact reviewed plan (command,
+    # source, permissions). execute_install refuses a stale or unbound
+    # approval, so this fingerprint must be the one that gets recorded.
+    _ob_record_approval(
+        apdir,
+        action=_OB_INSTALL_ACTION,
+        scope=args.tool_id,
+        fingerprint=_ob_install_plan_fingerprint(plan),
+    )
     record = _ob_execute_install(apdir, plan, authorize_install=True)
     doc = {
         "format": "aperio-onboarding-protocol", "version": 1,

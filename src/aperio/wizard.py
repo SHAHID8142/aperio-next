@@ -29,6 +29,8 @@ from pathlib import Path
 
 from aperio import onboarding
 from aperio.onboarding_discovery import discover_workspace
+from aperio.onboarding_session import session_exists
+from aperio.project import aperio_dir_for
 
 MAX_ANSWER_CHARS = 2000
 
@@ -212,9 +214,24 @@ def run(
             )
             if isinstance(chosen, str):
                 return _finish_sentinel(result, chosen, protocol)
-            onboarding.record_intent(
-                Path(protocol["workspace"]) / ".aperio", chosen["id"]
-            )
+            workspace = Path(protocol["workspace"])
+            apdir = aperio_dir_for(workspace)
+            # An existing project may have no Aperio session yet. Recording an
+            # intent writes to .aperio, which is a mutation: require explicit
+            # consent first, then use the sanctioned initialization path.
+            if not session_exists(apdir):
+                prompter.say("  Aperio needs to create its own .aperio/ folder here.")
+                prompter.say("  It contains only Aperio's notes; existing files are never overwritten.")
+                if request_approval is not None and not request_approval(
+                    "Create Aperio's .aperio/ scaffolding in this existing project?"
+                ):
+                    prompter.say("Approval not given; nothing was changed.")
+                    result.cancelled = True
+                    result.final_action = "declined"
+                    return result
+                onboarding.confirm_initialization(str(workspace))
+                result.steps += 1
+            onboarding.record_intent(apdir, chosen["id"])
             result.steps += 1
             previous_question_id = "intent"
             continue

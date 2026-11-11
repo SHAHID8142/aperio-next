@@ -49,6 +49,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from aperio.bounded_tasks import assess_plan_boundeness
 from aperio.adapters import (
     MAX_PROVIDER_COUNT_VALUE,
     MAX_PROVIDER_COST_USD,
@@ -735,6 +736,15 @@ def _dispatch_locked(
             document = parse_executions_snapshot(raw, path)
         runs = document["runs"]
         plan = read_plan(aperio_dir)  # lockless read; full validation
+        # A05: execution eligibility includes the bounded-task rule. A plan
+        # that is (or became) a whole-project task cannot be dispatched even
+        # if it was approved before this rule existed.
+        bounded = assess_plan_boundeness(plan)
+        if bounded.blocked:
+            raise StateError(
+                "execution refused: " + bounded.reason + " ("
+                + "; ".join(bounded.signals) + "). Nothing was modified."
+            )
         active = _active_run_for_task(runs, task_id)
         eligibility = check_eligibility(plan, task_id, active)
         if not eligibility.eligible:

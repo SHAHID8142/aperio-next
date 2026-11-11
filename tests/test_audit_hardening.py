@@ -516,3 +516,411 @@ def test_intake_concurrent_captures_never_spuriously_fail(tmp_path):
     state = IntakeLog(ap).read()
     assert state["counts"]["captures"] == 8
     assert not state["damaged"]
+
+
+# ---------------------------------------------------------------------------
+# Wizard: existing project without an Aperio session needs consent.
+# ---------------------------------------------------------------------------
+
+class _TTY:
+    def __init__(self, text=""):
+        self._lines = text.splitlines(keepends=True)
+
+    def isatty(self):
+        return True
+
+    def readline(self):
+        return self._lines.pop(0) if self._lines else ""
+
+    def write(self, s):
+        return len(s)
+
+    def flush(self):
+        pass
+
+
+def _make_existing_project(tmp_path):
+    proj = tmp_path / "existing"
+    proj.mkdir()
+    (proj / "README.md").write_text("# existing project\n", encoding="utf-8")
+    (proj / "app.py").write_text("print('hi')\n", encoding="utf-8")
+    return proj
+
+
+def test_wizard_existing_project_refuses_without_comment(tmp_path):
+    """Without consent, an existing project must be left byte-for-byte unchanged."""
+    from aperio import wizard
+
+    proj = _make_existing_project(tmp_path)
+    before = sorted(p.name for p in proj.iterdir())
+
+    result = wizard.run(
+        str(proj),
+        stdin=_TTY("1\n"),          # choose the first intent option
+        stdout=_TTY(""),
+        request_approval=lambda message: False,   # operator declines
+    )
+    assert result.cancelled is True
+    assert not (proj / ".aperio").exists()
+    assert sorted(p.name for p in proj.iterdir()) == before
+
+
+def test_wizard_existing_project_consent_then_records_intent(tmp_path):
+    """With consent, scaffolding is created and the intent is recorded."""
+    from aperio import wizard, onboarding
+    from aperio.onboarding_session import read_session
+
+    proj = _make_existing_project(tmp_path)
+    result = wizard.run(
+        str(proj),
+        stdin=_TTY("1\n/quit\n"),
+        stdout=_TTY(""),
+        request_approval=lambda message: True,
+    )
+    assert (proj / ".aperio").exists()
+    sess = read_session(proj / ".aperio")
+    assert sess.get("intent"), "the chosen intent must be recorded after consent"
+    assert result.cancelled is True  # /quit at the following question
+
+
+def test_wizard_existing_project_without_session_does_not_crash(tmp_path):
+    """Regression: the wizard previously raised StateError on a missing session."""
+    from aperio import wizard
+
+    proj = _make_existing_project(tmp_path)
+    # Must not raise; declining must change nothing.
+    wizard.run(
+        str(proj), stdin=_TTY("1\n"), stdout=_TTY(""), request_approval=lambda m: False
+    )
+    assert not (proj / ".aperio").exists()
+
+
+# ---------------------------------------------------------------------------
+# Install approval must be bound to the exact reviewed plan (no legacy bypass).
+# ---------------------------------------------------------------------------
+
+def _report_with_prereqs():
+    from aperio.onboarding_tools import ToolsReport, ToolFinding
+
+    report = ToolsReport(workspace="/tmp/ws", scanned_at="2026-01-01T00:00:00Z")
+    for tool_id in ("node", "npm", "npx"):
+        report.executables.append(
+            ToolFinding(tool_id, "executable", "installed", ("on PATH",),
+                        path=f"/usr/bin/{tool_id}")
+        )
+    return report
+
+
+def _init_project_with_session(tmp_path):
+    from aperio.project import init_project
+    from aperio.onboarding_session import create_session
+
+    init_project(str(tmp_path))
+    apdir = tmp_path / ".aperio"
+    create_session(apdir, workspace=str(tmp_path), classification="existing_non_aperio")
+    return apdir
+
+
+def test_legacy_unbound_approval_cannot_authorize_install(tmp_path):
+    """An approval recorded without a fingerprint must NOT authorize execution."""
+    from aperio.onboarding_tools import build_install_plan, execute_install
+    from aperio.onboarding_session import record_approval
+
+    apdir = _init_project_with_session(tmp_path)
+    plan = build_install_plan("playwright-mcp", _report_with_prereqs())
+
+    # Legacy style: no fingerprint.
+    record_approval(apdir, action="tool.install", scope="playwright-mcp")
+    with pytest.raises(StateError, match="re-approv|not bound|fingerprint"):
+        execute_install(apdir, plan, authorize_install=True)
+
+
+def test_bound_approval_matching_plan_executes(tmp_path, monkeypatch):
+    from aperio.onboarding_tools import (
+        build_install_plan, execute_install, install_plan_fingerprint,
+    )
+    from aperio.onboarding_session import record_approval
+
+    apdir = _init_project_with_session(tmp_path)
+    plan = build_install_plan("playwright-mcp", _report_with_prereqs())
+    record_approval(
+        apdir, action="tool.install", scope="playwright-mcp",
+        fingerprint=install_plan_fingerprint(plan),
+    )
+    captured = {}
+
+    def fake_run(argv, **kw):
+        captured["argv"] = list(argv)
+        return {"returncode": 0, "timed_out": False, "stdout": "ok",
+                "stderr": "", "stdout_bytes": 2, "stderr_bytes": 0,
+                "truncated": False, "duration": 0.01}
+
+    monkeypatch.setattr("aperio.onboarding_tools.safeproc.run_captured", fake_run)
+    record = execute_install(apdir, plan, authorize_install=True)
+    assert record["status"] == "install_command_completed"
+    assert captured["argv"] == plan["8_install_command"]
+
+
+def test_bound_approval_with_tampered_plan_is_refused(tmp_path):
+    from aperio.onboarding_tools import (
+        build_install_plan, execute_install, install_plan_fingerprint,
+    )
+    from aperio.onboarding_session import record_approval
+
+    apdir = _init_project_with_session(tmp_path)
+    plan = build_install_plan("playwright-mcp", _report_with_prereqs())
+    record_approval(
+        apdir, action="tool.install", scope="playwright-mcp",
+        fingerprint=install_plan_fingerprint(plan),
+    )
+    tampered = dict(plan)
+    tampered["8_install_command"] = ["/bin/echo", "pwned"]
+    with pytest.raises(StateError):
+        execute_install(apdir, tampered, authorize_install=True)
+
+
+def test_cli_tool_install_records_fingerprint_bound_approval(tmp_path, monkeypatch):
+    """The CLI must bind its recorded approval to the exact reviewed plan."""
+    import aperio.cli as cli
+    from aperio.onboarding_session import read_session
+    from aperio.onboarding_tools import install_plan_fingerprint
+
+    ws = tmp_path / "proj"
+    ws.mkdir()
+    _init_project_with_session(ws)
+
+    seen = {}
+
+    def fake_execute(apdir, plan, *, authorize_install=False):
+        seen["plan_fp"] = install_plan_fingerprint(plan)
+        sess = read_session(apdir)
+        apr = [a for a in sess["approvals"]
+               if a.get("action") == "tool.install" and a.get("scope") == "playwright-mcp"]
+        seen["approval_fp"] = apr[-1].get("fingerprint") if apr else None
+        # Simulate a successful (non-executing) install record.
+        return {"name": "playwright-mcp", "action": "install",
+                "status": "install_command_completed"}
+
+    monkeypatch.setattr(cli, "_ob_execute_install", fake_execute)
+    monkeypatch.setattr(
+        cli, "_ob_discover_tools",
+        lambda workspace, discovery: _report_with_prereqs(),
+    )
+
+    class Args:
+        DIR = str(ws)
+        as_json = False
+        approve = True
+        authorize_install = True
+        tool_id = "playwright-mcp"
+
+    cli._cmd_onboarding_tool_install(Args())
+    assert seen["approval_fp"] is not None, "CLI must store a fingerprint"
+    assert seen["approval_fp"] == seen["plan_fp"], "approval must bind the exact plan"
+
+
+# ---------------------------------------------------------------------------
+# A05: atomic task-size checks must hold on every path, not only the bridge.
+# ---------------------------------------------------------------------------
+
+def _valid_plan(tasks=None):
+    return {
+        "objective": "Deliver the export feature",
+        "expected_outcome": "Working export",
+        "scope": ["export"], "exclusions": [], "assumptions": [], "risks": [],
+        "strategy": "incremental",
+        "acceptance_criteria": ["export works"],
+        "verification_strategy": "pytest",
+        "tasks": tasks if tasks is not None else [{
+            "id": "TASK-001", "title": "Add the CSV export endpoint",
+            "objective": "Write the endpoint",
+            "deliverables": ["endpoint"], "acceptance_criteria": ["200 OK"],
+            "depends_on": [],
+        }],
+    }
+
+
+def _oversized_task(task_id="TASK-001"):
+    return {
+        "id": task_id, "title": "Build an entire website",
+        "objective": "Build an entire website",
+        "deliverables": ["site"], "acceptance_criteria": ["site exists"],
+        "depends_on": [],
+    }
+
+
+def _goal_with_tasks(tasks):
+    from aperio.goals import validate_goal
+
+    return validate_goal({
+        "goal_id": "G-1",
+        "objective": "Build and deliver the client's marketing website",
+        "intended_outcome": "A deployed site",
+        "profile": "software",
+        "deliverables": ["site"],
+        "acceptance_criteria": ["site builds"],
+        "work": {"tasks": tasks},
+    })
+
+
+def _declared_task(task_id, title):
+    return {
+        "id": task_id, "title": title, "action": title,
+        "deliverables": [f"{task_id}.txt"], "completion_criteria": ["tests pass"],
+    }
+
+
+# --- goal with no tasks ----------------------------------------------------
+
+def test_goal_without_tasks_is_blocked():
+    from aperio.bounded_tasks import assess_goal_boundedness
+    from aperio.goals import validate_goal
+
+    goal = validate_goal({
+        "goal_id": "G-0",
+        "objective": "Build and deliver the client's marketing website",
+        "intended_outcome": "A deployed site",
+        "profile": "software",
+        "deliverables": ["site"],
+        "acceptance_criteria": ["site builds"],
+    })
+    assert goal.get("work") in (None, {}) or not (goal.get("work") or {}).get("tasks")
+    assert assess_goal_boundedness(goal).blocked is True
+
+
+# --- goal with ONE oversized task -----------------------------------------
+
+def test_goal_with_one_oversized_task_is_blocked():
+    from aperio.bounded_tasks import assess_goal_boundedness
+
+    goal = _goal_with_tasks([
+        _declared_task("t1", "Build an entire website"),
+    ])
+    assessment = assess_goal_boundedness(goal)
+    assert assessment.blocked is True
+    assert any("whole project" in s for s in assessment.signals)
+
+
+# --- goal with MULTIPLE oversized tasks -----------------------------------
+
+def test_goal_with_multiple_oversized_tasks_is_blocked():
+    from aperio.bounded_tasks import assess_goal_boundedness
+
+    goal = _goal_with_tasks([
+        _declared_task("t1", "Build an entire website"),
+        _declared_task("t2", "Build a complete homepage"),
+    ])
+    assessment = assess_goal_boundedness(goal)
+    assert assessment.blocked is True
+    # Both offenders are named.
+    named = [s for s in assessment.signals if s.startswith(("t1", "t2"))]
+    assert len(named) >= 2
+
+
+# --- valid decomposition stays allowed ------------------------------------
+
+def test_goal_with_genuine_small_tasks_is_allowed():
+    from aperio.bounded_tasks import assess_goal_boundedness
+
+    goal = _goal_with_tasks([
+        _declared_task("design", "Design pages"),
+        _declared_task("frontend", "Build the frontend"),
+        _declared_task("backend", "Build the backend"),
+    ])
+    assert assess_goal_boundedness(goal).blocked is False
+
+
+# --- direct plan-create ----------------------------------------------------
+
+def test_plan_create_rejects_oversized_task():
+    from aperio.planmodel import validate_plan_input
+
+    with pytest.raises(ValidationError, match="whole project"):
+        validate_plan_input(_valid_plan([_oversized_task()]))
+
+
+def test_plan_create_rejects_multiple_oversized_tasks():
+    from aperio.planmodel import validate_plan_input
+
+    with pytest.raises(ValidationError, match="whole project"):
+        validate_plan_input(_valid_plan([
+            _oversized_task("TASK-001"),
+            _oversized_task("TASK-002"),
+        ]))
+
+
+def test_plan_create_accepts_valid_small_tasks(tmp_path):
+    from aperio.planmodel import validate_plan_input
+    from aperio.planstore import create_plan
+
+    plan = validate_plan_input(_valid_plan())
+    assert len(plan["tasks"]) == 1
+    from aperio.project import init_project
+
+    init_project(str(tmp_path))
+    created = create_plan(tmp_path / ".aperio", _valid_plan())
+    assert created["tasks"][0]["id"] == "TASK-001"
+
+
+# --- direct plan-approve ---------------------------------------------------
+
+def test_plan_approve_refuses_oversized_plan_written_by_hand(tmp_path):
+    """A plan that predates the rule cannot be approved into executable state."""
+    import json
+
+    from aperio.planstore import approve_plan, create_plan
+    from aperio.project import init_project
+
+    init_project(str(tmp_path))
+    apdir = tmp_path / ".aperio"
+    create_plan(apdir, _valid_plan())
+
+    plan_path = apdir / "plan.json"
+    document = json.loads(plan_path.read_text(encoding="utf-8"))
+    document["tasks"][0]["title"] = "Build an entire website"
+    document["tasks"][0]["objective"] = "Build an entire website"
+    plan_path.write_text(json.dumps(document, indent=2), encoding="utf-8")
+
+    with pytest.raises(StateError, match="whole project"):
+        approve_plan(apdir)
+
+
+# --- execution eligibility -------------------------------------------------
+
+def test_dispatch_refuses_oversized_plan(tmp_path):
+    import json
+
+    from aperio.planstore import approve_plan, create_plan
+    from aperio.project import init_project
+    from aperio.runtime import dispatch_task
+
+    init_project(str(tmp_path))
+    apdir = tmp_path / ".aperio"
+    create_plan(apdir, _valid_plan())
+    approve_plan(apdir)
+
+    plan_path = apdir / "plan.json"
+    document = json.loads(plan_path.read_text(encoding="utf-8"))
+    document["tasks"][0]["title"] = "Build an entire website"
+    document["tasks"][0]["objective"] = "Build an entire website"
+    plan_path.write_text(json.dumps(document, indent=2), encoding="utf-8")
+
+    with pytest.raises(StateError, match="execution refused"):
+        dispatch_task(apdir, "TASK-001", adapter_id="manual", config=None,
+                      authorize_exec=False)
+    # Nothing was written.
+    assert (apdir / "executions.json").exists() is False
+
+
+def test_dispatch_still_works_for_valid_plan(tmp_path):
+    from aperio.planstore import approve_plan, create_plan
+    from aperio.project import init_project
+    from aperio.runtime import dispatch_task
+
+    init_project(str(tmp_path))
+    apdir = tmp_path / ".aperio"
+    create_plan(apdir, _valid_plan())
+    approve_plan(apdir)
+    record = dispatch_task(apdir, "TASK-001", adapter_id="manual",
+                           config=None, authorize_exec=False)
+    assert record["status"] == "awaiting-external"

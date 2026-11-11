@@ -681,10 +681,19 @@ def execute_install(
         )
 
     # A13: approval is bound to this plan's fingerprint. A plan whose command,
-    # source or permissions changed after approval must be refused outright.
+    # source or permissions changed after approval must be refused outright,
+    # and an approval that carries no fingerprint at all (a "legacy" approval
+    # recorded before this binding existed) must NOT authorize execution — the
+    # operator has to re-approve the exact reviewed plan.
     fingerprint = install_plan_fingerprint(plan)
     approved_fingerprint = approved_plan_fingerprint(apdir, INSTALL_ACTION, tool_id)
-    if approved_fingerprint is not None and approved_fingerprint != fingerprint:
+    if approved_fingerprint is None:
+        raise StateError(
+            "the recorded approval is not bound to a specific install plan "
+            "(no fingerprint); re-approve the exact plan before running it. "
+            "Nothing was executed."
+        )
+    if approved_fingerprint != fingerprint:
         raise StateError(
             "install plan does not match the approved plan (command, source or "
             "permissions changed after approval); nothing was executed"
