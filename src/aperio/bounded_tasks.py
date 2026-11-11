@@ -52,6 +52,10 @@ _SMALL_SCOPE_TERMS = (
     "typo", "fix a typo", "one-line", "single file", "rename", "bump",
     "add a test", "update a test", "comment", "readme sentence", "docstring",
     "lint", "format", "small fix", "hotfix", "one button", "one label",
+    # Bounded edits that often name *where* they happen ("the website footer
+    # link"): the product is a location, not the scope of the request.
+    "link", "wording", "sentence", "paragraph", "spacing", "icon",
+    "label text", "version bump", "a test", "the test",
 )
 
 # Verbs/nouns that describe a *vertical slice* deliverable. Used to judge
@@ -138,9 +142,17 @@ def assess_goal_boundedness(goal: dict) -> BoundedTaskAssessment:
     task_count = len(tasks)
     tasks_with_evidence = sum(1 for t in tasks if _task_has_evidence(t))
 
-    # Scale inference. An explicit small-scope signal wins over a long
-    # objective, so "fix a typo in the long README paragraph" stays small.
-    if small_hits and not large_hits:
+    # Scale inference. An explicit bounded operation wins over the *product
+    # it mentions*: "fix a typo in the website" is a small change located in a
+    # website, not a website build. Breadth markers ("an entire website"),
+    # several distinct large terms, or a very long objective still mean large.
+    breadth_marker = bool(_BREADTH_MARKER_RE.search(combined.lower()))
+    if (
+        small_hits
+        and not breadth_marker
+        and len(set(large_hits)) <= 1
+        and len(objective) < LARGE_OBJECTIVE_CHARS
+    ):
         scale = "small"
     elif large_hits or len(objective) >= LARGE_OBJECTIVE_CHARS:
         scale = "large"
@@ -335,7 +347,11 @@ def _task_text(task: dict) -> str:
     parts = [str(task.get("title") or ""), str(task.get("action") or "")]
     parts.append(str(task.get("objective") or ""))
     parts.extend(str(d) for d in (task.get("deliverables") or []))
+    # Goal tasks use ``completion_criteria``; native plan tasks (planmodel
+    # TASK_CONTENT_KEYS) use ``acceptance_criteria``. Read both, so scope
+    # cannot be hidden in whichever key the current gate happens to skip.
     parts.extend(str(c) for c in (task.get("completion_criteria") or []))
+    parts.extend(str(c) for c in (task.get("acceptance_criteria") or []))
     return " ".join(parts)
 
 

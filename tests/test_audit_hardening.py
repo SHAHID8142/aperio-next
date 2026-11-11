@@ -1243,3 +1243,89 @@ def test_run_captured_does_not_hang_when_a_descendant_holds_the_pipe(tmp_path):
     elapsed = time.monotonic() - started
     assert elapsed < 8.0, f"bounded capture hung for {elapsed:.1f}s"
     assert result["stdout"] == "child done\n"
+
+
+# ---------------------------------------------------------------------------
+# Codex re-review findings (P2): bounded changes that name a product, and
+# native-plan tasks whose scope sits in acceptance_criteria.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("objective", [
+    "Fix a typo in the website",
+    "Update the website footer link",
+    "Fix a typo in the API docs",
+    "Correct the docstring in the service module",
+])
+def test_bounded_change_that_names_a_product_stays_bridgeable(objective):
+    """A small operation must not be blocked just because it names where it goes."""
+    from aperio.bounded_tasks import assess_goal_boundedness
+    from aperio.planbridge import plan_proposal_from_goal
+
+    goal = _goal(objective)
+    assert assess_goal_boundedness(goal).blocked is False
+    plan = plan_proposal_from_goal(goal)
+    assert plan["plan_input"]["tasks"][0]["id"] == "TASK-001"
+
+
+@pytest.mark.parametrize("objective", [
+    "Build an entire website",
+    "Add CMS-backed Hero content",
+    "Rewrite the website",
+    "Fix a typo and redesign the whole site",
+])
+def test_breadth_still_blocks_bounded_wording(objective):
+    from aperio.bounded_tasks import assess_goal_boundedness
+
+    assert assess_goal_boundedness(_goal(objective)).blocked is True
+
+
+def _plan_with_scope_in_acceptance(criterion):
+    plan = _valid_plan([{
+        "id": "TASK-001", "title": "Implement component",
+        "objective": "Deliver component", "deliverables": ["x"],
+        "acceptance_criteria": [criterion], "depends_on": [],
+    }])
+    return plan
+
+
+def test_plan_create_reads_acceptance_criteria_for_scope():
+    """A native plan task stores criteria under acceptance_criteria, not
+    completion_criteria: hiding scope there must not bypass the check."""
+    from aperio.planmodel import validate_plan_input
+
+    with pytest.raises(ValidationError):
+        validate_plan_input(
+            _plan_with_scope_in_acceptance("Build the entire website including all pages")
+        )
+
+
+def test_plan_approve_and_dispatch_read_acceptance_criteria(tmp_path):
+    import json
+
+    from aperio.planstore import approve_plan, create_plan
+    from aperio.project import init_project
+    from aperio.runtime import dispatch_task
+
+    init_project(str(tmp_path))
+    apdir = tmp_path / ".aperio"
+    create_plan(apdir, _valid_plan())
+
+    plan_path = apdir / "plan.json"
+    document = json.loads(plan_path.read_text(encoding="utf-8"))
+    document["tasks"][0]["acceptance_criteria"] = [
+        "Build the entire website including all pages"
+    ]
+    plan_path.write_text(json.dumps(document, indent=2), encoding="utf-8")
+
+    with pytest.raises(StateError):
+        approve_plan(apdir)
+
+    # Force an approved stamp to prove dispatch refuses on its own.
+    document["approval"] = {
+        "status": "approved", "approved_revision": document["plan_version"],
+        "approved_at": "2026-01-01T00:00:00Z", "approved_by": "audit",
+    }
+    plan_path.write_text(json.dumps(document, indent=2), encoding="utf-8")
+    with pytest.raises(StateError, match="execution refused"):
+        dispatch_task(apdir, "TASK-001", adapter_id="manual", config=None,
+                      authorize_exec=False)
