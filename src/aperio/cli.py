@@ -5272,6 +5272,13 @@ def _register_onboarding_parsers(subparsers) -> None:
             help="emit the machine-readable onboarding protocol document",
         )
 
+    def _dir_only_arg(parser, name="DIR"):
+        parser.add_argument(
+            name, nargs="?", default=".",
+            metavar="DIR",
+            help="project directory (default: current directory)",
+        )
+
     next_parser = subparsers.add_parser(
         "next",
         help="show the next onboarding action (canonical read-only entry point)",
@@ -5294,7 +5301,7 @@ def _register_onboarding_parsers(subparsers) -> None:
             "read-only, scriptable entry point."
         ),
     )
-    _dir_arg(start_parser)
+    _dir_only_arg(start_parser)
 
     start_parser = subparsers.add_parser(
         "onboarding-start",
