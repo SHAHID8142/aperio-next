@@ -275,13 +275,18 @@ def recovery_report(runs: list[dict], task_id: str) -> dict:
             }
         )
     exhausted = [entry for entry in signatures if entry["exhausted"]]
+    # The task-wide ceiling blocks dispatch even when no single signature is
+    # exhausted; the report must say so, or it sends operators back to retry.
+    ceiling_reached = len(failed) >= MAX_ATTEMPTS_PER_TASK
     return {
         "task_id": task_id,
         "max_attempts_per_signature": MAX_ATTEMPTS_PER_SIGNATURE,
+        "max_attempts_per_task": MAX_ATTEMPTS_PER_TASK,
+        "task_ceiling_reached": ceiling_reached,
         "signature_count": len(signatures),
         "failed_run_count": len(failed),
         "signatures": signatures,
-        "verdict": "exhausted" if exhausted else (
+        "verdict": "exhausted" if (exhausted or ceiling_reached) else (
             "failed_runs_present" if failed else "no_failed_runs"
         ),
         "guidance": (
@@ -294,6 +299,17 @@ def recovery_report(runs: list[dict], task_id: str) -> dict:
                 "or switch adapter after 'aperio agent-doctor'."
             ]
             if exhausted
+            else [
+                f"The task-wide ceiling is exhausted: {len(failed)} failed "
+                f"attempts across all signatures (limit "
+                f"{MAX_ATTEMPTS_PER_TASK}). No retry is available, and new "
+                "problem signatures do not earn more attempts. Mark the task "
+                f"blocked with 'aperio task-status <dir> {task_id} --status "
+                "blocked --reason ...', preserve the history ('aperio "
+                "recovery-report'), then change the approach materially, "
+                "revise the plan, or escalate to the operator."
+            ]
+            if ceiling_reached
             else (
                 [
                     "Failures are recorded; retries require a declared "

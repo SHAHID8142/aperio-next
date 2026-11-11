@@ -86,15 +86,15 @@ def plan_proposal_from_goal(goal: dict, *, actor: str | None = None) -> dict:
     goal_tasks = list(work.get("tasks") or [])
 
     # A05: large work must be decomposed into independently verifiable tasks.
-    # An undecomposed project-scale goal is refused rather than turned into
-    # one self-certified task. Genuinely small goals still pass undecomposed.
-    if not goal_tasks:
-        assessment = assess_goal_boundedness(goal)
-        if assessment.blocked:
-            detail = "; ".join(assessment.signals) or "no decomposition declared"
-            raise ValidationError(
-                "plan-bridge: " + assessment.reason + " (" + detail + ")"
-            )
+    # This runs for *every* goal, decomposed or not: a project-scale goal that
+    # declares a single token task is still undecomposed, and the per-task plan
+    # gates cannot see that. Genuinely small goals still pass undecomposed.
+    assessment = assess_goal_boundedness(goal)
+    if assessment.blocked:
+        detail = "; ".join(assessment.signals) or "no decomposition declared"
+        raise ValidationError(
+            "plan-bridge: " + assessment.reason + " (" + detail + ")"
+        )
 
     if len(goal_tasks) > MAX_PROPOSED_TASKS:
         raise ValidationError(

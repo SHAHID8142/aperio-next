@@ -115,12 +115,22 @@ def _mentions(text: str, terms: tuple[str, ...]) -> list[str]:
 
 
 def _task_has_evidence(task: dict) -> bool:
-    """Whether a declared task carries something a reviewer could check."""
+    """Whether a declared task carries something a reviewer could check.
+
+    Two ways count: naming verifiable evidence ("unit tests pass", "screenshot
+    of the hero"), or stating any completion/acceptance criterion at all — a
+    criterion is by definition the claim a reviewer checks. Matching only a
+    fixed vocabulary would fail ordinary phrasings like "Pages render".
+    """
+    criteria = list(task.get("completion_criteria") or []) + list(
+        task.get("acceptance_criteria") or []
+    )
+    if any(str(c).strip() for c in criteria):
+        return True
     blob_parts = [
         str(task.get("title") or ""),
         str(task.get("action") or ""),
     ]
-    blob_parts.extend(str(c) for c in (task.get("completion_criteria") or []))
     blob_parts.extend(str(d) for d in (task.get("deliverables") or []))
     return bool(_mentions(" ".join(blob_parts), _EVIDENCE_TERMS))
 

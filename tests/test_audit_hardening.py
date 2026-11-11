@@ -1430,3 +1430,61 @@ def test_back_at_the_first_question_returns_to_the_intent_chooser(tmp_path):
     )
     intent = read_session(proj / ".aperio")["intent"]
     assert intent == "Start a new feature or task", intent
+
+
+# ---------------------------------------------------------------------------
+# Codex fifth review (P2): goal assessment applies to declared decompositions;
+# recovery reports agree with the task-wide retry ceiling.
+# ---------------------------------------------------------------------------
+
+def test_goal_assessment_applies_to_declared_decompositions():
+    from aperio.goals import validate_goal
+    from aperio.planbridge import plan_proposal_from_goal
+
+    def goal(tasks):
+        return validate_goal({
+            "goal_id": "G1", "objective": "Build an entire website",
+            "intended_outcome": "a site", "profile": "software",
+            "deliverables": ["site"], "acceptance_criteria": ["builds"],
+            "work": {"tasks": tasks},
+        })
+
+    token_task = {"id": "t1", "title": "Fix footer link",
+                  "action": "fix the footer link", "deliverables": ["footer"],
+                  "completion_criteria": ["tests pass"]}
+    with pytest.raises(ValidationError) as exc:
+        plan_proposal_from_goal(goal([token_task]))
+    assert "decompos" in str(exc.value).lower()
+
+    # A proportionate decomposition still bridges.
+    full = [
+        {"id": f"t{i}", "title": title, "action": title, "deliverables": [title],
+         "completion_criteria": ["unit tests pass"]}
+        for i, title in enumerate(["Build the navigation markup",
+                                   "Build the footer markup",
+                                   "Style the responsive layout"], start=1)
+    ]
+    proposal = plan_proposal_from_goal(goal(full))
+    assert len(proposal["plan_input"]["tasks"]) == 3
+
+
+def test_recovery_report_explains_the_task_wide_ceiling():
+    from aperio.recovery import MAX_ATTEMPTS_PER_TASK, recovery_report, retry_gate
+
+    runs = [
+        {
+            "run_id": f"run-{i}", "task_id": "T1", "status": "failed",
+            "outcome": f"distinct problem {i}", "exit_code": i,
+            "failure_attempt": 1, "adapter_id": "sim",
+            "finished_at": f"2026-11-11T10:0{i}:00Z",
+        }
+        for i in range(MAX_ATTEMPTS_PER_TASK)
+    ]
+    with pytest.raises(StateError):
+        retry_gate(runs, "T1", remediation="changed the approach materially")
+
+    report = recovery_report(runs, "T1")
+    assert report["verdict"] != "failed_runs_present", report["verdict"]
+    guidance = " ".join(report["guidance"]).lower()
+    assert "ceiling" in guidance and "retry" in guidance, guidance
+    assert report["task_ceiling_reached"] is True

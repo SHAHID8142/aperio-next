@@ -132,7 +132,8 @@ def test_bridge_handles_goal_scale(tmp_path: Path) -> None:
     # the goal schema caps work.tasks at 200; the bridge handles a full
     # 200-task decomposition and renumbers every id
     big = goal(work={"tasks": [
-        {"id": f"t{n}", "title": f"Task {n}", "action": f"Do {n}"}
+        {"id": f"t{n}", "title": f"Task {n}", "action": f"Do {n}",
+         "completion_criteria": [f"unit tests for task {n} pass"]}
         for n in range(200)
     ]})
     proposal = plan_proposal_from_goal(big)
