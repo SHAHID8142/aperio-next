@@ -313,6 +313,8 @@ _SLICE_QUALIFIERS = (
     "slice", "heading", "image", "spacing", "color", "colour", "placeholder",
     "layout", "responsive", "style", "styles", "styling", "css", "markup",
     "api", "endpoint", "backend", "frontend", "scaffold",
+    # Test-only work implements no feature behaviour: it is a bounded slice.
+    "test", "tests", "testing", "unit test", "unit tests", "spec", "coverage",
 )
 
 #: Verbs that, followed by a bare feature unit, mean "build the whole thing".

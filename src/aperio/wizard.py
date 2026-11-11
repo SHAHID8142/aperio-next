@@ -278,17 +278,30 @@ def run(
                 raw = prompter.ask(hint)
                 stripped = raw.strip()
                 if stripped == CMD_BACK and previous_question_id:
-                    # /back withdraws the previous answer so the interview
-                    # offers that question again. It must never overwrite a
-                    # genuine answer with a placeholder.
-                    onboarding.withdraw(
-                        Path(protocol["workspace"]) / ".aperio",
-                        previous_question_id,
-                    )
-                    prompter.say(
-                        f"  Going back to the previous question "
-                        f"({previous_question_id})."
-                    )
+                    apdir = Path(protocol["workspace"]) / ".aperio"
+                    if previous_question_id == "intent":
+                        # The intent is a session field, not an interview
+                        # answer, so it cannot be withdrawn. Re-open the
+                        # chooser and record the operator's new choice.
+                        prompter.say("  Going back to the intent question.")
+                        prompter.say("What would you like to do with this project?")
+                        chosen = _ask_choice(
+                            prompter,
+                            list(onboarding.INTENT_CHOICES),
+                            allow_back=False,
+                        )
+                        if isinstance(chosen, str):
+                            return _finish_sentinel(result, chosen, protocol)
+                        onboarding.record_intent(apdir, chosen["id"])
+                    else:
+                        # /back withdraws the previous answer so the interview
+                        # offers that question again. It must never overwrite a
+                        # genuine answer with a placeholder.
+                        onboarding.withdraw(apdir, previous_question_id)
+                        prompter.say(
+                            f"  Going back to the previous question "
+                            f"({previous_question_id})."
+                        )
                     previous_question_id = None
                     result.steps += 1
                     break

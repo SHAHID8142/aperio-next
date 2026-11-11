@@ -1390,3 +1390,43 @@ def test_bounded_slice_with_a_section_criterion_stays_valid():
     }
     oversized, signals = assess_task_boundeness(task)
     assert oversized is False, signals
+
+
+# ---------------------------------------------------------------------------
+# Codex fourth review (P2): test-only tasks are bounded; /back at the first
+# question returns to the intent chooser.
+# ---------------------------------------------------------------------------
+
+def test_test_only_task_is_a_bounded_slice():
+    from aperio.bounded_tasks import assess_task_boundeness
+    from aperio.planmodel import validate_plan_input
+
+    task = {
+        "id": "TASK-001", "title": "Add unit tests for login",
+        "objective": "Add unit tests for login",
+        "deliverables": ["test_login.py"],
+        "acceptance_criteria": ["Unit tests pass"], "depends_on": [],
+    }
+    oversized, signals = assess_task_boundeness(task)
+    assert oversized is False, f"test-only work must be a slice: {signals}"
+    assert validate_plan_input(_valid_plan([task]))["tasks"][0]["id"] == "TASK-001"
+
+
+def test_back_at_the_first_question_returns_to_the_intent_chooser(tmp_path):
+    from aperio import wizard
+    from aperio.onboarding_session import read_session
+
+    proj = _make_existing_project(tmp_path)
+    out = _RecordingTTY("")
+    wizard.run(
+        str(proj),
+        stdin=_TTY("1\n/back\n2\n/quit\n"),   # intent, back, different intent, quit
+        stdout=out,
+        request_approval=lambda message: True,
+    )
+    text = "".join(out.written)
+    assert text.count("What would you like to do with this project?") >= 2, (
+        "the intent chooser was not re-offered"
+    )
+    intent = read_session(proj / ".aperio")["intent"]
+    assert intent == "Start a new feature or task", intent
