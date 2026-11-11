@@ -73,7 +73,7 @@ or reports.
 - **GitHub Actions has executed zero test steps** (account billing lock).
   Every green claim in the docs is from local runs recorded by the
   independent 1.2 hardening audit (see [audit-final.md](audit-final.md)).
-- **Python versions:** the full suite (1,680 tests) passes on CPython
+- **Python versions:** the full suite (1,683 tests) passes on CPython
   **3.11, 3.12, 3.13 and 3.14** on macOS arm64. These four are the only
   versions actually executed; `requires-python = ">=3.11"` is intentionally
   conservative, not a claim about untested interpreters.
