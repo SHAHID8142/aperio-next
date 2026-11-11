@@ -20,7 +20,7 @@ a prior report. Where something could not be checked, it is marked
 | Base SHA | `9773ba4cb213a2358c970c5013627b2d87bb2026` |
 | Branch | `audit/1.2-final-hardening` |
 | Base → HEAD | 32 files changed; commits are purely additive. Exact totals: `git diff --shortstat 9773ba4..HEAD`, `git rev-list --count 9773ba4..HEAD` |
-| Audited source SHA (README pin target) | `5715380` — code + tests, all suites green |
+| Audited source SHA (README pin target) | `5715380` — code + tests, all suites green (production `src/` is byte-identical at the merge commit `6399a81`; only test timing changed afterwards) |
 | Code after the audited SHA | docs-only commits; no executable change since `5715380` |
 | Pre-existing work | preserved; no reset, clean, force-push, or branch deletion |
 | Untracked at start | `audit-inputs/` (owner-provided reference material) |
@@ -455,3 +455,48 @@ is **not** called Release Ready because: Windows and Linux were not executed,
 no live authenticated agent integration was run, hosted CI is blocked, and no
 public PyPI/Release artifact exists. Those are stated as UNVERIFIED /
 BLOCKED_EXTERNAL, not hidden.
+
+## Merged — `main` @ `6399a81`
+
+PR #1 was merged into `main` with a merge commit on 2026-11-11:
+
+| Item | Value |
+| --- | --- |
+| Merge commit (`main` HEAD at merge) | `6399a81eb2040b83dbc71cf3983049fcd813fe15` |
+| Source branch head | `304e58e` (`audit/1.2-final-hardening`) |
+| Merge method | merge commit — the 49-commit audit history is preserved, nothing squashed or rewritten |
+| Branch protection / rulesets | none configured (`main` unprotected) — no required check was bypassed |
+| Hosted CI | **BLOCKED_EXTERNAL** — all four jobs fail in ~2 s with 0 steps executed (account billing lock). No workflow, check or rule was modified, disabled or skipped |
+
+### Post-merge verification (executed, on `main`)
+
+| Check | Result |
+| --- | --- |
+| Full suite, CPython 3.11 / 3.12 / 3.13 / 3.14 | **1691 passed, 0 skipped** each (sequential runs) |
+| Wheel build (`uv build --wheel`) | `aperio_next-1.2.0rc2-py3-none-any.whl`, 87 entries, includes `safeproc` |
+| `uv tool install` from `@6399a81` | `aperio 1.2.0rc2` |
+| `pipx install` from `@6399a81` | `aperio 1.2.0rc2` |
+| `aperio --version` / `--help` | pass |
+| `aperio next .` | exit 0, read-only (no `.aperio/`) |
+| `aperio host-doctor` | exit 0, honest `not_yet_tested` rows for unprobed agents |
+| `aperio start .` in a real PTY — decline | prompt shown, "nothing was changed", directory unchanged |
+| `aperio start .` in a real PTY — accept | `.aperio/` created, intent recorded, `/quit` saves progress |
+| Resume after `/quit` | re-running `start .` returns to the same question, no data lost |
+| Portable `export` → `import` | archive (1,996 bytes, hashed) round-trips into a fresh project |
+| `aperio recover` | honest `no-checkpoint` report |
+| Docs ↔ CLI consistency | every `aperio <cmd>` referenced in README/docs exists in `--help` |
+| Relative links (README + docs) | 0 broken |
+
+**Install-pin decision:** the README now pins the merge commit `6399a81`, not
+the earlier audited commit, so the documented command installs exactly what
+`main` contains. This is safe because `git diff 5715380 6399a81 -- src/` is
+empty — only two test files changed (timing of the interrupt tests). No
+further pin update is planned, so the documentation does not chase itself.
+
+**Observed during verification, not fixed (behaviour, not correctness):** the
+wizard's `/quit` reports "cancelled; answers so far are saved" but does not mark
+the persisted session cancelled, so `aperio onboarding-status` still shows the
+session as resumable (which is the useful behaviour — it resumes correctly).
+The wording and the persisted flag disagree; worth aligning in a future
+release. The intent prompt also renders as `Type a number , /pause or /quit:`
+with a stray space. Neither affects data, security or recovery.

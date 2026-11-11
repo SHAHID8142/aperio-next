@@ -105,3 +105,11 @@ No databases, dashboards, cloud services, plugin loaders, executable
 rule engines, model API access, credential handling, GUI applications,
 or automatic learning. A GUI is not required; the CLI/library with
 manual agent exchange is the completed core product.
+
+## Post-merge notes (1.2.0rc2 on `main`)
+
+- The wizard's `/quit` message says the run was cancelled while the persisted
+  session remains resumable (and `onboarding-status` still shows it). The
+  resume behaviour is the useful one; the wording should catch up.
+- The intent prompt renders as `Type a number , /pause or /quit:` (stray space
+  before the comma). Cosmetic only.

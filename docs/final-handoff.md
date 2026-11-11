@@ -125,7 +125,30 @@ code commit `5715380`, reported **no findings**.
 | 3.11/3.13/Windows untested | low-medium | release notes, install.md | Unknown platform behavior | Extend the verification matrix when environments exist |
 | Loopback UI token visible to same-machine processes | low | limitations.md | Local-only exposure | Run only on trusted machines; CLI is the alternative |
 
-## G. Release verdict
+## G. Merge status and first commands
+
+**Merged.** PR #1 merged into `main` on 2026-11-11; merge commit
+`6399a81eb2040b83dbc71cf3983049fcd813fe15`. The 49-commit audit history is
+preserved (merge commit, not squash). `main` carries no branch protection, so
+no rule or required check was bypassed; hosted CI is red only from an account
+billing lock (every job fails in ~2 s with 0 steps executed).
+
+Verified on `main` after the merge: 1691 tests × 4 interpreters, clean wheel,
+clean `uv`/`pipx` installs, `--version`, `--help`, `next`, `host-doctor`, a real
+PTY onboarding run (decline changes nothing; accept scaffolds and records
+intent), resume after `/quit`, portable export→import, and honest recovery.
+
+**Commands to run first**
+
+```bash
+uv tool install "git+https://github.com/SHAHID8142/aperio-next.git@6399a81"
+aperio --version            # aperio 1.2.0rc2
+aperio host-doctor          # honest per-agent compatibility, no probes by default
+aperio next .               # read-only: what Aperio would do here
+aperio start .              # guided onboarding (TTY); asks before writing .aperio/
+```
+
+## H. Release verdict
 
 **RELEASE CANDIDATE — EXTERNAL VALIDATION PENDING.**
 
