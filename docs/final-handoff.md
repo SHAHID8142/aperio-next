@@ -19,7 +19,7 @@ omitted. Chunk-level detail for the 1.2 program lives in
 ## A. Exact source identity
 
 - **Repository:** https://github.com/SHAHID8142/aperio-next
-- **Audit branch:** `audit/1.2-final-hardening` (13 commits on `9773ba4`)
+- **Audit branch:** `audit/1.2-final-hardening` (16 commits on `9773ba4`)
 - **Audited source SHA:** `f04232d` (code + tests; the README install pins it)
 - **Source histories:** `feature/master-v3-completion` @ `8a3fe94` and
   `feature/step01-universal-onboarding` @ `6bea2e2`, integrated on

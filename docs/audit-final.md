@@ -19,8 +19,9 @@ a prior report. Where something could not be checked, it is marked
 | --- | --- |
 | Base SHA | `9773ba4cb213a2358c970c5013627b2d87bb2026` |
 | Branch | `audit/1.2-final-hardening` |
-| Base → HEAD | 13 commits, 30 files, +2706 / −965 |
+| Base → HEAD | 16 commits, 31 files, +3033 / −974 |
 | Audited source SHA (README pin target) | `f04232d` — code + tests, all suites green |
+| Documentation head | `e8ee461` — docs only, no executable change |
 | Pre-existing work | preserved; no reset, clean, force-push, or branch deletion |
 | Untracked at start | `audit-inputs/` (owner-provided reference material) |
 
@@ -298,11 +299,12 @@ with hosts, and the code and docs say so. It is not marketed as done.
 
 ## Q. Branch and commits
 
-Branch `audit/1.2-final-hardening`, 9 commits on `9773ba4`:
+Branch `audit/1.2-final-hardening`, 16 commits on `9773ba4` (last three):
 
 ```
+e8ee461 docs: refresh release notes and stale test counts to the final audited numbers
+716bd5f docs(audit): re-pin install to the audited commit and record the R01–R03 remediation
 f04232d fix: bind install approval to the plan, gate task size on every path
-<docs commit> docs(audit): re-pin the README to the audited commit and record the remediation evidence
 8279e1d fix(audit): bound subprocess capture, guard POSIX kill, require all prereqs, bind install approval to plan fingerprint
 d69d24a fix(audit): scan directories incrementally and read documents with a byte-bounded handle
 eebdc4a feat(audit): refuse undecomposed project-scale goals at the plan bridge
