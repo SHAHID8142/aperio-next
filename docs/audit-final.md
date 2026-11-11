@@ -182,6 +182,10 @@ built. Project `.aperio/` data survives upgrade and uninstall (verified).
 - **Every** CLI command in the README was executed against a clean isolated
   install (wheel built from this branch, installed outside the repo).
 - 16 relative links, all resolve. No badges, no screenshots, no placeholders.
+- The documented install command is pinned to the hardened commit
+  `e8800de` and was executed successfully from a clean environment.
+  **Owner action after merge:** re-pin the ref to the merge commit or a
+  release tag so installs always fetch the audited code.
 
 ## K. Documentation examples tested
 
