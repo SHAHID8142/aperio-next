@@ -6,48 +6,54 @@ provenance, and supports optional verification and handoff for any agent
 performing design, research, writing, analysis, business, conversational,
 or software work.
 
-This repository contains **Features 01–07** and **M1**:
-
-- portable project state, decision memory, and structured handoffs;
-- dependency-validated planning, execution tracking, and independent review;
-- validated export/import, integrity checks, and schema-upgrade foundations;
-- provider-neutral non-interactive CLI adapters for Codex and Claude;
-- a universal, read-only context pack that works as a one-off task or over
-  an existing project.
+The current release candidate combines the full Features 01–07 foundation,
+the universal M1–M8 layer, the v1.1 workflow program, the v1.2
+roadmap/recovery/compatibility work, and Step 01 universal onboarding.
 
 Software development is an **optional domain profile**, not the definition
 of the product.
 
-Anything not listed below is **planned, not implemented**. See
-[docs/roadmap.md](docs/roadmap.md) for what is coming and
-[docs/architecture.md](docs/architecture.md) for design boundaries.
+For exact guarantees and non-claims, see the
+[final handoff](docs/final-handoff.md), [security model](docs/security-model.md),
+and [architecture](docs/architecture.md).
 
 ## Status
 
-- Implemented (Feature 01): `aperio --version`, `aperio init <project-directory>`, `aperio status <project-directory>`
-- Implemented (Feature 02): `aperio memory [--json]`, `aperio decision-add`, `aperio handoff-write`, `aperio phase-set`
-- Implemented (Feature 03): `aperio plan-create`, `aperio plan-show [--json]`, `aperio plan-approve`, `aperio plan-revise`, `aperio task-list [--json]`, `aperio task-status`
-- Implemented (Feature 04): `aperio agent-list`, `aperio run-preview`, `aperio run-start [--authorize-exec]`, `aperio run-status`, `aperio runs-list`, `aperio run-cancel`, `aperio runs-reconcile`, `aperio run-report`, `aperio run-handoff`
-- Implemented (Feature 05): `aperio export [--dry-run] [--json]`, `aperio import [--replace] [--dry-run]`, `aperio integrity [--archive] [--json]`, `aperio upgrade [--apply] [--json]`
-- Implemented (Feature 06): `aperio roles`, `aperio policy-init`, `aperio policy-show`, `aperio policy-assign`, `aperio policy-permissions`, `aperio review-submit`, `aperio review-decide`, `aperio review-list`, `aperio review-status`
-- Implemented (Feature 07): `codex-cli` and `claude-cli` through `aperio agent-list`, `agent-doctor`, `run-preview`, and `run-start --authorize-exec [--authorize-write]` (documented non-interactive CLIs; read-only by default; no GUI-app automation)
-- Implemented (M1): `aperio context-pack [workspace]` with `general` (default) and optional `software` profiles, Markdown/JSON output, deterministic byte budgeting, trust/provenance labels, imported/proposed context labels, and strict read-only operation
-- Implemented (M2): `aperio profiles`, `aperio goal-check`, and `aperio goal-pack` — a versioned universal goal contract (goal-schema v1), six data-only task profiles, optional work decomposition, and goal→context-pack conversion that works with no project, provider, or model API
-- Audited (Chunk 07): end-to-end pipeline integration test, security audit over injection/trust/privacy/paths/publication/concurrency/destructive operations (docs/security-model.md), compatibility audit (all Feature 01-07 commands and M1-M3 schemas unchanged), and usability: every universal workflow runs standalone with no project initialization
-- Implemented (v1.1 program): Brain Dump Guard (`capture`/`inbox`/`inbox-resolve` — durable mid-task intake with keyword triage labeled as such and urgency authority only via the operator's --urgent flag), durable checkpoints (`checkpoint-write`/`show`/`recover`), goal-to-plan bridge (`plan-propose-from-goal`), priority-aware scheduling (plan-schema v2), controlled orchestration (`orchestrate-assess/plan/brief` — sequential only), trust-aware skill packs (`skill-*` + 11 builtin packs), consolidated `work-status`, and the optional read-only loopback UI (`serve-ui`)
-- Implemented (Step 01): `aperio next` / `onboarding-*` — read-only workspace discovery, durable one-question-at-a-time onboarding, existing-project reconstruction, controlled standardization, honest tool discovery, two-gate installs, and a readiness report
-- Release candidate: 1.2.0rc2 — the v1.2 planning/recovery/compatibility work and Step 01 onboarding are integrated; see [docs/release-notes.md](docs/release-notes.md) for verified and unverified boundaries
-- Implemented (M8): `aperio benchmark-cases` / `benchmark-run` — an offline, reproducible cross-domain benchmark (14 versioned cases, all six domains) measuring detection of planted flaws, trust-boundary enforcement, cross-agent information preservation, memory correctness, and overhead — with human-judged metrics listed per case and never scored, no aggregate quality score, and regressions always reported
-- Implemented (M7): `aperio agent-brief` — a paste-ready agent instruction package (objective, requirements, output contract, quality criteria + advisory profile self-checks, reviewed memory and accepted lessons, uncertainties, trust boundaries); strengthened six-domain profile model with advisory suggested checks; tested manual copy/paste workflows (docs/agent-workflows.md) and a per-provider support/limits guide (docs/providers.md)
-- Implemented (M6): `aperio exchange-export` and `exchange-import` — one provider-neutral universal exchange document (selected goals, context packs, quality reports, feedback, memories, operator notes) with per-section validation, digest-checked integrity, dry-run imports, `imported-*` file naming, and memories that always enter as proposed
-- Implemented (M5): `aperio feedback-check`, `feedback-review`, `feedback-lesson`, `feedback-compare`, and `improvement-apply` — controlled feedback with explicit review, approved lessons stored through the M3 memory contract (always as proposed), deterministic before/after comparison with regressions reported, and reviewable improvement proposals applied only to new files
-- Implemented (M4): `aperio preflight <goal.json>` and `aperio quality-check <goal.json> --deliverable FILE` — deterministic mistake-prevention and deliverable-quality reports (quality-report v1) with a stable issue taxonomy; read-only, standalone, honest about what only a human can judge
-- Implemented (M3): `aperio mem-propose`, `mem-review`, `mem-list`, `mem-show`, `mem-recall`, `mem-export`, `mem-import` — a standalone universal memory store (memory-schema v1) with explicit review states, deterministic retrieval, optional context-pack integration (`--memory-store`), and a versioned portable exchange format
-- Not implemented (by design, yet): autonomous loops, sandboxed execution, Cursor/ZCode GUI integrations, cloud sync, automatic learning
+- **Version:** `1.2.0rc2`
+- **Integrated on `main`:** Step 01 onboarding, two-level planning,
+  bounded recovery, host compatibility reporting, and the complete earlier
+  feature/M1–M8 history.
+- **Verification:** 1601 tests passed with no skips on Python 3.14.7; a clean
+  wheel build/install also passed `--version`, `next`, `host-doctor`, and
+  packaged-data checks.
+- **Runtime:** Python 3.11+; standard-library-only runtime dependencies.
+- **Primary entry:** `aperio next [DIR] [--json]` — read-only discovery/resume
+  through the universal onboarding facade.
+- **Execution boundary:** subprocesses and tool installation require explicit
+  authorization flags; a successful process exit is never treated as verified
+  completion by itself.
+- **External validation still pending:** GitHub-hosted CI (account billing
+  lock), live-provider calls, and the Windows/Linux/Python 3.11/3.13 matrix.
+- **Not claimed:** native GUI-host integration, cloud sync, background
+  monitoring, or unsupervised autonomous execution.
 
 The standing security summary — authority hierarchy, trust derivation,
 injection defenses, privacy, path/publication/concurrency guarantees, and
 the honest non-claims — is [docs/security-model.md](docs/security-model.md).
+
+## Start here
+
+```sh
+# After installation, ask for the one legal next onboarding action.
+aperio next /path/to/project
+
+# Machine-readable protocol for a cooperating host or script.
+aperio next /path/to/project --json
+```
+
+`next` is read-only: it classifies a new workspace or resumes an existing
+onboarding session. Initialization, standardization, execution, and tool
+installation remain separate, explicitly authorized actions.
 
 ## Documentation
 
@@ -72,9 +78,10 @@ the honest non-claims — is [docs/security-model.md](docs/security-model.md).
 | [Architecture](docs/architecture.md) | what is implemented and how it fits |
 | [Conventions](docs/conventions.md) | the engineering invariants |
 | [Roadmap](docs/roadmap.md) | implemented milestones and history |
-| [Release notes](docs/release-notes.md) | 1.0.0rc1 contents and verification |
+| [Release notes](docs/release-notes.md) | current and historical release contents, verification, and limits |
 | [Limitations](docs/limitations.md) | known limits, stated plainly |
 | [Troubleshooting](docs/troubleshooting.md) | common errors and fixes |
+| [Final handoff](docs/final-handoff.md) | 1.2.0rc2 source identity, evidence, risks, and verdict |
 | [Master plan v1](docs/master-completion-plan.md) | the 1.0 completion record with SHAs |
 | [Brain Dump Guard](docs/brain-dump.md) | mid-task capture, the same-chat protocol, host honesty |
 | [Skills](docs/skills.md) | trust-aware skill packs, selection, composition |
@@ -82,13 +89,17 @@ the honest non-claims — is [docs/security-model.md](docs/security-model.md).
 | [30-day SEO](docs/seo-30-day.md) | the optional SEO service workflow, honest data rules |
 | [Host integration](docs/host-integration.md) | the truthful host capability matrix |
 | [Master plan v2](docs/master-plan-v2.md) | the product-completion record with SHAs |
+| [Master plan v3](docs/master-plan-v3.md) | v1.2 planning, recovery, compatibility, and final integration record |
 
 ## Requirements
 
 - Python 3.11+
 - No third-party runtime dependencies (standard library only)
 
-## Install (development)
+## Install
+
+For fresh-machine, wheel, upgrade, and uninstall instructions, see
+[docs/install.md](docs/install.md). For development:
 
 ```sh
 python -m pip install -e ".[dev]"
@@ -100,7 +111,20 @@ python -m pip install -e ".[dev]"
 # Show the installed version
 aperio --version
 
+# Canonical read-only first action for a new or existing workspace
+aperio next ./my-project
+
+# Explicit Step 01 commands remain available for scripted workflows
+aperio onboarding-start ./my-project --json
+aperio onboarding-readiness ./my-project --json
+aperio onboarding-report ./my-project --output readiness.md
+
+# Honest host compatibility matrix; --probe remains passive
+aperio host-doctor --json
+aperio host-doctor --probe --json
+
 # Initialize an Aperio project in a directory (creates .aperio/)
+# Do this only after the operator has approved initialization.
 aperio init ./my-project
 
 # Report project state; strictly read-only
@@ -179,6 +203,9 @@ aperio handoff-write ./my-project --file handoff.json --force
 aperio phase-set ./my-project implementation
 
 # Planning and execution tracking (Feature 03)
+aperio roadmap-create ./my-project --file roadmap.json  # LEVEL-1 draft
+aperio roadmap-show ./my-project --json
+aperio roadmap-approve ./my-project --by "team lead"
 aperio plan-create ./my-project --file plan.json    # create the plan (draft, revision 1)
 aperio plan-show ./my-project                       # approval state, tasks, readiness
 aperio plan-show ./my-project --json                # full plan document
@@ -215,6 +242,7 @@ aperio run-status ./my-project RUN-0001 --json      # inspect one run
 aperio runs-list ./my-project --json                # execution history
 aperio run-cancel ./my-project RUN-0001 --reason "changed plan"
 aperio runs-reconcile ./my-project                  # detect interrupted runs
+aperio recovery-report ./my-project TASK-001 --json # bounded-retry history
 aperio run-report ./my-project RUN-0001 --file report.json  # consume external result
 
 # Workflow governance (Feature 06; optional, operator-enabled)
@@ -417,8 +445,9 @@ format, execution-record references, missing or unexpected shareable
 files, and (with `--archive`) archive manifest integrity. `upgrade`
 previews schema versions per artifact; it applies only explicitly
 registered migrations, refuses newer versions, and backs up originals
-under `.aperio/local/backups/` before any write. No migrations exist in
-this release, so it is a framework, not a conversion path.
+under `.aperio/local/backups/` before any write. The current registry includes
+the explicit plan-schema v2→v3 re-stamp migration; no content is silently
+reinterpreted.
 
 ### `aperio context-pack` (M1)
 
@@ -500,7 +529,7 @@ aperio profiles --json
   shown separately from operator requirements, and never gate approval or
   completion.
 - Work decomposition is optional: a one-off question needs no task graph.
-  Supplied graphs reuse the plan-schema v1 dependency validator, so cycles,
+  Supplied graphs reuse the shared dependency validator, so cycles,
   self-dependencies, duplicate ids, and unknown dependencies are rejected.
 - Goal identity is a SHA-256 over the canonical goal: no timestamp, path, or
   version input, so the same goal has the same identity anywhere.
@@ -691,12 +720,16 @@ final check are detected instead of silently lost.
 
 ### Planning & execution tracking (Feature 03)
 
-`plan-create` stores a versioned plan (`.aperio/plan.json`, plan-schema v1)
-with objective, outcome, scope/exclusions, assumptions/risks, strategy,
-acceptance criteria, verification strategy, and a task graph. Tasks carry
-unique `TASK-NNNN` ids, deliverables, acceptance criteria, and
-dependencies; **readiness is derived** (pending + all dependencies
-completed), never stored. Transitions (`pending → in-progress →
+`roadmap-create` stores the optional LEVEL-1 master roadmap: milestones,
+capabilities, dependencies, risks, and acceptance conditions under a
+draft/approval lifecycle. `plan-create` stores the executable LEVEL-2 plan
+(`.aperio/plan.json`, current plan-schema v3; v1/v2 remain readable) and may
+link it to a roadmap milestone. Plans contain objective, outcome,
+scope/exclusions, assumptions/risks, strategy, acceptance criteria,
+verification strategy, and a task graph. Tasks carry unique `TASK-NNNN` ids,
+objectives, priorities, deliverables, acceptance criteria, and dependencies;
+**readiness is derived** (pending + all dependencies completed), never stored.
+Transitions (`pending → in-progress →
 completed`, with `blocked` as an explicit side state) are validated:
 starting requires claiming ownership and satisfied dependencies;
 completion requires recorded verification evidence, limitations, and a
@@ -715,23 +748,25 @@ create-only via an exclusive hard-link publish). See
 
 ## How agents discover current project state
 
-1. For portable work, run `aperio context-pack ...` (standalone or with a
+1. Start with `aperio next <project-directory> --json` to classify or resume
+   the workspace and receive exactly one read-only next action.
+2. For portable work, run `aperio context-pack ...` (standalone or with a
    project) and give the Markdown/JSON to the agent. Do not treat pack
    generation as execution or approval.
-2. Run `aperio memory <project-directory> --json` (or `aperio status`, or
+3. Run `aperio memory <project-directory> --json` (or `aperio status`, or
    read `.aperio/state.json` directly).
-3. Check `schema_version` first; treat unknown versions as "written by a newer Aperio" and stop.
-4. Read the brief, the append-only decision log, the handoff, and the plan
+4. Check `schema_version` first; treat unknown versions as "written by a newer Aperio" and stop.
+5. Read the brief, the append-only decision log, the handoff, and the plan
    summary (all included in `memory --json`): approval state, task counts,
    and which tasks are ready or blocked.
-5. Record progress through the APIs: `decision-add`, `handoff-write`,
+6. Record progress through the APIs: `decision-add`, `handoff-write`,
    `phase-set`, `task-status`.
-6. Never store credentials anywhere under `.aperio/` except `.aperio/local/`, which is
+7. Never store credentials anywhere under `.aperio/` except `.aperio/local/`, which is
    git-ignored and not portable by definition.
-6. To move a project between machines, use `aperio export` / `aperio import`
+8. To move a project between machines, use `aperio export` / `aperio import`
    and verify the result with `aperio integrity`. The archive carries the
    shareable context only; `local/` never travels.
-7. When governance is enabled, never self-approve a plan revision, self-
+9. When governance is enabled, never self-approve a plan revision, self-
    decide a review, or treat a successful process exit as verified
    completion. Declare an actor with `--actor`; the project policy decides
    what that role may do. Reopen or evidence changes require a fresh review,
@@ -743,6 +778,10 @@ create-only via an exclusive hard-link publish). See
 python -m pip install -e ".[dev]"
 python -m pytest
 ```
+
+Current integrated evidence: **1601 passed, 0 skipped** on Python 3.14.7.
+See [docs/final-handoff.md](docs/final-handoff.md) for the clean-wheel smoke
+test and the external validation limits.
 
 Conventions and quality requirements: [docs/conventions.md](docs/conventions.md).
 
