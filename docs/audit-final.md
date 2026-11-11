@@ -19,7 +19,8 @@ a prior report. Where something could not be checked, it is marked
 | --- | --- |
 | Base SHA | `9773ba4cb213a2358c970c5013627b2d87bb2026` |
 | Branch | `audit/1.2-final-hardening` |
-| Base → HEAD | 9 commits, 24 files, +2028 / −959 |
+| Base → HEAD | 13 commits, 30 files, +2706 / −965 |
+| Audited source SHA (README pin target) | `f04232d` — code + tests, all suites green |
 | Pre-existing work | preserved; no reset, clean, force-push, or branch deletion |
 | Untracked at start | `audit-inputs/` (owner-provided reference material) |
 
@@ -46,6 +47,9 @@ onboarding facade; `git log` shows the integration commits).
 | A14 | **LOW** | Metadata said "Alpha" against an rc2 build | **FIXED** |
 | *new* | **HIGH** | Lock TOCTOU: concurrent writers hit a spurious `PathError` (intermittent test failure) | **FIXED** |
 | A12r | LOW | Reference-audit finding A12 addressed via A08 redaction | **FIXED** |
+| R01 | **HIGH** | `aperio start` crashed on an existing project with no session; intent could be stored without consent | **FIXED** |
+| R02 | **HIGH** | Install approval recorded without a fingerprint authorized *any* plan (A13 bypass) | **FIXED** |
+| R03 | **HIGH** | Task-size gate applied only to tasks-less goals; one/many oversized tasks, direct plan-create, plan-approve and dispatch all bypassed it | **FIXED** |
 
 ## C. Reproduction and root cause (key items)
 
@@ -114,13 +118,19 @@ captures, zero failures**, and three consecutive clean full-suite runs.
 | `src/aperio/onboarding_discovery.py` | A07 — incremental scandir |
 | `src/aperio/onboarding_reconstruct.py` | A07 — bounded byte read |
 | `src/aperio/planbridge.py` | A05 — gate at the bridge |
+| `src/aperio/planmodel.py` | R03 — task-size check in `validate_plan_input` (create/revise) |
+| `src/aperio/planstore.py` | R03 — task-size check in `approve_plan` |
+| `src/aperio/runtime.py` | R03 — task-size check in dispatch eligibility |
+| `src/aperio/wizard.py` | R01 — init consent on an existing project before storing intent |
+| `src/aperio/cli.py` | R02 — record the reviewed plan fingerprint, not a bare scope |
 | `src/aperio/recovery.py` | A13r — task-level ceiling |
 | `src/aperio/hostcompat.py` | A10 — six verification dimensions |
 | `src/aperio/cli.py` | A06 — `aperio start` command |
 | `src/aperio/locks.py` | lock TOCTOU fix |
 | `pyproject.toml` | A14 — metadata |
 | `tests/conftest.py` | cross-version collection fix |
-| `tests/test_audit_hardening.py` | **new** — 35 regression tests |
+| `tests/test_audit_hardening.py` | **new** — 52 regression tests |
+| `tests/test_onboarding_tools.py` | one test now records a fingerprint-bound approval |
 | `tests/test_planbridge_priority.py` | updated to the new decomposition policy |
 | `README.md` | full rewrite |
 | `docs/{install,quickstart,onboarding,cli-reference,limitations,release-notes,brain-dump}.md` | synced |
@@ -130,18 +140,35 @@ captures, zero failures**, and three consecutive clean full-suite runs.
 | | Count |
 | --- | --- |
 | Baseline suite (`9773ba4`, per prior handoff, reproduced locally) | 1,601 |
-| New hardening tests | 35 (`tests/test_audit_hardening.py`) |
-| Tests updated for the new policy | 1 (`test_planbridge_priority`) |
-| **Final full suite** | **1,637 passed, 0 skipped** |
+| Hardening tests before the final remediation | 1,637 total |
+| New regression tests in the final remediation | 17 (wizard ×3, install approval ×4, task-size ×10) |
+| Tests updated for the new policy | 2 (`test_planbridge_priority`, `test_onboarding_tools`) |
+| **Final full suite** | **1,654 passed, 0 skipped** |
 
 Per-interpreter full-suite results (macOS arm64):
 
 | Python | Result |
 | --- | --- |
-| 3.11 | 1,637 passed |
-| 3.12 | 1,637 passed |
-| 3.13 | 1,637 passed |
-| 3.14 | 1,637 passed (×4 consecutive runs, stable after the lock fix) |
+| 3.11 | 1,654 passed |
+| 3.12 | 1,654 passed |
+| 3.13 | 1,654 passed |
+| 3.14 | 1,654 passed (stable after the lock fix) |
+
+### Regression reproduction for the final remediation (R01–R03)
+
+Each new test was written before its fix and failed first:
+
+| Path | Reproduced failure | Now |
+| --- | --- | --- |
+| Wizard, existing project, no session | `StateError: cannot create lock file … onboarding/session.lock` | consent asked first; no mutation on decline |
+| Install approval, legacy unbound | unbound approval authorized an arbitrary plan | refused: re-approve the exact plan |
+| Install approval, CLI path | CLI stored scope-only approval | CLI stores the reviewed fingerprint |
+| Goal, one oversized task | bridge accepted it | blocked at goal assessment |
+| Goal, multiple oversized tasks | bridge accepted them | blocked, each named |
+| `plan-create` direct | oversized task accepted | `ValidationError` |
+| `plan-approve` hand-written | approved into executable state | `StateError`, nothing modified |
+| Dispatch eligibility | over-sized plan dispatched | `StateError: execution refused` |
+| Valid small task (Hero/frontend/backend/CMS) | — | still allowed (backward compatible) |
 
 ## G. Environment and platforms
 
@@ -263,6 +290,8 @@ with hosts, and the code and docs say so. It is not marketed as done.
 Branch `audit/1.2-final-hardening`, 9 commits on `9773ba4`:
 
 ```
+f04232d fix: bind install approval to the plan, gate task size on every path
+<docs commit> docs(audit): re-pin the README to the audited commit and record the remediation evidence
 8279e1d fix(audit): bound subprocess capture, guard POSIX kill, require all prereqs, bind install approval to plan fingerprint
 d69d24a fix(audit): scan directories incrementally and read documents with a byte-bounded handle
 eebdc4a feat(audit): refuse undecomposed project-scale goals at the plan bridge
