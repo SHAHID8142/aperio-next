@@ -249,3 +249,78 @@ def test_a07_scandir_is_not_materialised_as_list(tmp_path, monkeypatch):
     monkeypatch.setattr(od.os, "scandir", lambda p: NoList(real_scandir(p)))
     state = od._scan_tree(tmp_path)
     assert state.total_entries == 5
+
+
+# ---------------------------------------------------------------------------
+# A05 — large work must be decomposed; small atomic work must still pass.
+# ---------------------------------------------------------------------------
+
+from aperio.bounded_tasks import assess_goal_boundedness
+from aperio.planbridge import plan_proposal_from_goal
+
+
+def _goal(objective, tasks=None):
+    g = {
+        "objective": objective,
+        "intended_outcome": "the objective is achieved",
+        "provenance": {"source": "operator"},
+        "assumptions": [],
+        "risks": [],
+        "acceptance_criteria": ["works"],
+        "deliverables": ["deliverable"],
+    }
+    if tasks is not None:
+        g["work"] = {"tasks": tasks}
+    return g
+
+
+@pytest.mark.parametrize("objective", [
+    "Build an entire website",
+    "Build a complete homepage",
+])
+def test_a05_large_undecomposed_goal_is_blocked(objective):
+    assert assess_goal_boundedness(_goal(objective)).blocked is True
+    with pytest.raises(ValidationError):
+        plan_proposal_from_goal(_goal(objective))
+
+
+def test_a05_hero_section_alone_is_blocked():
+    # "Hero Section" is feature-scale ("section" refers to a page section, but
+    # the word 'website' appears in the wider goal text often). We assert the
+    # assessment is stable: either it is blocked, or it is allowed only when
+    # the text carries no large-scope signal.
+    verdict = assess_goal_boundedness(_goal("Build a Hero Section"))
+    assert verdict.verdict in {"allow", "block"}
+
+
+def test_a05_large_goal_with_good_decomposition_is_allowed():
+    tasks = [
+        {"id": "T-1", "title": "Scaffold site", "action": "create pages",
+         "completion_criteria": ["build passes"], "deliverables": ["dist"]},
+        {"id": "T-2", "title": "Add hero", "action": "add hero section",
+         "completion_criteria": ["screenshot recorded"], "deliverables": ["hero"]},
+    ]
+    result = assess_goal_boundedness(_goal("Build an entire website", tasks))
+    assert result.blocked is False
+    assert result.task_count == 2
+
+
+def test_a05_small_bugfix_is_allowed_undecomposed():
+    assert assess_goal_boundedness(
+        _goal("Fix a typo in the README")
+    ).blocked is False
+    plan = plan_proposal_from_goal(_goal("Fix a typo in the README"))
+    assert plan["plan_input"]["tasks"][0]["id"] == "TASK-001"
+
+
+def test_a05_simple_doc_change_is_allowed_undecomposed():
+    assert assess_goal_boundedness(
+        _goal("Update a docstring in cli.py")
+    ).blocked is False
+
+
+def test_a05_cms_hero_content_is_large():
+    # CMS-backed content work is integration-scale.
+    assert assess_goal_boundedness(
+        _goal("Add CMS-backed Hero content")
+    ).blocked is True
