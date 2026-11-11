@@ -414,3 +414,24 @@ def test_a06_wizard_answers_a_question(tmp_path):
     )
     assert result.steps >= 1
     assert ".aperio" in str(tmp_path / ".aperio")
+
+
+# ---------------------------------------------------------------------------
+# A13 — task-level retry ceiling survives signature resets.
+# ---------------------------------------------------------------------------
+
+def test_a13_task_level_ceiling_blocks_varied_signatures():
+    from aperio.recovery import MAX_ATTEMPTS_PER_TASK, retry_gate
+
+    runs = []
+    for i in range(MAX_ATTEMPTS_PER_TASK):
+        runs.append({
+            "run_id": f"R{i}",
+            "task_id": "TASK-001",
+            "adapter_id": f"adapter-{i}",          # adapter switch each time
+            "exit_code": i,                        # exit code varies
+            "outcome": f"distinct failure wording {i}",  # text varies
+            "status": "failed",
+        })
+    with pytest.raises(StateError, match="task-level retry ceiling"):
+        retry_gate(runs, "TASK-001", remediation="another try")

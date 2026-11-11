@@ -48,6 +48,12 @@ from aperio.errors import StateError, ValidationError
 
 MAX_ATTEMPTS_PER_SIGNATURE = 3
 
+#: Hard ceiling on *all* failed attempts for one task, regardless of how the
+#: error text, exit code or adapter varies between attempts. Signatures can
+#: be reset by genuinely different-looking failures (or an adapter switch);
+#: this task-level budget prevents that from becoming an unbounded loop.
+MAX_ATTEMPTS_PER_TASK = 8
+
 #: Bounded excerpt of a recorded outcome used for signature text.
 _SIGNATURE_TEXT_LIMIT = 280
 
@@ -131,6 +137,21 @@ def retry_gate(
     failed = failed_runs_for_task(runs, task_id)
     if not failed:
         return {"signature": None, "attempt_no": 1, "prior_failures": 0}
+
+    # Task-level ceiling: bounded even when error text, exit code, or the
+    # adapter changes between attempts and resets the per-signature counter.
+    if len(failed) >= MAX_ATTEMPTS_PER_TASK:
+        raise StateError(
+            f"task {task_id}: the task-level retry ceiling is exhausted — "
+            f"{len(failed)} failed attempts across all problem signatures "
+            f"(limit {MAX_ATTEMPTS_PER_TASK}). Varying error text, exit codes "
+            "or adapters does not earn more attempts. Safe next steps: mark "
+            f"the task blocked ('aperio task-status <dir> {task_id} "
+            "--status blocked --reason \"exhausted task retry ceiling\"'), "
+            f"preserve the history ('aperio recovery-report <dir> {task_id}'), "
+            "then change the approach materially, revise the plan, or "
+            "escalate to the operator. Nothing was modified."
+        )
 
     latest = failed[-1]
     signature = signature_of_run(latest)
