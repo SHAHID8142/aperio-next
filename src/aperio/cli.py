@@ -135,6 +135,14 @@ from aperio.goals import (
     load_goal_file,
 )
 from aperio.errors import AperioError, StateError, ValidationError
+from aperio.integrations import (
+    HOSTS,
+    IntegrationError,
+    install_integrations,
+    integrations_status,
+    remove_integrations,
+    require_managed_project,
+)
 from aperio.handoff import (
     HANDOFF_FIELDS,
     HandoffContent,
@@ -2095,6 +2103,37 @@ def build_parser() -> argparse.ArgumentParser:
     host_doctor_parser.add_argument(
         "--json", dest="as_json", action="store_true",
         help="emit the compatibility matrix as machine-readable JSON",
+    )
+
+    integrations_parser = subparsers.add_parser(
+        "integrations",
+        help="install, inspect, or remove Aperio Next skill assets in "
+        "supported agent hosts' documented skills/commands locations "
+        "(default action: status; read-only)",
+    )
+    integrations_parser.add_argument(
+        "action", nargs="?", default="status",
+        choices=["status", "install", "remove"],
+        help="status (read-only, default) | install | remove",
+    )
+    integrations_parser.add_argument(
+        "project_directory", nargs="?", default=None,
+        help="project directory (required when --scope includes project)",
+    )
+    integrations_parser.add_argument(
+        "--host", dest="hosts", action="append", default=None,
+        choices=[s.host_id for s in HOSTS],
+        metavar="HOST_ID",
+        help="restrict to one host (repeatable; default: all documented hosts)",
+    )
+    integrations_parser.add_argument(
+        "--scope", default="user",
+        choices=["user", "project", "both"],
+        help="user scope (default), managed-project scope, or both",
+    )
+    integrations_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit the report as machine-readable JSON",
     )
 
     run_preview_parser = subparsers.add_parser(
@@ -4519,6 +4558,114 @@ def _cmd_host_doctor(args) -> None:
         print(f"\nNote: {note}")
 
 
+def _cmd_integrations(args) -> None:
+    scope_includes_project = args.scope in ("project", "both")
+    project_root: Path | None = None
+    if scope_includes_project:
+        if not args.project_directory:
+            raise ValidationError(
+                "integrations with --scope project/both need a project "
+                "directory argument"
+            )
+        target = resolve_target(args.project_directory, for_writing=False)
+        require_managed_project(target)
+        project_root = target
+    if args.action == "status":
+        rows = integrations_status(
+            home=Path.home(), project_root=project_root, scope=args.scope
+        )
+        if args.as_json:
+            print(json.dumps(
+                {
+                    "command": "integrations-status",
+                    "scope": args.scope,
+                    "hosts": [row.to_dict() for row in rows],
+                },
+                indent=2, ensure_ascii=False,
+            ))
+            return
+        print(
+            "Agent integrations (managed skill assets in documented host "
+            "locations; see docs/integrations.md):"
+        )
+        for row in rows:
+            print(f"\n  {row.display} ({row.host_id})")
+            print(f"    detected:   {'yes' if row.detected else 'no'}")
+            print(f"    activation: {row.invocation}")
+            for path, state in row.files.items():
+                print(f"    {state:>8}: {path}")
+        print(
+            "\nFile states: managed = aperio asset, foreign = not aperio's "
+            "(never touched), absent = not installed."
+        )
+        print(
+            "Activation/workflow/persistence are live-session facts; test "
+            "them inside the host (docs/integrations.md)."
+        )
+        return
+    if args.action == "install":
+        reports = install_integrations(
+            args.hosts,
+            home=Path.home(),
+            version=__version__,
+            project_root=project_root,
+            scope=args.scope,
+        )
+        payload = {
+            "command": "integrations-install",
+            "scope": args.scope,
+            "results": [r.to_dict() for r in reports],
+        }
+        if args.as_json:
+            print(json.dumps(payload, indent=2, ensure_ascii=False))
+        else:
+            print("Aperio Next integration install:")
+            for r in reports:
+                print(f"\n  {r.display} ({r.host_id})")
+                for p in r.installed:
+                    print(f"    installed: {p}")
+                for p in r.skipped:
+                    print(f"    skipped:   {p}")
+                for w in r.warnings:
+                    print(f"    warning:   {w}")
+                for e in r.errors:
+                    print(f"    error:     {e}")
+                if r.invocation:
+                    print(f"    activate:  {r.invocation}")
+            if any(not r.ok for r in reports):
+                raise IntegrationError(
+                    "one or more hosts reported errors; aperio never "
+                    "overwrites non-apario files"
+                )
+        return
+    # remove
+    reports = remove_integrations(
+        args.hosts,
+        home=Path.home(),
+        project_root=project_root,
+        scope=args.scope,
+    )
+    payload = {
+        "command": "integrations-remove",
+        "scope": args.scope,
+        "results": [r.to_dict() for r in reports],
+    }
+    if args.as_json:
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return
+    print("Aperio Next integration removal (managed assets only):")
+    for r in reports:
+        print(f"\n  {r.display} ({r.host_id})")
+        for p in r.removed:
+            print(f"    removed: {p}")
+        for p in r.kept:
+            print(f"    kept (foreign content, never touched): {p}")
+        for d in r.pruned_dirs:
+            print(f"    pruned empty dir: {d}")
+        for e in r.errors:
+            print(f"    error: {e}")
+
+
 def _cmd_agent_doctor(args) -> None:
     target = resolve_target(args.project_directory, for_writing=False)
     report = provider_doctor(
@@ -6091,6 +6238,8 @@ def main(argv: list[str] | None = None) -> int:
             _cmd_agent_doctor(args)
         elif args.command == "host-doctor":
             _cmd_host_doctor(args)
+        elif args.command == "integrations":
+            _cmd_integrations(args)
         elif args.command == "run-preview":
             _cmd_run_preview(args)
         elif args.command == "run-start":

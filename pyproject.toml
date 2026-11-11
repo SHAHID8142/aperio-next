@@ -42,7 +42,7 @@ aperio = "aperio.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-aperio = ["benchmark_cases/*.json", "skill_packs/*.md"]
+aperio = ["benchmark_cases/*.json", "skill_packs/*.md", "integration_assets/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
