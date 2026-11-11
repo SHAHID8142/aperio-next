@@ -30,8 +30,13 @@ Correctness and security fixes:
   verification facts, so a passive probe is never read as a live integration.
 - **Installation modernized** to `uv tool install` (verified from wheel and an
   immutable git commit) with a `pipx` fallback; all verified on macOS arm64.
+- **Final remediation:** `aperio start` asks for initialization consent on an
+  existing project instead of crashing; install approval is bound to the exact
+  reviewed plan (an unbound legacy approval is refused); and the atomic
+  task-size rule is enforced at goal assessment, plan-create, plan-approve and
+  dispatch, so it cannot be bypassed.
 
-Verification: **1,637 tests** pass on CPython 3.11, 3.12, 3.13 and 3.14
+Verification: **1,654 tests** pass on CPython 3.11, 3.12, 3.13 and 3.14
 (macOS arm64). GitHub-hosted CI still has not executed (account billing lock);
 Windows and Linux remain UNVERIFIED by this audit.
 

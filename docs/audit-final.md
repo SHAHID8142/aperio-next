@@ -187,7 +187,7 @@ Each new test was written before its fix and failed first:
 | Method | Isolation | Verified | Notes |
 | --- | --- | --- | --- |
 | `uv tool install` (wheel) | yes | **yes** | upgrade/uninstall clean; bin on PATH |
-| `uv tool install` (git @ immutable commit) | yes | **yes** | reproduces a specific commit |
+| `uv tool install` (git @ immutable commit) | yes | **yes** | re-verified against the audited commit `f04232d` (24-char SHA resolved, `aperio 1.2.0rc2`) |
 | `pipx install` (wheel) | yes | **yes** | viable fallback |
 | venv + wheel | yes | yes | more manual |
 | PyPI | — | **N/A** | no package published |
@@ -209,14 +209,17 @@ built. Project `.aperio/` data survives upgrade and uninstall (verified).
 - **Every** CLI command in the README was executed against a clean isolated
   install (wheel built from this branch, installed outside the repo).
 - 16 relative links, all resolve. No badges, no screenshots, no placeholders.
-- The documented install command is pinned to the hardened commit
-  `e8800de` and was executed successfully from a clean environment.
+- The documented install command is pinned to the audited code commit
+  `f04232d` and was executed successfully from a clean environment with both
+  `uv tool install` and `pipx install`
+  (`Installed 1 executable: aperio` → `aperio 1.2.0rc2`).
   **Owner action after merge:** re-pin the ref to the merge commit or a
   release tag so installs always fetch the audited code.
 
 ## K. Documentation examples tested
 
-`aperio --version`, `--help`, `next .`, `start .` (real PTY), `onboarding-confirm-init`,
+`aperio --version`, `--help`, `next .`, `start .` (real PTY, and non-TTY refusal),
+`onboarding-confirm-init`,
 `onboarding-answer`, `onboarding-readiness`, `host-doctor`, `status`,
 `benchmark-run`, `uv tool upgrade`, `uv tool uninstall` — all exercised on the
 installed artifact. `aperio next` confirmed to leave an empty directory empty.
@@ -235,6 +238,14 @@ Each `host-doctor` row now carries `verification` with six booleans; only
 probe. `cli_launch_tested`, `authenticated_model_call_tested`,
 `functional_handoff_tested`, `native_command_registered_and_tested` are `false`
 until a real run is recorded. No mock executable is described as a live test.
+
+### Final remediation (R01–R03) — what changed and why
+
+| ID | Defect (reproduced first) | Fix | Evidence |
+| --- | --- | --- | --- |
+| R01 | `aperio start` on an existing project with no `.aperio` session died with a lock-path `StateError`, and stored intent without asking | consent via `confirm_initialization()` (the sanctioned first mutation) before `record_intent`; decline leaves the workspace untouched | 3 tests; non-TTY run leaves the dir unchanged |
+| R02 | `record_approval()` without a fingerprint authorized any install plan — a real bypass of A13 | `execute_install` requires a bound fingerprint and refuses a legacy unbound approval with a re-approve message; CLI records the reviewed fingerprint | 4 tests: legacy unbound, bound match, tampered, CLI binding |
+| R03 | Task-size gate ran only when a goal had no tasks; one or many oversized tasks, `plan-create`, `plan-approve`, and dispatch were all unguarded | `assess_task_boundeness` + `assess_plan_boundeness` wired into goal assessment, `validate_plan_input`, `approve_plan`, dispatch eligibility | 10 tests over all five paths plus the backward-compatibility cases |
 
 ## M. Security limitations and remaining risks
 
@@ -263,7 +274,7 @@ documented limitations in M. The rc2 build is **not** claimed production-ready.
 | --- | --- | --- |
 | G01 Repo state preserved | PASS | §A |
 | G02 High/critical defects fixed | PASS | §B, §D |
-| G03 Unit tests pass | PASS | 1,637 |
+| G03 Unit tests pass | PASS | 1,654 (4 interpreters) |
 | G04 Integration tests pass | PASS | e2e/onboarding suites green |
 | G05 Real onboarding journey works | PASS | §K, PTY wizard |
 | G06 Atomic execution policy enforceable | PASS | §C A05 |
