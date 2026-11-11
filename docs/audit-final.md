@@ -19,7 +19,7 @@ a prior report. Where something could not be checked, it is marked
 | --- | --- |
 | Base SHA | `9773ba4cb213a2358c970c5013627b2d87bb2026` |
 | Branch | `audit/1.2-final-hardening` |
-| Base → HEAD | 31 files, +3035 / −974; commits are purely additive (count: `git rev-list --count 9773ba4..HEAD`) |
+| Base → HEAD | 31 files, +3046 / −974; commits are purely additive (count: `git rev-list --count 9773ba4..HEAD`) |
 | Audited source SHA (README pin target) | `f04232d` — code + tests, all suites green |
 | Code after the audited SHA | docs-only commits; no executable change since `f04232d` |
 | Pre-existing work | preserved; no reset, clean, force-push, or branch deletion |
