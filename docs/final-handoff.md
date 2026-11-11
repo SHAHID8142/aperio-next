@@ -106,7 +106,14 @@ additional CLI tests for read-only routing and resume behavior.
 - **Python 3.11/3.13, Windows:** declared supported, not installed/
   tested on this machine.
 
-## E. Open risks
+## E. Independent review status
+
+Automated third-party review of this branch ran eight rounds. Every finding
+was reproduced first, fixed with a regression test that failed before the fix,
+and re-checked by the following round. The final round, against the audited
+code commit `5715380`, reported **no findings**.
+
+## F. Open risks
 
 | Risk | Severity | Evidence | Impact | Next action |
 | --- | --- | --- | --- | --- |
@@ -118,7 +125,7 @@ additional CLI tests for read-only routing and resume behavior.
 | 3.11/3.13/Windows untested | low-medium | release notes, install.md | Unknown platform behavior | Extend the verification matrix when environments exist |
 | Loopback UI token visible to same-machine processes | low | limitations.md | Local-only exposure | Run only on trusted machines; CLI is the alternative |
 
-## F. Release verdict
+## G. Release verdict
 
 **RELEASE CANDIDATE — EXTERNAL VALIDATION PENDING.**
 
