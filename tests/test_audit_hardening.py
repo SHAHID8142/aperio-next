@@ -285,19 +285,19 @@ def test_a05_large_undecomposed_goal_is_blocked(objective):
 
 
 def test_a05_hero_section_alone_is_blocked():
-    # "Hero Section" is feature-scale ("section" refers to a page section, but
-    # the word 'website' appears in the wider goal text often). We assert the
-    # assessment is stable: either it is blocked, or it is allowed only when
-    # the text carries no large-scope signal.
+    # A whole Hero Section is feature-scale: layout, styling, states and
+    # responsive behaviour. It is not one atomic implementation task.
     verdict = assess_goal_boundedness(_goal("Build a Hero Section"))
-    assert verdict.verdict in {"allow", "block"}
+    assert verdict.blocked is True
+    assert any("hero section" in s for s in verdict.signals)
 
 
 def test_a05_large_goal_with_good_decomposition_is_allowed():
     tasks = [
         {"id": "T-1", "title": "Scaffold site", "action": "create pages",
          "completion_criteria": ["build passes"], "deliverables": ["dist"]},
-        {"id": "T-2", "title": "Add hero", "action": "add hero section",
+        {"id": "T-2", "title": "Add the hero heading copy",
+         "action": "add hero heading copy",
          "completion_criteria": ["screenshot recorded"], "deliverables": ["hero"]},
     ]
     result = assess_goal_boundedness(_goal("Build an entire website", tasks))
@@ -924,3 +924,224 @@ def test_dispatch_still_works_for_valid_plan(tmp_path):
     record = dispatch_task(apdir, "TASK-001", adapter_id="manual",
                            config=None, authorize_exec=False)
     assert record["status"] == "awaiting-external"
+
+
+# ---------------------------------------------------------------------------
+# Wizard must never mutate without explicit approval — including when the
+# approval callback is missing entirely (fail closed, never fail open).
+# ---------------------------------------------------------------------------
+
+def test_wizard_without_callback_does_not_init_new_project(tmp_path):
+    from aperio import wizard
+
+    proj = tmp_path / "empty"
+    proj.mkdir()
+    result = wizard.run(
+        str(proj),
+        stdin=_TTY("1\n"),      # "Yes, initialize" at the initialization prompt
+        stdout=_TTY(""),
+        request_approval=None,  # unattended caller: no way to approve
+    )
+    assert result.cancelled is True
+    assert result.final_action == "declined"
+    assert not (proj / ".aperio").exists()
+    assert sorted(p.name for p in proj.iterdir()) == []
+
+
+def test_wizard_without_callback_does_not_touch_existing_project(tmp_path):
+    from aperio import wizard
+
+    proj = _make_existing_project(tmp_path)
+    before = sorted(p.name for p in proj.iterdir())
+    result = wizard.run(
+        str(proj),
+        stdin=_TTY("1\ny\n"),   # intent, then an attempt to consent
+        stdout=_TTY(""),
+        request_approval=None,
+    )
+    assert result.cancelled is True
+    assert result.final_action == "declined"
+    assert not (proj / ".aperio").exists()
+    assert sorted(p.name for p in proj.iterdir()) == before
+
+
+def test_wizard_without_callback_never_creates_session(tmp_path):
+    from aperio import wizard
+    from aperio.onboarding_session import session_exists
+
+    proj = _make_existing_project(tmp_path)
+    wizard.run(str(proj), stdin=_TTY("1\ny\n"), stdout=_TTY(""),
+               request_approval=None)
+    assert session_exists(proj / ".aperio") is False
+
+
+def test_wizard_callback_approval_still_initializes(tmp_path):
+    """The fail-closed default must not break the interactive consent path."""
+    from aperio import wizard
+
+    proj = tmp_path / "empty"
+    proj.mkdir()
+    result = wizard.run(
+        str(proj),
+        stdin=_TTY("1\n"),
+        stdout=_TTY(""),
+        request_approval=lambda message: True,
+    )
+    assert (proj / ".aperio").exists()
+    assert result.steps >= 1
+    assert (proj / ".aperio" / "onboarding" / "session.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# Atomic execution: a whole section (e.g. an entire Hero Section) is not one
+# task, on every path. Legitimate small tasks must keep passing untouched.
+# ---------------------------------------------------------------------------
+
+def _hero_task():
+    return {
+        "id": "TASK-001", "title": "Implement the Hero Section",
+        "objective": "Implement the Hero Section",
+        "deliverables": ["hero"], "acceptance_criteria": ["hero renders"],
+        "depends_on": [],
+    }
+
+
+def _hero_breadth_task():
+    """One task covering a whole section: markup, styling, states and tests."""
+    return {
+        "id": "TASK-001", "title": "Build the Hero Section",
+        "objective": "markup, styling, animation and tests for the hero",
+        "deliverables": ["hero.tsx", "hero.css", "hero.test.tsx"],
+        "acceptance_criteria": ["tests pass"],
+        "depends_on": [],
+    }
+
+
+def test_task_level_hero_section_is_oversized():
+    from aperio.bounded_tasks import assess_task_boundeness
+
+    oversized, signals = assess_task_boundeness(_hero_task())
+    assert oversized is True
+    assert any("whole-feature" in s or "areas" in s for s in signals)
+
+    oversized, signals = assess_task_boundeness(_hero_breadth_task())
+    assert oversized is True
+
+
+def test_task_level_small_slices_stay_valid():
+    from aperio.bounded_tasks import assess_task_boundeness
+
+    allowed = [
+        {"title": "Build the Hero Section markup", "objective": "Hero Section",
+         "deliverables": ["hero component"]},
+        {"title": "Style the Hero responsive layout", "objective": "Hero responsive",
+         "deliverables": ["styles"]},
+        {"title": "Add the hero heading copy", "action": "add hero heading copy",
+         "deliverables": ["copy"]},
+        {"title": "Fix a typo in the README", "action": "Fix a typo"},
+        {"title": "Update a docstring in cli.py", "action": "Update a docstring"},
+        {"title": "Add an export button to the billing dashboard",
+         "action": "Add an export button to the billing dashboard"},
+        {"title": "Build the frontend", "action": "Implement the pages"},
+        {"title": "Configure the CMS", "action": "Model content and publishing"},
+    ]
+    for task in allowed:
+        oversized, signals = assess_task_boundeness(task)
+        assert oversized is False, f"{task} was wrongly flagged: {signals}"
+
+
+# --- direct plan-create ----------------------------------------------------
+
+def test_plan_create_rejects_hero_section_as_one_task():
+    from aperio.planmodel import validate_plan_input
+
+    with pytest.raises(ValidationError):
+        validate_plan_input(_valid_plan([_hero_task()]))
+
+
+def test_plan_create_rejects_hero_section_spanning_many_layers():
+    from aperio.planmodel import validate_plan_input
+
+    with pytest.raises(ValidationError):
+        validate_plan_input(_valid_plan([_hero_breadth_task()]))
+
+
+def test_plan_create_accepts_a_bounded_hero_slice(tmp_path):
+    from aperio.planstore import create_plan
+    from aperio.project import init_project
+
+    init_project(str(tmp_path))
+    plan = {
+        "objective": "Ship the hero section in slices",
+        "expected_outcome": "Hero renders",
+        "scope": ["hero"], "exclusions": [], "assumptions": [], "risks": [],
+        "strategy": "slices", "acceptance_criteria": ["hero renders"],
+        "verification_strategy": "visual check",
+        "tasks": [{
+            "id": "TASK-001", "title": "Build the Hero Section markup",
+            "objective": "Hero Section", "deliverables": ["hero component"],
+            "acceptance_criteria": ["renders"], "depends_on": [],
+        }],
+    }
+    document = create_plan(tmp_path / ".aperio", plan)
+    assert document["tasks"][0]["id"] == "TASK-001"
+
+
+# --- direct plan-approve ---------------------------------------------------
+
+def test_plan_approve_refuses_hero_section_plan(tmp_path):
+    import json
+
+    from aperio.planstore import approve_plan, create_plan
+    from aperio.project import init_project
+
+    init_project(str(tmp_path))
+    apdir = tmp_path / ".aperio"
+    create_plan(apdir, _valid_plan())
+
+    plan_path = apdir / "plan.json"
+    document = json.loads(plan_path.read_text(encoding="utf-8"))
+    document["tasks"][0]["title"] = "Implement the Hero Section"
+    document["tasks"][0]["objective"] = "Implement the Hero Section"
+    document["tasks"][0]["deliverables"] = ["hero"]
+    document["tasks"][0]["acceptance_criteria"] = ["hero renders"]
+    plan_path.write_text(json.dumps(document, indent=2), encoding="utf-8")
+
+    with pytest.raises(StateError):
+        approve_plan(apdir)
+    assert json.loads(plan_path.read_text(encoding="utf-8"))["approval"]["status"] != "approved"
+
+
+# --- execution eligibility -------------------------------------------------
+
+def test_dispatch_refuses_hero_section_plan(tmp_path):
+    import json
+
+    from aperio.planstore import approve_plan, create_plan
+    from aperio.project import init_project
+    from aperio.runtime import dispatch_task
+
+    init_project(str(tmp_path))
+    apdir = tmp_path / ".aperio"
+    create_plan(apdir, _valid_plan())
+    approve_plan(apdir)
+
+    plan_path = apdir / "plan.json"
+    document = json.loads(plan_path.read_text(encoding="utf-8"))
+    document["tasks"][0]["title"] = "Implement the Hero Section"
+    document["tasks"][0]["objective"] = "Implement the Hero Section"
+    document["tasks"][0]["deliverables"] = ["hero"]
+    document["tasks"][0]["acceptance_criteria"] = ["hero renders"]
+    plan_path.write_text(json.dumps(document, indent=2), encoding="utf-8")
+
+    with pytest.raises(StateError, match="execution refused"):
+        dispatch_task(apdir, "TASK-001", adapter_id="manual", config=None,
+                      authorize_exec=False)
+    assert (apdir / "executions.json").exists() is False
+
+
+def test_goal_with_one_oversized_hero_task_is_blocked():
+    from aperio.bounded_tasks import assess_goal_boundedness
+
+    goal = _goal_with_tasks([_declared_task("t1", "Implement the Hero Section")])
+    assert assess_goal_boundedness(goal).blocked is True

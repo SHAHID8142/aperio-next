@@ -263,6 +263,74 @@ _COMPOUND_PREFIX_RE = re.compile(
 )
 
 
+#: Breadth markers: "the whole X", "an entire X" describe a project or a
+#: feature-level unit, never one atomic task.
+_SCOPE_BREADTH_MARKERS = (
+    "entire", "whole", "complete", "full", "end-to-end", "end to end",
+    "from scratch",
+)
+
+#: Section/feature units. "hero section" is feature-scale: it is a UI region
+#: with layout, styling, states and responsive behaviour, not one unit of work.
+_FEATURE_UNITS = (
+    "hero section", "hero", "landing page", "homepage", "home page",
+    "checkout flow", "checkout", "shopping cart", "cart", "dashboard",
+    "admin panel", "admin dashboard", "authentication", "auth flow", "login",
+    "signup", "onboarding flow", "onboarding", "pricing page", "pricing",
+    "gallery", "navbar", "navigation bar", "navigation", "footer", "sidebar",
+    "search page", "settings page", "profile page", "blog", "payments",
+    "payment flow", "cms", "section", "module", "screen", "flow",
+)
+
+#: Distinct implementation layers. A task that touches this many is spanning
+#: a whole feature rather than doing one bounded piece of work.
+_LAYER_TERMS = (
+    "markup", "html", "css", "style", "styling", "layout", "responsive",
+    "animation", "transition", "state management", "store", "api", "endpoint",
+    "database", "schema", "migration", "auth", "accessibility", "i18n",
+    "forms", "validation", "error handling", "loading state", "tests",
+    "unit test", "integration test",
+)
+
+#: Words that narrow a feature unit to a genuinely atomic slice. Their
+#: presence means "part of X", which is exactly what we want to allow.
+_SLICE_QUALIFIERS = (
+    "markup", "component", "snippet", "copy", "text", "wording", "label",
+    "button", "typo", "docstring", "comment", "tooltip", "icon", "link",
+    "one", "first", "small", "single", "tweak", "fix", "portion", "part of",
+    "slice", "heading", "image", "spacing", "color", "colour", "placeholder",
+    "layout", "responsive", "style", "styles", "styling", "css", "markup",
+    "api", "endpoint", "backend", "frontend", "scaffold",
+)
+
+#: Verbs that, followed by a bare feature unit, mean "build the whole thing".
+_FEATURE_VERBS = (
+    "implement", "build", "create", "develop", "deliver", "make", "design",
+    "style", "ship", "produce", "add", "write",
+)
+
+#: Layers grouped into areas. Touching three *areas* means the task is a whole
+#: feature. Touching three layers inside one area (markup + layout + responsive
+#: styling) is still one bounded presentation change.
+_LAYER_AREAS = {
+    "presentation": ("markup", "html", "css", "style", "styling", "layout",
+                     "responsive", "animation", "transition", "accessibility"),
+    "logic": ("state management", "store", "forms", "validation",
+              "error handling", "loading state"),
+    "backend": ("api", "endpoint", "database", "schema", "migration", "auth"),
+    "testing": ("tests", "unit test", "integration test"),
+}
+
+_LAYER_AREA_LIMIT = 3
+
+_BREADTH_MARKER_RE = re.compile(
+    r"\b(?:" + "|".join(m.replace("-", r"\-") for m in _SCOPE_BREADTH_MARKERS) + r")\b"
+)
+_FEATURE_VERB_RE = re.compile(
+    r"\b(?:" + "|".join(_FEATURE_VERBS) + r")\b"
+)
+
+
 def _task_text(task: dict) -> str:
     parts = [str(task.get("title") or ""), str(task.get("action") or "")]
     parts.append(str(task.get("objective") or ""))
@@ -289,6 +357,62 @@ def assess_task_boundeness(task: dict) -> tuple[bool, list[str]]:
                 f"task describes a whole project ({match.group(0).strip()} … {hit[0]})"
             )
             break
+
+    lowered = text.lower()
+
+    # A breadth marker in front of a section/feature unit is a feature-level
+    # task: "an entire Hero Section", "the whole checkout flow".
+    for match in _BREADTH_MARKER_RE.finditer(lowered):
+        window = lowered[match.end(): match.end() + 48]
+        hit = _mentions(window, _FEATURE_UNITS)
+        if hit:
+            signals.append(
+                f"task claims a whole feature ({match.group(0).strip()} … {hit[0]}); "
+                "split it into bounded pieces"
+            )
+            break
+
+    # Spanning several implementation layers at once is a whole feature even
+    # without the word "entire": markup + styling + animation + tests for one
+    # section is the section, not a task.
+    areas = sorted({
+        area for area, terms in _LAYER_AREAS.items()
+        if _mentions(lowered, terms)
+    })
+    feature_hit = _mentions(lowered, _FEATURE_UNITS)
+    # A named feature unit spread across several areas (markup + state + tests)
+    # is that whole feature. Layers inside one area stay a bounded change.
+    # One area is one bounded change. Three areas is a whole feature. When the
+    # task explicitly names the feature it is building, two areas (e.g. its
+    # markup and its tests) already mean the whole feature.
+    limit = 2 if feature_hit else _LAYER_AREA_LIMIT
+    if len(areas) >= limit:
+        where = f" for {feature_hit[0]}" if feature_hit else ""
+        signals.append(
+            f"task spans {len(areas)} implementation areas "
+            f"({', '.join(areas)}){where}; split it by area"
+        )
+
+    # A bare "<verb> the <feature unit>" with no narrowing slice qualifier is
+    # "implement the Hero Section" — the whole feature as one task.
+    # Slice qualifiers count only where scope is *declared* (title/objective/
+    # action). A leftover deliverable must not launder a whole-section claim:
+    # "Implement the Hero Section" stays oversized even if some stale task
+    # field still says "component".
+    declared = " ".join(
+        str(task.get(key) or "") for key in ("title", "objective", "action")
+    ).lower()
+    has_slice = bool(_mentions(declared, _SLICE_QUALIFIERS))
+    if not has_slice:
+        for match in _FEATURE_VERB_RE.finditer(lowered):
+            window = lowered[match.end(): match.end() + 40]
+            hit = _mentions(window, _FEATURE_UNITS)
+            if hit:
+                signals.append(
+                    f"task is a whole-feature unit ({match.group(0).strip()} … "
+                    f"{hit[0]}) with no narrower slice; split it"
+                )
+                break
 
     objective = str(task.get("objective") or task.get("action") or "")
     if len(objective) > MAX_ATOMIC_TASK_CHARS:
@@ -332,10 +456,10 @@ def assess_plan_boundeness(plan: dict) -> BoundedTaskAssessment:
         return BoundedTaskAssessment(
             verdict="block",
             reason=(
-                "the plan contains task(s) that describe a whole project rather "
-                "than a bounded unit of work. Split each into small, "
-                "independently verifiable tasks before creating or approving "
-                "the plan."
+                "the plan contains task(s) that describe a whole project or a "
+                "whole feature rather than a bounded unit of work. Split each "
+                "into small, independently verifiable tasks before creating or "
+                "approving the plan."
             ),
             signals=oversized,
             inferred_scale="large",

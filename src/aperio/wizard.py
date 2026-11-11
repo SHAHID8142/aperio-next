@@ -69,6 +69,21 @@ class WizardResult:
         }
 
 
+def _consent_granted(request_approval, message: str) -> bool:
+    """Whether the operator explicitly approved a first mutation.
+
+    Fail closed: with no approval callback there is no way to obtain consent,
+    so the answer is *no*. A callback that raises or returns a falsy value is
+    also a refusal — an error must never be read as permission.
+    """
+    if request_approval is None:
+        return False
+    try:
+        return bool(request_approval(message))
+    except Exception:  # noqa: BLE001 - a broken prompt is not approval
+        return False
+
+
 def _require_tty(streams) -> None:
     stdin, stdout = streams
     if not getattr(stdin, "isatty", lambda: False)():
@@ -151,8 +166,9 @@ def run(
 
     ``request_approval`` is called with a consent message and must return
     True to proceed with the first mutation (initialization). When omitted the
-    wizard refuses to initialize, so no unattended caller can mutate by
-    accident.
+    wizard refuses to initialize: a missing callback is treated as *no*
+    approval (fail closed), so no unattended caller can mutate an existing or
+    new project by accident.
     """
     import sys
 
@@ -190,16 +206,15 @@ def run(
                 result.cancelled = True
                 result.final_action = "declined"
                 return result
-            if request_approval is not None:
-                consent = (
-                    "Initialize this project now? This creates .aperio/ "
-                    "scaffolding only; no other files are touched."
-                )
-                if not request_approval(consent):
-                    prompter.say("Approval not given; nothing was changed.")
-                    result.cancelled = True
-                    result.final_action = "declined"
-                    return result
+            if not _consent_granted(
+                request_approval,
+                "Initialize this project now? This creates .aperio/ "
+                "scaffolding only; no other files are touched.",
+            ):
+                prompter.say("Approval not given; nothing was changed.")
+                result.cancelled = True
+                result.final_action = "declined"
+                return result
             onboarding.confirm_initialization(raw_path)
             result.steps += 1
             continue
@@ -222,8 +237,9 @@ def run(
             if not session_exists(apdir):
                 prompter.say("  Aperio needs to create its own .aperio/ folder here.")
                 prompter.say("  It contains only Aperio's notes; existing files are never overwritten.")
-                if request_approval is not None and not request_approval(
-                    "Create Aperio's .aperio/ scaffolding in this existing project?"
+                if not _consent_granted(
+                    request_approval,
+                    "Create Aperio's .aperio/ scaffolding in this existing project?",
                 ):
                     prompter.say("Approval not given; nothing was changed.")
                     result.cancelled = True
