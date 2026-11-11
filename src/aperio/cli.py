@@ -5529,11 +5529,6 @@ def _cmd_onboarding_start(args) -> None:
     _emit_onboarding(_ob_start(_onboarding_workspace(args)), args.as_json)
 
 
-def _cmd_next(args) -> None:
-    """Canonical read-only route through the onboarding facade."""
-    _cmd_onboarding_start(args)
-
-
 def _cmd_onboarding_confirm_init(args) -> None:
     if not args.approve:
         doc = {
@@ -6078,7 +6073,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "review-status":
             _cmd_review_status(args)
         elif args.command == "next":
-            _cmd_next(args)
+            _cmd_onboarding_start(args)
         elif args.command == "onboarding-start":
             _cmd_onboarding_start(args)
         elif args.command == "onboarding-confirm-init":
