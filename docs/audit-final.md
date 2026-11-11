@@ -19,7 +19,7 @@ a prior report. Where something could not be checked, it is marked
 | --- | --- |
 | Base SHA | `9773ba4cb213a2358c970c5013627b2d87bb2026` |
 | Branch | `audit/1.2-final-hardening` |
-| Base → HEAD | 18 commits, 31 files, +3035 / −974 |
+| Base → HEAD | 31 files, +3035 / −974; commits are purely additive (count: `git rev-list --count 9773ba4..HEAD`) |
 | Audited source SHA (README pin target) | `f04232d` — code + tests, all suites green |
 | Code after the audited SHA | docs-only commits; no executable change since `f04232d` |
 | Pre-existing work | preserved; no reset, clean, force-push, or branch deletion |
@@ -299,8 +299,8 @@ with hosts, and the code and docs say so. It is not marketed as done.
 
 ## Q. Branch and commits
 
-Branch `audit/1.2-final-hardening`, 18 commits on `9773ba4`. The last commits
-are the final remediation, then documentation-only updates:
+Branch `audit/1.2-final-hardening`: every commit is additive on `9773ba4`
+(no reset, amend of shared history, or force-push). Highlights, newest first:
 
 ```
 docs-only  README re-pin + audit/release-notes/handoff totals (no code change)
