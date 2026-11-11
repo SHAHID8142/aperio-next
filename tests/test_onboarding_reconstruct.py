@@ -196,21 +196,19 @@ def test_aperio_plan_tasks_collected(project_dir):
         "acceptance_criteria": ["all tests pass"],
         "tasks": [
             {
-                "id": "T1",
+                "id": "TASK-001",
                 "title": "Scaffold the app",
+                "objective": "Create the runnable application scaffold",
                 "deliverables": ["scaffold"],
                 "acceptance_criteria": ["runs"],
                 "depends_on": [],
             }
         ],
     }
-    try:
-        create_plan(project_dir / ".aperio", plan_content)
-    except Exception as exc:  # schema shape differs; keep the test honest
-        pytest.skip(f"planstore shape changed: {exc}")
+    create_plan(project_dir / ".aperio", plan_content)
     result = reconstruct_workspace(str(project_dir))
     ids = [t.get("id") for t in result.aperio_plan_tasks]
-    assert "T1" in ids
+    assert "TASK-001" in ids
 
 
 def test_to_dict_json_safe(ws):
