@@ -40,8 +40,12 @@ Correctness and security fixes:
 - **Whole sections are not atomic:** an entire Hero Section (or any feature
   unit spanning several implementation areas) is refused as one task, while
   bounded slices — markup-only, styling-only, a copy change — stay valid.
+- **Bounded subprocess drain:** a descendant that keeps a pipe open can no
+  longer hold a call past its deadline (`drain_grace_seconds`, `drain_stalled`).
+- **Wizard `/back` re-prompts:** going back withdraws the previous answer
+  instead of overwriting it with a placeholder.
 
-Verification: **1,666 tests** pass on CPython 3.11, 3.12, 3.13 and 3.14
+Verification: **1,670 tests** pass on CPython 3.11, 3.12, 3.13 and 3.14
 (macOS arm64). GitHub-hosted CI still has not executed (account billing lock);
 Windows and Linux remain UNVERIFIED by this audit.
 

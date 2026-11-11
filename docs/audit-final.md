@@ -20,8 +20,8 @@ a prior report. Where something could not be checked, it is marked
 | Base SHA | `9773ba4cb213a2358c970c5013627b2d87bb2026` |
 | Branch | `audit/1.2-final-hardening` |
 | Base → HEAD | 31 files, +3437 / −974; commits are purely additive (count: `git rev-list --count 9773ba4..HEAD`) |
-| Audited source SHA (README pin target) | `4575497` — code + tests, all suites green |
-| Code after the audited SHA | docs-only commits; no executable change since `4575497` |
+| Audited source SHA (README pin target) | `66ed17f` — code + tests, all suites green |
+| Code after the audited SHA | docs-only commits; no executable change since `66ed17f` |
 | Pre-existing work | preserved; no reset, clean, force-push, or branch deletion |
 | Untracked at start | `audit-inputs/` (owner-provided reference material) |
 
@@ -53,6 +53,8 @@ onboarding facade; `git log` shows the integration commits).
 | R03 | **HIGH** | Task-size gate applied only to tasks-less goals; one/many oversized tasks, direct plan-create, plan-approve and dispatch all bypassed it | **FIXED** |
 | R04 | **HIGH** | Wizard consent failed *open*: with no approval callback it initialized a new project and created `.aperio/` in an existing one | **FIXED (fail closed)** |
 | R05 | **HIGH** | Atomicity rule only knew whole-*project* keywords, so a whole section ("Implement the Hero Section") passed as one task | **FIXED** |
+| R06 | **HIGH** | `run_captured` could hang far past its deadline: a descendant holding the pipes kept the readers blocked, then `stream.close()` waited on them (9.0s for a 0.2s timeout) | **FIXED (drain deadline)** |
+| R07 | **MEDIUM** | Wizard `/back` overwrote the previous genuine answer with `Not sure yet` and never re-offered the question | **FIXED (`withdraw`)** |
 
 ## C. Reproduction and root cause (key items)
 
@@ -113,18 +115,18 @@ captures, zero failures**, and three consecutive clean full-suite runs.
 
 | File | Change |
 | --- | --- |
-| `src/aperio/safeproc.py` | **new** — bounded capture, redaction, cross-platform stop, bounded reads |
+| `src/aperio/safeproc.py` | **new** — bounded capture, redaction, cross-platform stop, bounded reads; R06 deadline-bounded drain |
 | `src/aperio/bounded_tasks.py` | **new** — A05 scale/decomposition assessment; R03/R05 task-, plan- and section-level atomicity |
 | `src/aperio/wizard.py` | **new** — A06 opt-in interactive wizard |
 | `src/aperio/onboarding_tools.py` | A01/A03/A04/A08/A13 — safe run, all-prereqs, redaction, fingerprint |
-| `src/aperio/onboarding_session.py` | A13 — fingerprint-bound `record_approval`, `approved_plan_fingerprint` |
+| `src/aperio/onboarding_session.py` | A13 — fingerprint-bound `record_approval`, `approved_plan_fingerprint`; R07 `withdraw_answer` |
 | `src/aperio/onboarding_discovery.py` | A07 — incremental scandir |
 | `src/aperio/onboarding_reconstruct.py` | A07 — bounded byte read |
 | `src/aperio/planbridge.py` | A05 — gate at the bridge |
 | `src/aperio/planmodel.py` | R03 — task-size check in `validate_plan_input` (create/revise) |
 | `src/aperio/planstore.py` | R03 — task-size check in `approve_plan` |
 | `src/aperio/runtime.py` | R03 — task-size check in dispatch eligibility |
-| `src/aperio/wizard.py` | R01/R04 — init consent; `_consent_granted` fails closed when the callback is missing or raises |
+| `src/aperio/wizard.py` | R01/R04 — init consent; `_consent_granted` fails closed when the callback is missing or raises; R07 `/back` withdraws and re-prompts |
 | `src/aperio/cli.py` | R02 — record the reviewed plan fingerprint, not a bare scope |
 | `src/aperio/recovery.py` | A13r — task-level ceiling |
 | `src/aperio/hostcompat.py` | A10 — six verification dimensions |
@@ -146,17 +148,18 @@ captures, zero failures**, and three consecutive clean full-suite runs.
 | Hardening tests before the final remediation | 1,637 total |
 | New regression tests, first remediation | 17 (wizard ×3, install approval ×4, task-size ×10) |
 | New regression tests, second remediation | 12 (wizard fail-closed ×4, section atomicity ×8) |
+| New regression tests, Codex review round | 4 (`/back` ×3, drain deadline ×1) |
 | Tests updated for the new policy | 3 (`test_planbridge_priority`, `test_onboarding_tools`, hero A05 fixtures) |
-| **Final full suite** | **1,666 passed, 0 skipped** |
+| **Final full suite** | **1,670 passed, 0 skipped** |
 
 Per-interpreter full-suite results (macOS arm64):
 
 | Python | Result |
 | --- | --- |
-| 3.11 | 1,666 passed |
-| 3.12 | 1,666 passed |
-| 3.13 | 1,666 passed |
-| 3.14 | 1,666 passed |
+| 3.11 | 1,670 passed |
+| 3.12 | 1,670 passed |
+| 3.13 | 1,670 passed |
+| 3.14 | 1,670 passed |
 
 ### Regression reproduction for the final remediation (R01–R03)
 
@@ -191,7 +194,7 @@ Each new test was written before its fix and failed first:
 | Method | Isolation | Verified | Notes |
 | --- | --- | --- | --- |
 | `uv tool install` (wheel) | yes | **yes** | upgrade/uninstall clean; bin on PATH |
-| `uv tool install` (git @ immutable commit) | yes | **yes** | re-verified against the audited commit `4575497` (24-char SHA resolved, `aperio 1.2.0rc2`) |
+| `uv tool install` (git @ immutable commit) | yes | **yes** | re-verified against the audited commit `66ed17f` (24-char SHA resolved, `aperio 1.2.0rc2`) |
 | `pipx install` (wheel) | yes | **yes** | viable fallback |
 | venv + wheel | yes | yes | more manual |
 | PyPI | — | **N/A** | no package published |
@@ -214,11 +217,12 @@ built. Project `.aperio/` data survives upgrade and uninstall (verified).
   install (wheel built from this branch, installed outside the repo).
 - 16 relative links, all resolve. No badges, no screenshots, no placeholders.
 - The documented install command is pinned to the audited code commit
-  `4575497` and was executed successfully from a clean environment with both
+  `66ed17f` and was executed successfully from a clean environment with both
   `uv tool install` and `pipx install`
   (`Installed 1 executable: aperio` → `aperio 1.2.0rc2`), after the second
-  remediation. `aperio next`, and `aperio start` (PTY and non-TTY) were
-  re-run against that install.
+  remediation and the Codex review round. `aperio next`, `aperio --help`, and
+  `aperio start` (non-TTY refusal, directory untouched) were re-run against
+  that install.
   **Owner action after merge:** re-pin the ref to the merge commit or a
   release tag so installs always fetch the audited code.
 
@@ -231,7 +235,8 @@ built. Project `.aperio/` data survives upgrade and uninstall (verified).
 installed artifact. `aperio next` confirmed to leave an empty directory empty.
 
 R01 and R04 were additionally verified end to end in a **real PTY** against
-the pinned install (`4575497`), on an existing project with no `.aperio`:
+the pinned install (`4575497`, and again at `66ed17f`), on an existing project
+with no `.aperio`:
 
 - declining the init prompt printed by the wizard left the directory unchanged
   (no `.aperio`, no crash — previously it raised a lock-path `StateError`);
@@ -257,6 +262,13 @@ Each `host-doctor` row now carries `verification` with six booleans; only
 probe. `cli_launch_tested`, `authenticated_model_call_tested`,
 `functional_handoff_tested`, `native_command_registered_and_tested` are `false`
 until a real run is recorded. No mock executable is described as a live test.
+
+### Codex review round (R06–R07) on PR #1 — what changed and why
+
+| ID | Defect (reproduced first) | Fix | Evidence |
+| --- | --- | --- | --- |
+| R06 | `run_captured` hung for 9.0s against a 0.2s timeout when a grandchild inherited the pipes; readers stayed blocked and `stream.close()` then waited on the reader lock | Drain bounded by `drain_grace_seconds` (default 2s); on a stall the remaining process group is stopped; the stream is closed off-thread with a 1s deadline; `drain_stalled` reports honestly | reproduction now returns in ~1.1s with output intact and no leaked descendants |
+| R07 | `/back` wrote `Not sure yet` over a genuine answer and advanced past the question | `withdraw_answer()` removes the answer (kept in `answer_history` + audit trail) and `withdraw()` clears derived profile/category; the wizard re-prompts | 3 tests: no overwrite, question re-offered, withdraw is scoped |
 
 ### Second remediation (R04–R05) — what changed and why
 
@@ -308,7 +320,7 @@ documented limitations in M. The rc2 build is **not** claimed production-ready.
 | --- | --- | --- |
 | G01 Repo state preserved | PASS | §A |
 | G02 High/critical defects fixed | PASS | §B, §D |
-| G03 Unit tests pass | PASS | 1,666 (4 interpreters) |
+| G03 Unit tests pass | PASS | 1,670 (4 interpreters) |
 | G04 Integration tests pass | PASS | e2e/onboarding suites green |
 | G05 Real onboarding journey works | PASS | §K, PTY wizard |
 | G06 Atomic execution policy enforceable | PASS | §C A05 |
