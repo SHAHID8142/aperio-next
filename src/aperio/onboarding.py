@@ -374,6 +374,26 @@ def revise(apdir: Path, question_id: str, raw_answer: str) -> dict:
     return answer(apdir, question_id, raw_answer)
 
 
+def withdraw(apdir: Path, question_id: str) -> dict:
+    """Undo one answer so the interview offers that question again.
+
+    Used by the interactive wizard's ``/back``. Derived state that the answer
+    produced (the interview profile and project category chosen by
+    ``project.category``) is cleared too, so re-answering retargets it instead
+    of leaving a stale profile behind. The withdrawn answer is kept in the
+    session history.
+    """
+    from aperio.onboarding_session import withdraw_answer
+
+    withdraw_answer(apdir, question_id)
+    if question_id == "project.category":
+        set_interview_profile(apdir, None)
+        set_project_category(apdir, None)
+    session = read_session(apdir)
+    discovery = discover_workspace(session["workspace"])
+    return _next_step(discovery, session)
+
+
 def pause(apdir: Path) -> dict:
     """Pause: state is already durable; returns resume instructions."""
     session = read_session(apdir)

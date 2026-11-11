@@ -386,6 +386,32 @@ def record_answer(
     return update_session(aperio_dir, mutate)
 
 
+def withdraw_answer(aperio_dir: Path, question_id: str) -> dict:
+    """Remove a recorded answer so the interview asks it again.
+
+    This is the ``/back`` primitive: going back must not overwrite a genuine
+    answer with a placeholder. The withdrawn answer is preserved in
+    ``answer_history`` and in the session audit trail, so nothing is lost and
+    the operator's earlier response remains reviewable.
+    """
+    if not isinstance(question_id, str) or not question_id.strip():
+        raise ValidationError("question id must be a non-empty string")
+    if len(question_id) > 128:
+        raise ValidationError("question id exceeds 128 characters")
+
+    def mutate(data: dict) -> dict:
+        answers = data.setdefault("answers", {})
+        previous = answers.pop(question_id, None)
+        if previous is None:
+            return data
+        history = data.setdefault("answer_history", {})
+        history.setdefault(question_id, []).append(previous)
+        _append_history(data, "answer.withdrawn", question_id)
+        return data
+
+    return update_session(aperio_dir, mutate)
+
+
 def record_decision(
     aperio_dir: Path,
     *,

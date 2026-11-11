@@ -278,11 +278,18 @@ def run(
                 raw = prompter.ask(hint)
                 stripped = raw.strip()
                 if stripped == CMD_BACK and previous_question_id:
-                    onboarding.revise(
+                    # /back withdraws the previous answer so the interview
+                    # offers that question again. It must never overwrite a
+                    # genuine answer with a placeholder.
+                    onboarding.withdraw(
                         Path(protocol["workspace"]) / ".aperio",
                         previous_question_id,
-                        "Not sure yet",
                     )
+                    prompter.say(
+                        f"  Going back to the previous question "
+                        f"({previous_question_id})."
+                    )
+                    previous_question_id = None
                     result.steps += 1
                     break
                 if stripped in (CMD_PAUSE, CMD_QUIT):

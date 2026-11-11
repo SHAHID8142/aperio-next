@@ -88,6 +88,14 @@ def tail_bytes(data: bytes, limit: int, *, home: str | None = None) -> str:
     return redact_output(text, home=home)
 
 
+def _close_quietly(stream) -> None:
+    """Close a stream, swallowing the errors a torn-down pipe raises."""
+    try:
+        stream.close()
+    except (OSError, ValueError, AttributeError):
+        pass
+
+
 def stop_process_tree(process: subprocess.Popen, *, force: bool) -> None:
     """Stop a child and, on POSIX, its own process group.
 
@@ -116,6 +124,7 @@ def run_captured(
     *,
     timeout_seconds: float,
     capture_limit: int,
+    drain_grace_seconds: float = 2.0,
     cwd: str | None = None,
     env: dict | None = None,
     home: str | None = None,
@@ -127,9 +136,17 @@ def run_captured(
     stream) are counted but discarded. On timeout the whole process tree is
     terminated and ``timed_out`` is set.
 
-    Returns a dict with: ``returncode``, ``timed_out``, ``stdout``,
-    ``stderr``, ``stdout_bytes``, ``stderr_bytes``, ``truncated``,
-    ``duration``. Text fields are already redacted.
+    Drain is deadline-bounded too: a descendant that inherits the pipes and
+    outlives the direct child keeps the readers blocked, so after
+    ``drain_grace_seconds`` the remaining process group is stopped and the
+    readers are given a last chance to finish. A stream is never closed from
+    the calling thread while a reader is blocked on it (that close would wait
+    on the reader's own lock), and ``drain_stalled`` reports honestly when
+    output could not be drained completely.
+
+    Returns a dict with: ``returncode``, ``timed_out``, ``drain_stalled``,
+    ``stdout``, ``stderr``, ``stdout_bytes``, ``stderr_bytes``,
+    ``truncated``, ``duration``. Text fields are already redacted.
     """
     limit = max(0, int(capture_limit))
     counts = {"stdout": 0, "stderr": 0}
@@ -187,17 +204,29 @@ def run_captured(
         except subprocess.TimeoutExpired:
             pass
 
-    join_deadline = time.monotonic() + 5.0
+    join_deadline = time.monotonic() + max(0.0, float(drain_grace_seconds))
     for thread in threads:
         thread.join(timeout=max(0.0, join_deadline - time.monotonic()))
-    if any(t.is_alive() for t in threads):
-        for stream in (process.stdout, process.stderr):
-            try:
-                stream.close()
-            except (OSError, ValueError, AttributeError):
-                pass
+    drain_stalled = any(t.is_alive() for t in threads)
+    if drain_stalled:
+        # A descendant still holds a pipe open. Stop what remains of the
+        # process group (killpg works on the group id even after the direct
+        # child was reaped) so the readers can reach EOF.
+        stop_process_tree(process, force=True)
+        final_deadline = time.monotonic() + 1.0
         for thread in threads:
-            thread.join(timeout=1.0)
+            thread.join(timeout=max(0.0, final_deadline - time.monotonic()))
+        drain_stalled = any(t.is_alive() for t in threads)
+    for stream in (process.stdout, process.stderr):
+        if stream is None:
+            continue
+        # Closing a buffered stream blocks on the reader's lock while that
+        # reader is blocked in read(); do it off-thread with a deadline so the
+        # caller is never held hostage. The reader threads are daemons, so a
+        # stream that truly cannot be closed cannot outlive the process.
+        closer = threading.Thread(target=_close_quietly, args=(stream,), daemon=True)
+        closer.start()
+        closer.join(timeout=1.0)
 
     duration = round(time.monotonic() - started, 2)
     with lock:
@@ -215,6 +244,7 @@ def run_captured(
             "stdout_bytes": counts["stdout"],
             "stderr_bytes": counts["stderr"],
             "truncated": truncated["stdout"] or truncated["stderr"],
+            "drain_stalled": drain_stalled,
             "duration": duration,
         }
     return result

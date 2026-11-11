@@ -1145,3 +1145,101 @@ def test_goal_with_one_oversized_hero_task_is_blocked():
 
     goal = _goal_with_tasks([_declared_task("t1", "Implement the Hero Section")])
     assert assess_goal_boundedness(goal).blocked is True
+
+
+# ---------------------------------------------------------------------------
+# Codex review finding (P2): wizard /back must re-prompt, not overwrite.
+# ---------------------------------------------------------------------------
+
+def test_wizard_back_does_not_overwrite_the_previous_answer(tmp_path):
+    from aperio import wizard
+    from aperio.onboarding_session import read_session
+
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    result = wizard.run(
+        str(proj),
+        stdin=_TTY("1\nwebsite\n/back\nmobile app\n/quit\n"),
+        stdout=_TTY(""),
+        request_approval=lambda message: True,
+    )
+    answers = read_session(proj / ".aperio").get("answers", {})
+    assert "project.category" in answers
+    # The genuine answer must survive (or be replaced by the operator's own
+    # replacement) — never be silently swapped for a placeholder.
+    assert answers["project.category"]["answer"] != "Not sure yet"
+    assert answers["project.category"]["answer"] in {"website", "mobile app"}
+    assert result.cancelled is True
+
+
+class _RecordingTTY(_TTY):
+    def __init__(self, text=""):
+        super().__init__(text)
+        self.written = []
+
+    def write(self, s):
+        self.written.append(s)
+        return len(s)
+
+
+def test_wizard_back_shows_the_category_question_again(tmp_path):
+    from aperio import wizard
+
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    out = _RecordingTTY("")
+    wizard.run(
+        str(proj),
+        stdin=_TTY("1\nwebsite\n/back\nmobile app\n/quit\n"),
+        stdout=out,
+        request_approval=lambda message: True,
+    )
+    text = "".join(out.written)
+    prompt = "[meta] Which of these best describes this project?"
+    assert text.count(prompt) >= 2, "the previous question was not re-offered"
+    assert "Going back to the previous question" in text
+
+
+def test_withdraw_answer_removes_only_that_answer(tmp_path):
+    from aperio import onboarding
+    from aperio.onboarding_session import read_session
+
+    ws = tmp_path / "p"
+    ws.mkdir()
+    onboarding.confirm_initialization(str(ws))
+    apdir = ws / ".aperio"
+    onboarding.record_intent(apdir, "continue")
+    onboarding.answer(apdir, "project.category", "website")
+    onboarding.answer(apdir, "foundation.goal", "ship a garden site")
+    onboarding.withdraw(apdir, "foundation.goal")
+    answers = read_session(apdir)["answers"]
+    assert "foundation.goal" not in answers
+    assert answers["project.category"]["answer"] == "website"
+
+
+# ---------------------------------------------------------------------------
+# Codex review finding (P2): a descendant holding the pipes must not hang.
+# ---------------------------------------------------------------------------
+
+def test_run_captured_does_not_hang_when_a_descendant_holds_the_pipe(tmp_path):
+    import time
+
+    from aperio.safeproc import run_captured
+
+    script = tmp_path / "spawner.py"
+    script.write_text(
+        "import subprocess, sys\n"
+        "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
+        "print('child done', flush=True)\n",
+        encoding="utf-8",
+    )
+    started = time.monotonic()
+    result = run_captured(
+        [sys.executable, str(script)],
+        timeout_seconds=0.2,
+        capture_limit=65536,
+        drain_grace_seconds=1.0,
+    )
+    elapsed = time.monotonic() - started
+    assert elapsed < 8.0, f"bounded capture hung for {elapsed:.1f}s"
+    assert result["stdout"] == "child done\n"
