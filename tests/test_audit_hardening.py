@@ -435,3 +435,35 @@ def test_a13_task_level_ceiling_blocks_varied_signatures():
         })
     with pytest.raises(StateError, match="task-level retry ceiling"):
         retry_gate(runs, "TASK-001", remediation="another try")
+
+
+# ---------------------------------------------------------------------------
+# A10 — passive probes never masquerade as live verification.
+# ---------------------------------------------------------------------------
+
+def test_a10_no_host_claims_live_verification():
+    from aperio.hostcompat import inspect_hosts
+
+    report = inspect_hosts()
+    for row in report["hosts"]:
+        dims = row["verification"]
+        # A passive doctor can never assert live functional verification.
+        assert dims["authenticated_model_call_tested"] is False
+        assert dims["functional_handoff_tested"] is False
+        assert dims["native_command_registered_and_tested"] is False
+
+
+def test_a10_probed_host_still_reports_passive_only():
+    from aperio.hostcompat import HOST_CATALOG, inspect_hosts
+
+    adapter_id = next(
+        e["adapter_id"] for e in HOST_CATALOG if e["family"] == "provider-cli"
+    )
+    report = inspect_hosts(probes={adapter_id: {
+        "installed": True, "executable": "/usr/bin/fake",
+        "version": "1.0", "missing_flags": [], "missing_controls": [],
+    }})
+    row = next(r for r in report["hosts"] if r.get("executable") == "/usr/bin/fake")
+    assert row["level"] == "cli_verified"          # passive flag check
+    assert row["verification"]["cli_launch_tested"] is False
+    assert row["verification"]["authenticated_model_call_tested"] is False
