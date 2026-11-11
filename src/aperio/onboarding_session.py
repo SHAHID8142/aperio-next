@@ -263,6 +263,18 @@ def update_session(aperio_dir: Path, mutate) -> dict:
     :raises NotInitializedError: when no session exists.
     :raises StateError: on concurrent modification or publish failure.
     """
+    # Fast-fail on a missing session BEFORE touching the lock: without this
+    # a session-less project fails inside acquire_lock with a confusing
+    # "cannot create lock file" PathError instead of the actionable
+    # NotInitializedError (the lock directory only exists once a session
+    # has been created).
+    try:
+        session_path(aperio_dir).stat()
+    except FileNotFoundError:
+        raise NotInitializedError(
+            "no onboarding session in this project; "
+            "start onboarding with 'aperio onboarding-start'"
+        ) from None
     lock = acquire_lock(session_lock_path(aperio_dir), artifact="onboarding session")
     try:
         path = session_path(aperio_dir)

@@ -308,3 +308,14 @@ def test_status_without_session_is_clean_and_actionable(run_cli, ws):
     doc = _json(out)
     assert doc["action_required"] == "none"
     assert "onboarding-start" in doc["prompt"]
+
+
+def test_intent_without_session_is_actionable_not_a_lock_error(run_cli, ws):
+    """Regression: onboarding-intent on a session-less project failed inside
+    acquire_lock with 'cannot create lock file ... No such file or directory'
+    (the onboarding dir does not exist yet). It must be an actionable
+    NotInitializedError instead."""
+    code, out, err = run_cli("onboarding-intent", str(ws), "--choice", "organize")
+    assert code != 0
+    assert "lock file" not in err
+    assert "onboarding-start" in err
