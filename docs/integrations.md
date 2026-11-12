@@ -26,8 +26,10 @@ report separates these dimensions and never collapses them into one
 aperio integrations                    # status (read-only; default action)
 aperio integrations install            # all detected hosts, user scope
 aperio integrations install --host zcode --scope both <project-dir>
+aperio integrations install --scope project --project-instructions <project-dir>
 aperio integrations remove --host zcode
 aperio integrations status --json      # machine-readable matrix
+aperio core-identity --json            # prove which 'aperio' you are running
 ```
 
 `--scope user` (default) writes the host's global location; `--scope
@@ -35,6 +37,19 @@ project` additionally writes the host's workspace location **inside an
 Aperio-managed project only** (`--scope both` does both). Project scope is
 refused outside managed projects: integration files must not be scattered
 into random directories.
+
+`--project-instructions` (project scope only) also writes the Aperio Next
+pointer into the managed project's `AGENTS.md` — inside an owned,
+marker-delimited section that is rewritten in place; every other line of the
+file is preserved byte-for-byte. This is the durable marker that lets a
+**fresh agent session** in that project recognize it as Aperio-managed
+(Codex, Gemini, and other tools read `AGENTS.md` automatically). Remove it
+with `--project-instructions` on the `remove` action, or leave it: its only
+effect is to tell the agent to run the read-only `aperio next` and, if the
+engine is missing, to install it.
+
+The npm installer passes `--project-instructions` automatically when you
+run `aperio-next install --project <dir>`.
 
 ## What is installed per host
 

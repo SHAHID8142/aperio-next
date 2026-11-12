@@ -69,9 +69,11 @@ __all__ = [
     "host_status",
     "install_for_host",
     "install_integrations",
+    "install_project_instructions",
     "managed_asset_body",
     "remove_integrations",
     "remove_for_host",
+    "remove_project_instructions",
     "resolve_engine_path",
 ]
 
@@ -343,20 +345,127 @@ def is_managed_asset(path: Path) -> bool:
 # engine path resolution
 # --------------------------------------------------------------------------
 
-def resolve_engine_path() -> str:
+def _isolated_engine_candidates() -> list[Path]:
+    """Absolute paths to the Aperio Next isolated engine, most specific first.
+
+    The npm installer creates an isolated engine under
+    ``$APERIO_NEXT_HOME`` (default ``~/.aperio-next``) with a shim at
+    ``<root>/bin/aperio`` (``aperio.cmd`` on Windows). That install is the
+    one Aperio Next owns, so it wins over anything on PATH — a legacy
+    ``aperio`` earlier on PATH must never be picked up by our own assets.
+    """
+    roots: list[Path] = []
+    env_root = os.environ.get("APERIO_NEXT_HOME")
+    if env_root:
+        roots.append(Path(env_root))
+    roots.append(Path.home() / ".aperio-next")
+    out: list[Path] = []
+    for root in roots:
+        out.append(root / "bin" / (
+            "aperio.cmd" if os.name == "nt" else "aperio"
+        ))
+    return out
+
+
+def _engine_is_aperio_next(path: str) -> bool:
+    """True when ``path`` runs and reports itself as the aperio-next product.
+
+    Runs ``<path> core-identity --json`` with a short timeout and a bounded
+    read. Any failure (missing, not executable, wrong product, crash, hang)
+    yields False so callers fall through to the next candidate.
+    """
+    import json as _json
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            [path, "core-identity", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if proc.returncode != 0:
+        return False
+    try:
+        record = _json.loads(proc.stdout)
+    except (ValueError, TypeError):
+        return False
+    return isinstance(record, dict) and record.get("product") == "aperio-next"
+
+
+def _quote_for_shell(path: str) -> str:
+    """Quote ``path`` so it survives in a POSIX shell and in prose.
+
+    Paths with spaces or shell metacharacters are single-quoted; a plain
+    path is returned unchanged so generated assets stay readable. Embedded
+    single quotes are escaped POSIX-style (``'\''``).
+    """
+    if path and all(c.isalnum() or c in "-_./\\:@" for c in path):
+        return path
+    return "'" + path.replace("'", "'\\''") + "'"
+
+
+def resolve_engine_path(*, validate: bool = False) -> str:
     """Best-effort absolute path of the installed ``aperio`` CLI.
 
-    Prefers PATH, then the interpreter's own bin directory (a venv/tool
-    install), then the bare name. The result is embedded into skill assets
-    so an agent on a restricted PATH can still call the engine.
+    Resolution order (each candidate validated when ``validate`` is set):
+
+    1. The Aperio Next isolated install (``$APERIO_NEXT_HOME`` or
+       ``~/.aperio-next/bin/aperio``) — the install aperio-next owns. This
+       is preferred so a same-named legacy executable earlier on PATH is
+       never invoked by our own generated assets.
+    2. ``aperio`` on PATH (validated to be the aperio-next product when
+       ``validate`` is set).
+    3. The interpreter's own ``bin/aperio`` sibling (a venv / tool install).
+    4. The bare name ``aperio`` (last resort; the calling agent must be able
+       to resolve it).
+
+    The returned string is shell-quoted when it contains spaces or special
+    characters. A caller that needs a *guaranteed* aperio-next engine (e.g.
+    the installer before writing assets) passes ``validate=True`` so a legacy
+    executable cannot be embedded.
     """
-    found = shutil.which("aperio")
-    if found:
-        return found
-    candidate = Path(sys.executable).with_name("aperio")
-    if candidate.is_file():
-        return str(candidate)
+    candidates: list[str] = []
+    for iso in _isolated_engine_candidates():
+        if iso.is_file():
+            candidates.append(str(iso))
+    on_path = shutil.which("aperio")
+    if on_path:
+        candidates.append(on_path)
+    sibling = Path(sys.executable).with_name(
+        "aperio.exe" if os.name == "nt" else "aperio"
+    )
+    if sibling.is_file():
+        candidates.append(str(sibling))
+
+    for cand in candidates:
+        if not validate or _engine_is_aperio_next(cand):
+            return _quote_for_shell(cand)
+    # Nothing validated: fall back to the bare name so assets still have a
+    # callable token; status/install surface the repair guidance instead.
     return "aperio"
+
+
+def engine_repair_hint(engine_path: str, *, version: str = "") -> str:
+    """Actionable text when a resolved engine is missing or the wrong product."""
+    raw = engine_path.strip("'")
+    if raw == "aperio":
+        return (
+            "No validated Aperio Next engine was found. Run "
+            "`aperio-next install` (or `aperio-next doctor`) to create one "
+            "at ~/.aperio-next/bin/aperio, or add your install's bin dir to "
+            "PATH. Do not rely on a bare `aperio` if a different Aperio is "
+            "also installed."
+        )
+    return (
+        f"The engine path embedded in these assets ({engine_path}) does not "
+        "run as Aperio Next. Re-run `aperio-next install` (or "
+        "`aperio-next update`) to regenerate assets with a validated engine "
+        "path, then re-register with `aperio integrations install`."
+    )
 
 
 # --------------------------------------------------------------------------
@@ -599,19 +708,23 @@ def install_integrations(
     specs = (
         [host_by_id(h) for h in host_ids] if host_ids else list(HOSTS)
     )
-    engine = engine_path or resolve_engine_path()
+    engine = engine_path or resolve_engine_path(validate=True)
+    engine_hint = engine_repair_hint(engine, version=version)
     reports: list[InstallReport] = []
     for spec in specs:
-        reports.append(
-            install_for_host(
-                spec,
-                home=home,
-                engine_path=engine,
-                version=version,
-                project_root=project_root,
-                scope=scope,
-            )
+        report = install_for_host(
+            spec,
+            home=home,
+            engine_path=engine,
+            version=version,
+            project_root=project_root,
+            scope=scope,
         )
+        # If the resolved engine is the bare unvalidated name, surface the
+        # repair guidance on every host that would actually call it.
+        if engine.strip("'\"") == "aperio" and report.installed:
+            report.warnings.append(engine_hint)
+        reports.append(report)
     return reports
 
 
@@ -689,6 +802,7 @@ class StatusRow:
     display: str
     detected: bool
     engine_path: str
+    engine_valid: bool = True
     files: dict[str, str] = field(default_factory=dict)
     invocation: str = ""
     docs: str = ""
@@ -699,6 +813,7 @@ class StatusRow:
             "display": self.display,
             "host_detected": self.detected,
             "engine_path": self.engine_path,
+            "engine_valid": self.engine_valid,
             "files": self.files,
             "invocation": self.invocation,
             "docs": self.docs,
@@ -743,6 +858,7 @@ def host_status(
         display=spec.display,
         detected=detected,
         engine_path=resolve_engine_path(),
+        engine_valid=resolve_engine_path(validate=True) != "aperio",
         files=files,
         invocation=spec.invocation,
         docs=spec.docs,
@@ -759,6 +875,152 @@ def integrations_status(
         host_status(s, home=home, project_root=project_root, scope=scope)
         for s in HOSTS
     ]
+
+
+# --------------------------------------------------------------------------
+# project-instruction pointer (AGENTS.md / CLAUDE.md owned section)
+# --------------------------------------------------------------------------
+
+#: Instruction files agents read automatically in a project. AGENTS.md is the
+#: cross-tool convention (Codex, Gemini, many others); CLAUDE.md is Claude
+#: Code's. aperio writes ONE owned, marker-delimited section into whichever
+#: of these already exists (or AGENTS.md, creating it) — never overwriting
+#: the user's own instructions outside the markers.
+PROJECT_INSTRUCTION_FILES: tuple[str, ...] = ("AGENTS.md", "CLAUDE.md")
+
+_SECTION_BEGIN = "<!-- aperio-next:project-instructions:begin -->"
+_SECTION_END = "<!-- aperio-next:project-instructions:end -->"
+
+
+def _project_pointer_text(engine_path: str, version: str) -> str:
+    body = _load_template("aperio-next-project-instructions.md").substitute(
+        APERIO_CLI=engine_path, VERSION=version
+    ).rstrip()
+    # The template opens with an H1; demote it under the section markers so
+    # the file's own heading structure stays intact.
+    body = body.replace("# Aperio Next project pointer (managed)",
+                        "## Aperio Next project pointer (managed)", 1)
+    return f"{_SECTION_BEGIN}\n{body}\n{_SECTION_END}\n"
+
+
+def _is_owned_section_file(path: Path) -> bool:
+    try:
+        text = path.read_text("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+    return _SECTION_BEGIN in text and _SECTION_END in text
+
+
+def _upsert_section(existing: str, section: str) -> str:
+    """Return ``existing`` with our section replaced/added, all else kept."""
+    if _SECTION_BEGIN in existing and _SECTION_END in existing:
+        pre, rest = existing.split(_SECTION_BEGIN, 1)
+        _mid, post = rest.split(_SECTION_END, 1)
+        # Normalize surrounding blank lines so re-install is byte-stable.
+        return pre.rstrip("\n") + ("\n\n" if pre.strip() else "") + section + (
+            post.lstrip("\n") if post.strip() else ""
+        )
+    if not existing.strip():
+        return section
+    return existing.rstrip("\n") + "\n\n" + section
+
+
+def _strip_section(existing: str) -> str | None:
+    if _SECTION_BEGIN not in existing or _SECTION_END not in existing:
+        return None
+    pre, rest = existing.split(_SECTION_BEGIN, 1)
+    _mid, post = rest.split(_SECTION_END, 1)
+    combined = (pre.rstrip("\n") + ("\n" if post.strip() else "") + post.lstrip("\n"))
+    return combined.strip("\n") + ("\n" if combined.strip() else "")
+
+
+def install_project_instructions(
+    project_root: Path,
+    *,
+    engine_path: str,
+    version: str,
+    files: tuple[str, ...] = (),
+) -> dict:
+    """Write the Aperio Next pointer into a managed project's instruction files.
+
+    Consent-gated by the caller: only invoked for an already Aperio-managed
+    project (``.aperio/`` present) after the user opts in. Writes only the
+    owned, marker-delimited section; every other line is preserved verbatim.
+    Returns a report dict. Never raises for a foreign/symlinked target: the
+    problem is reported so the install summary stays accurate.
+    """
+    require_managed_project(project_root)
+    section = _project_pointer_text(engine_path, version)
+    targets = list(files) if files else ["AGENTS.md"]
+    # Also update CLAUDE.md only when it ALREADY carries our section (so we
+    # never invent a Claude-specific file the user did not have).
+    for name in PROJECT_INSTRUCTION_FILES:
+        if name not in targets and _is_owned_section_file(project_root / name):
+            targets.append(name)
+
+    report = {
+        "written": [],
+        "section_present": [],
+        "errors": [],
+        "files": targets,
+    }
+    for name in targets:
+        path = project_root / name
+        if path.is_symlink():
+            report["errors"].append(
+                f"refusing to write {name}: it is a symlink"
+            )
+            continue
+        try:
+            existing = path.read_text("utf-8") if path.exists() else ""
+        except (OSError, UnicodeDecodeError) as exc:
+            report["errors"].append(f"cannot read {path}: {exc}")
+            continue
+        if path.exists() and section.split("\n", 1)[1][:40] in existing \
+                and _SECTION_BEGIN in existing:
+            # Already up to date (idempotent fast path); still rewrite to
+            # refresh the version line.
+            pass
+        new_text = _upsert_section(existing, section)
+        if new_text == existing:
+            report["section_present"].append(str(path))
+            continue
+        try:
+            _atomic_write(path, new_text, what=f"project instructions {name}")
+        except IntegrationError as exc:
+            report["errors"].append(str(exc))
+        else:
+            report["written"].append(str(path))
+            report["section_present"].append(str(path))
+    return report
+
+
+def remove_project_instructions(project_root: Path) -> dict:
+    """Remove only our owned section from instruction files; keep the rest."""
+    report = {"cleaned": [], "errors": []}
+    for name in PROJECT_INSTRUCTION_FILES:
+        path = project_root / name
+        if not path.exists() or path.is_symlink():
+            continue
+        try:
+            existing = path.read_text("utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            report["errors"].append(f"cannot read {path}: {exc}")
+            continue
+        stripped = _strip_section(existing)
+        if stripped is None:
+            continue
+        try:
+            if stripped.strip():
+                _atomic_write(path, stripped, what=f"project instructions {name}")
+                report["cleaned"].append(str(path))
+            else:
+                # The file was only our section (we had created it): remove it.
+                path.unlink()
+                report["cleaned"].append(f"{path} (removed file we created)")
+        except (IntegrationError, OSError) as exc:
+            report["errors"].append(str(exc))
+    return report
 
 
 def require_managed_project(project_root: Path) -> Path:

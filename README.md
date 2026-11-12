@@ -59,21 +59,33 @@ You do not need to know Python or Git to use Aperio.
 
 ## Installation
 
-**One command** (requires Node 18+ and Python 3.11+; nothing else):
+**Requires:** Node 18+ and Python 3.11+ (macOS, Linux, or Windows).
+
+> **Status: pre-release.** `npx aperio-next install` is the *target* one-line
+> experience but the npm package is **not on the public registry yet**. Do
+> not run it expecting a download — until it is published, use the
+> build-from-source path below. These instructions are verified against the
+> `feat/universal-agent-integration` branch; `main` does not yet contain the
+> npm launcher under `packaging/` or `scripts/`.
+
+### From source (verified today)
+
+The npm launcher, packaging script, and engine all live on the feature
+branch, so clone that branch explicitly:
 
 ```sh
-npx aperio-next install
-```
+# 1. Clone the branch that contains the installer (not main yet).
+git clone --branch feat/universal-agent-integration \
+  https://github.com/SHAHID8142/aperio-next.git
+cd aperio-next
 
-> The npm package is **not published yet** — the command above is the target
-> experience. Until it is published, install from the repository's packed
-> artifact:
->
-> ```sh
-> git clone https://github.com/SHAHID8142/aperio-next.git
-> cd aperio-next && ./scripts/build-npm-package.sh
-> npx ./dist/aperio-next-<version>.tgz install
-> ```
+# 2. Build the self-contained npm package (bundles the Python engine wheel).
+./scripts/build-npm-package.sh          # needs `uv` (or pip) + npm
+
+# 3. Install the freshly packed tarball. Do NOT use a bare `npx aperio-next`:
+#    there is no such published package yet.
+npx ./dist/aperio-next-<version>.tgz install
+```
 
 The installer creates an isolated engine environment in `~/.aperio-next/`,
 installs and verifies the `aperio` CLI, then registers skill assets **only**
@@ -81,15 +93,22 @@ in the documented skills/commands locations of the agents it detects. Files
 it did not create are never touched, undetected hosts are reported as
 pending (never as installed), and the summary prints only verified facts.
 
+> **Only one true engine.** The installer embeds the absolute path of the
+> engine it just verified (`~/.aperio-next/bin/aperio`) into every skill, so
+> a different `aperio` earlier on `PATH` is never invoked. If a legacy
+> Aperio is also installed, that isolation is what keeps them apart.
+
 After installing, `aperio-next doctor` reports engine, runtime, and
 per-host integration health; `aperio-next update` refreshes everything;
 `aperio-next uninstall` removes skills and the engine while **keeping every
 project's `.aperio/` data**.
 
-**Alternative (Python tooling).** If you prefer uv or pipx directly:
+### Direct Python install (alternative)
+
+If you prefer uv or pipx directly (no agent-skill registration):
 
 ```sh
-uv tool install "git+https://github.com/SHAHID8142/aperio-next.git@<REF>"
+uv tool install "git+https://github.com/SHAHID8142/aperio-next.git@feat/universal-agent-integration"
 aperio --version
 ```
 

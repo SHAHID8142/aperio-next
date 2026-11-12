@@ -118,12 +118,24 @@ function readManifest() {
   }
 }
 
-function writeManifest(version) {
+function writeManifest(version, extra = {}) {
   fs.mkdirSync(APERIO_HOME, { recursive: true });
+  const prior = readManifest() || {};
+  // Preserve previously recorded project dirs across install/update; add any
+  // new one so uninstall can later clean project-scope assets for every
+  // project this install touched (never the project's .aperio/ data).
+  const projects = new Set(prior.projects || []);
+  if (extra.project) projects.add(path.resolve(extra.project));
   fs.writeFileSync(
     MANIFEST,
     JSON.stringify(
-      { product: "aperio-next", version, created: new Date().toISOString() },
+      {
+        product: "aperio-next",
+        version,
+        created: prior.created || new Date().toISOString(),
+        updated: new Date().toISOString(),
+        projects: [...projects],
+      },
       null,
       2
     )
@@ -229,20 +241,31 @@ function cmdInstall(argv) {
     fail("--project needs a project directory argument");
   }
   const version = bootstrapEngine({ quiet: false });
-  writeManifest(version.replace(/^aperio\s+/, ""));
+  writeManifest(version.replace(/^aperio\s+/, ""), { project: projectDir });
 
   process.stdout.write("* Registering agent skills (documented host " +
     "locations only; nothing else is touched)...\n");
   const engineArgs = ["integrations", "install", "--json"];
   if (projectScope) {
-    engineArgs.push("--scope", "both", projectDir);
+    // Project scope also writes the durable Aperio Next pointer into the
+    // managed project's AGENTS.md, so a fresh agent session in that project
+    // recognizes it as Aperio-managed without the user re-explaining.
+    engineArgs.push("--scope", "both", "--project-instructions", projectDir);
   }
   const res = engine(engineArgs);
-  if (!res.ok) {
-    process.stderr.write(res.stderr);
+  // The engine exits nonzero when any host reports an error, but still emits
+  // the full JSON report. Parse it in both cases so partial success is shown
+  // accurately; only treat truly unreadable output as a hard failure.
+  let payload = null;
+  try {
+    payload = JSON.parse(res.stdout);
+  } catch {
+    payload = null;
+  }
+  if (!payload || !Array.isArray(payload.results)) {
+    if (res.stderr) process.stderr.write(res.stderr);
     fail("skill registration failed; run 'aperio-next doctor' for details");
   }
-  const payload = JSON.parse(res.stdout);
   const installed = [];
   const skipped = [];
   const errors = [];
@@ -338,9 +361,23 @@ function cmdUpdate() {
   writeManifest(version.replace(/^aperio\s+/, ""));
   process.stdout.write("* Refreshing host skill registrations...\n");
   const res = engine(["integrations", "install", "--json"]);
-  if (!res.ok) {
-    process.stderr.write(res.stderr);
-    fail("skill refresh failed; run 'aperio-next doctor' for details");
+  let payload = null;
+  try {
+    payload = JSON.parse(res.stdout);
+  } catch {
+    payload = null;
+  }
+  if (!res.ok || !payload || !Array.isArray(payload.results)) {
+    if (res.stderr) process.stderr.write(res.stderr);
+    fail("update incomplete: skill refresh failed; run 'aperio-next doctor'");
+  }
+  const errors = [];
+  for (const r of payload.results) {
+    for (const e of r.errors) errors.push(`${r.display}: ${e}`);
+  }
+  if (errors.length) {
+    for (const line of errors) process.stderr.write(`  ! ${line}\n`);
+    fail("update incomplete: one or more hosts reported errors");
   }
   process.stdout.write(
     `Update complete: ${version.replace(/^aperio\s+/, "")}\n`
@@ -358,22 +395,91 @@ function cmdUninstall() {
     return;
   }
   process.stdout.write("* Removing host skill assets (aperio-managed files only)...\n");
+  let removeErrors = [];
+  let engineRan = false;
   if (fs.existsSync(vengineBin())) {
     const res = engine(["integrations", "remove", "--json"]);
-    if (res.ok) {
-      const payload = JSON.parse(res.stdout);
+    engineRan = true;
+    let payload = null;
+    try {
+      payload = JSON.parse(res.stdout);
+    } catch {
+      payload = null;
+    }
+    if (payload && Array.isArray(payload.results)) {
       for (const r of payload.results) {
         for (const p of r.removed) process.stdout.write(`  - ${r.display}: ${p}\n`);
         for (const p of r.kept)
           process.stdout.write(`  = ${r.display}: kept (foreign content): ${p}\n`);
-        for (const e of r.errors)
+        for (const e of r.errors) {
           process.stdout.write(`  ! ${r.display}: ${e}\n`);
+          removeErrors.push(`${r.display}: ${e}`);
+        }
       }
-    } else {
-      process.stdout.write(
-        "  could not run the engine for removal; skill files may remain\n"
-      );
+    } else if (!res.ok) {
+      // Could not parse a report AND the engine exited nonzero: treat as a
+      // removal failure rather than deleting the engine and leaving broken
+      // skill references pointing at a vanished executuable.
+      removeErrors.push(`engine removal failed: ${res.stderr.trim()}`);
     }
+    // Clean project-scope assets for every project this install registered.
+    // This removes project skills and the AGENTS.md pointer only — never the
+    // project's .aperio/ data, which is the durable state.
+    for (const proj of manifest.projects || []) {
+      if (!fs.existsSync(proj) || !fs.existsSync(path.join(proj, ".aperio"))) {
+        continue;
+      }
+      const pr = engine([
+        "integrations", "remove", "--scope", "project",
+        "--project-instructions", "--json", proj,
+      ]);
+      let ppayload = null;
+      try {
+        ppayload = JSON.parse(pr.stdout);
+      } catch {
+        ppayload = null;
+      }
+      if (ppayload && Array.isArray(ppayload.results)) {
+        for (const r of ppayload.results) {
+          for (const p of r.removed)
+            process.stdout.write(`  - ${r.display} (project): ${p}\n`);
+          for (const e of r.errors) {
+            process.stdout.write(`  ! ${r.display} (project): ${e}\n`);
+            removeErrors.push(`${r.display} (project): ${e}`);
+          }
+        }
+        const pi = ppayload.project_instructions;
+        if (pi && pi.errors && pi.errors.length) {
+          for (const e of pi.errors) {
+            process.stdout.write(`  ! project instructions: ${e}\n`);
+            removeErrors.push(`project instructions: ${e}`);
+          }
+        }
+      }
+    }
+  }
+  if (removeErrors.length) {
+    // Keep the engine so registered skills still resolve. Tell the user what
+    // to do; never claim the removal succeeded.
+    process.stderr.write(
+      "\naperio-next: could not remove all host skill assets:\n" +
+        removeErrors.map((e) => `  ! ${e}\n`).join("") +
+        `\nThe engine at ${APERIO_HOME} was KEPT so existing registrations ` +
+        "still resolve. Re-run 'aperio-next uninstall' to retry.\n"
+    );
+    process.exit(1);
+  }
+  if (!engineRan) {
+    process.stdout.write(
+      "  engine executable missing; skipping host asset removal " +
+        "(nothing registered can resolve anyway)\n"
+    );
+  }
+  // Guard the destructive step: only delete APERIO_HOME when it carries our
+  // manifest and looks like our own root.
+  const realHome = fs.realpathSync(APERIO_HOME);
+  if (realHome === path.parse(realHome).root) {
+    fail(`refusing to delete filesystem root ${realHome}`);
   }
   fs.rmSync(APERIO_HOME, { recursive: true, force: true });
   process.stdout.write(
@@ -394,18 +500,42 @@ const COMMANDS = {
   uninstall: cmdUninstall,
 };
 
-const [, , command, ...rest] = process.argv;
-if (!command || command === "help" || command === "--help" || command === "-h") {
-  process.stdout.write(
-    "aperio-next — one-line installer for the Aperio Next engine\n\n" +
-      "Usage:\n" +
-      "  aperio-next install [--project <dir>]   install engine + register agent skills\n" +
-      "  aperio-next doctor                      health report (engine, python, hosts)\n" +
-      "  aperio-next update                      refresh engine + skill assets\n" +
-      "  aperio-next uninstall                   remove skills + engine (project .aperio/ data is kept)\n"
-  );
-  process.exit(command ? 0 : 2);
+// Exposed for the Node test suite (test/launcher.test.js). Harmless at
+// runtime: the CLI branch below only runs when this file is the entry point.
+module.exports = {
+  APERIO_HOME,
+  VENV_DIR,
+  BIN_DIR,
+  MANIFEST,
+  ENGINE_DIR,
+  findPython,
+  pythonCandidates,
+  bundledWheel,
+  vengineBin,
+  venvPython,
+  readManifest,
+  writeManifest,
+  run,
+  COMMANDS,
+  main: (argv) => {
+    const [command, ...rest] = argv;
+    if (!command || command === "help" || command === "--help" || command === "-h") {
+      process.stdout.write(
+        "aperio-next — one-line installer for the Aperio Next engine\n\n" +
+          "Usage:\n" +
+          "  aperio-next install [--project <dir>]   install engine + register agent skills\n" +
+          "  aperio-next doctor                      health report (engine, python, hosts)\n" +
+          "  aperio-next update                      refresh engine + skill assets\n" +
+          "  aperio-next uninstall                   remove skills + engine (project .aperio/ data is kept)\n"
+      );
+      process.exit(command ? 0 : 2);
+    }
+    const fn = COMMANDS[command];
+    if (!fn) fail(`unknown command: ${command} (try: install, doctor, update, uninstall)`);
+    fn(rest);
+  },
+};
+
+if (require.main === module) {
+  module.exports.main(process.argv.slice(2));
 }
-const fn = COMMANDS[command];
-if (!fn) fail(`unknown command: ${command} (try: install, doctor, update, uninstall)`);
-fn(rest);

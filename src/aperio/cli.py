@@ -144,9 +144,12 @@ from aperio.integrations import (
     HOSTS,
     IntegrationError,
     install_integrations,
+    install_project_instructions,
     integrations_status,
     remove_integrations,
+    remove_project_instructions,
     require_managed_project,
+    resolve_engine_path,
 )
 from aperio.handoff import (
     HANDOFF_FIELDS,
@@ -2139,6 +2142,23 @@ def build_parser() -> argparse.ArgumentParser:
     integrations_parser.add_argument(
         "--json", dest="as_json", action="store_true",
         help="emit the report as machine-readable JSON",
+    )
+    integrations_parser.add_argument(
+        "--project-instructions", action="store_true",
+        help="also write the Aperio Next pointer into the managed project's "
+        "AGENTS.md (owned, marker-delimited section; other content is "
+        "preserved). Consent-gated: requires --scope project/both.",
+    )
+
+    identity_parser = subparsers.add_parser(
+        "core-identity",
+        help="print a machine-readable identity record (product, version, "
+        "engine path) so an agent can verify it is invoking Aperio Next "
+        "and not a different aperio executable (read-only)",
+    )
+    identity_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit the identity record as JSON (default when no flag given)",
     )
 
     run_preview_parser = subparsers.add_parser(
@@ -4563,6 +4583,25 @@ def _cmd_host_doctor(args) -> None:
         print(f"\nNote: {note}")
 
 
+def _cmd_core_identity(args) -> None:
+    """Print a machine-readable identity record for this executable.
+
+    Used by integration assets and the installer to prove that the ``aperio``
+    being invoked is Aperio Next (this product) and not a same-named
+    executable from a different install (a legacy Aperio on PATH, etc.).
+    Read-only; never writes.
+    """
+    import sys as _sys
+
+    record = {
+        "product": "aperio-next",
+        "version": __version__,
+        "executable": _sys.argv[0],
+        "python": _sys.executable,
+    }
+    print(json.dumps(record, indent=2, ensure_ascii=False))
+
+
 def _cmd_integrations(args) -> None:
     scope_includes_project = args.scope in ("project", "both")
     project_root: Path | None = None
@@ -4575,19 +4614,32 @@ def _cmd_integrations(args) -> None:
         target = resolve_target(args.project_directory, for_writing=False)
         require_managed_project(target)
         project_root = target
+    if getattr(args, "project_instructions", False) and not scope_includes_project:
+        raise ValidationError(
+            "--project-instructions requires --scope project or both; it "
+            "writes into a managed project's AGENTS.md"
+        )
     if args.action == "status":
         rows = integrations_status(
             home=Path.home(), project_root=project_root, scope=args.scope
         )
         if args.as_json:
-            print(json.dumps(
-                {
-                    "command": "integrations-status",
-                    "scope": args.scope,
-                    "hosts": [row.to_dict() for row in rows],
-                },
-                indent=2, ensure_ascii=False,
-            ))
+            status_payload = {
+                "command": "integrations-status",
+                "scope": args.scope,
+                "hosts": [row.to_dict() for row in rows],
+            }
+            if project_root is not None:
+                from aperio.integrations import (  # local import avoids cycle-free clutter
+                    _is_owned_section_file as _owned,
+                )
+                status_payload["project_instructions"] = {
+                    name: ("managed" if _owned(project_root / name)
+                           else "absent")
+                    for name in ("AGENTS.md", "CLAUDE.md")
+                    if (project_root / name).exists()
+                }
+            print(json.dumps(status_payload, indent=2, ensure_ascii=False))
             return
         print(
             "Agent integrations (managed skill assets in documented host "
@@ -4619,8 +4671,30 @@ def _cmd_integrations(args) -> None:
         payload = {
             "command": "integrations-install",
             "scope": args.scope,
+            "ok": all(r.ok for r in reports),
             "results": [r.to_dict() for r in reports],
         }
+        if getattr(args, "project_instructions", False) and project_root is not None:
+            pi = install_project_instructions(
+                project_root,
+                engine_path=resolve_engine_path(validate=True),
+                version=__version__,
+            )
+            payload["project_instructions"] = pi
+            if pi["errors"]:
+                payload["ok"] = False
+            if not args.as_json:
+                for w in pi["written"]:
+                    print(f"\n  project pointer written: {w}")
+                for p in pi["section_present"]:
+                    print(f"  project pointer present: {p}")
+                for e in pi["errors"]:
+                    print(f"  project pointer error: {e}")
+            if pi["errors"]:
+                raise IntegrationError(
+                    "could not write project instructions: "
+                    + "; ".join(pi["errors"])
+                )
         if args.as_json:
             print(json.dumps(payload, indent=2, ensure_ascii=False))
         else:
@@ -4637,11 +4711,16 @@ def _cmd_integrations(args) -> None:
                     print(f"    error:     {e}")
                 if r.invocation:
                     print(f"    activate:  {r.invocation}")
-            if any(not r.ok for r in reports):
-                raise IntegrationError(
-                    "one or more hosts reported errors; aperio never "
-                    "overwrites non-apario files"
-                )
+        if any(not r.ok for r in reports):
+            # A per-host failure must be a nonzero exit in every output mode so
+            # an installer cannot read a bare exit code as "all installed".
+            # Successful hosts keep their records (partial success is real).
+            failed = [r.host_id for r in reports if not r.ok]
+            raise IntegrationError(
+                "one or more hosts reported errors "
+                f"({', '.join(failed)}); aperio never overwrites non-apario "
+                "files. Hosts that succeeded were registered and remain so"
+            )
         return
     # remove
     reports = remove_integrations(
@@ -4653,22 +4732,41 @@ def _cmd_integrations(args) -> None:
     payload = {
         "command": "integrations-remove",
         "scope": args.scope,
+        "ok": all(r.ok for r in reports),
         "results": [r.to_dict() for r in reports],
     }
+    if getattr(args, "project_instructions", False) and project_root is not None:
+        pi = remove_project_instructions(project_root)
+        payload["project_instructions"] = pi
+        if pi["errors"]:
+            payload["ok"] = False
+        if not args.as_json:
+            for c in pi["cleaned"]:
+                print(f"\n  project pointer removed from: {c}")
+            for e in pi["errors"]:
+                print(f"  project pointer error: {e}")
     if args.as_json:
         print(json.dumps(payload, indent=2, ensure_ascii=False))
-        return
-    print("Aperio Next integration removal (managed assets only):")
-    for r in reports:
-        print(f"\n  {r.display} ({r.host_id})")
-        for p in r.removed:
-            print(f"    removed: {p}")
-        for p in r.kept:
-            print(f"    kept (foreign content, never touched): {p}")
-        for d in r.pruned_dirs:
-            print(f"    pruned empty dir: {d}")
-        for e in r.errors:
-            print(f"    error: {e}")
+    else:
+        print("Aperio Next integration removal (managed assets only):")
+        for r in reports:
+            print(f"\n  {r.display} ({r.host_id})")
+            for p in r.removed:
+                print(f"    removed: {p}")
+            for p in r.kept:
+                print(f"    kept (foreign content, never touched): {p}")
+            for d in r.pruned_dirs:
+                print(f"    pruned empty dir: {d}")
+            for e in r.errors:
+                print(f"    error: {e}")
+    if any(not r.ok for r in reports):
+        failed = [r.host_id for r in reports if not r.ok]
+        raise IntegrationError(
+            "one or more hosts could not be cleaned up "
+            f"({', '.join(failed)}); their managed files were left in place. "
+            "Re-run 'aperio integrations remove' to retry, or remove the "
+            "named files yourself"
+        )
 
 
 def _cmd_agent_doctor(args) -> None:
@@ -6248,6 +6346,8 @@ def main(argv: list[str] | None = None) -> int:
             _cmd_host_doctor(args)
         elif args.command == "integrations":
             _cmd_integrations(args)
+        elif args.command == "core-identity":
+            _cmd_core_identity(args)
         elif args.command == "run-preview":
             _cmd_run_preview(args)
         elif args.command == "run-start":

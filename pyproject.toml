@@ -42,7 +42,15 @@ aperio = "aperio.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-aperio = ["benchmark_cases/*.json", "skill_packs/*.md", "integration_assets/*.md"]
+aperio = [
+  "benchmark_cases/*.json",
+  "skill_packs/*.md",
+  # Every integration asset must ship, including Gemini CLI's TOML command
+  # template. A missed extension here silently breaks host registration in a
+  # wheel install while working from a source checkout (see test_packaging).
+  "integration_assets/*.md",
+  "integration_assets/*.toml",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

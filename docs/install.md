@@ -23,10 +23,13 @@ it finds on your machine.
 
 > The npm package is **not published yet** — this is the verified local
 > distribution path. When published, `npx aperio-next install` will be the
-> whole story.
+> whole story. The npm launcher and these scripts live on the
+> `feat/universal-agent-integration` branch (not `main` yet), so clone that
+> branch explicitly.
 
 ```sh
-git clone https://github.com/SHAHID8142/aperio-next.git
+git clone --branch feat/universal-agent-integration \
+  https://github.com/SHAHID8142/aperio-next.git
 cd aperio-next
 ./scripts/build-npm-package.sh          # builds the wheel + packs the tgz
 npx ./dist/aperio-next-<version>.tgz install

@@ -55,6 +55,19 @@ run `npx aperio-next install` (or see
 https://github.com/SHAHID8142/aperio-next) and stop — do not improvise a
 substitute workflow.
 
+**Verify you are running Aperio Next, not a different `aperio`.** If `$APERIO_CLI`
+is not an absolute path, or before trusting results in an unfamiliar
+environment, confirm the product identity once:
+
+```sh
+$APERIO_CLI core-identity --json   # must print "product": "aperio-next"
+```
+
+If it prints a different product (a legacy Aperio is installed), do not
+continue with it: tell the user to run `aperio-next install` to install the
+Aperio Next engine, then retry with the absolute engine path the installer
+prints (typically `~/.aperio-next/bin/aperio`).
+
 ## Step 2 — Follow the returned next action
 
 The `aperio next` JSON names the command to run next. Typical routes:
