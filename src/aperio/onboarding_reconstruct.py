@@ -345,6 +345,14 @@ def _read_document(
         text = raw.decode("utf-8", errors="replace")
         encoding_ok = False
         result.skipped_unreadable.append(f"{rel} (non-UTF-8; read with replacement)")
+    # Never let Aperio's own machine-written pointer be analysed as a
+    # user-authored claim (FIX C: the pointer is added at the consent gate).
+    try:
+        from aperio.integrations import strip_project_instructions
+
+        text = strip_project_instructions(text)
+    except Exception:  # never let analysis hygiene break reconstruction
+        pass
     record = DocumentRecord(
         path=rel,
         sha256=hashlib.sha256(raw).hexdigest(),

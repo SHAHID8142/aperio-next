@@ -5,9 +5,12 @@
 > **Release status:** `1.2.0rc2` on branch `feat/universal-agent-integration`, a
 > release candidate. The Python CLI, onboarding flow, installation, and the
 > new agent-skill registration were tested on macOS arm64 (Python 3.14; full
-> suite: 1713 tests). **Skill registration** is file-level verified for six
-> hosts; **live in-session activation** has been exercised only in ZCode
-> (this session's host) so far. Windows and Linux were **not** executed.
+> suite: 1758 tests; 17 Node launcher tests). **Skill registration** is
+> file-level verified for 26 agent hosts; **live in-session activation** has
+> been exercised end-to-end in **Claude Code v2.1.322**, **OpenCode v2.0.32**
+> and **Cline 3.0.74**, with discovery confirmed live for Goose as well. The
+> remaining hosts are registration/discovery-verified only (no launchable
+> binary or provider access here). Windows and Linux were **not** executed.
 > See [what is verified](docs/final-handoff.md).
 
 ## What is Aperio?

@@ -39,7 +39,13 @@ function fail(msg) {
 }
 
 function run(cmd, args, opts) {
-  const res = spawnSync(cmd, args, Object.assign({ encoding: "utf8" }, opts));
+  // Bound every child: a hung venv/pip/engine call must fail rather than
+  // block the launcher forever. Callers may override with a larger timeout.
+  const res = spawnSync(
+    cmd,
+    args,
+    Object.assign({ encoding: "utf8", timeout: 600000 }, opts)
+  );
   if (res.error) {
     return { ok: false, code: -1, stdout: "", stderr: String(res.error) };
   }
@@ -126,6 +132,13 @@ function writeManifest(version, extra = {}) {
   // project this install touched (never the project's .aperio/ data).
   const projects = new Set(prior.projects || []);
   if (extra.project) projects.add(path.resolve(extra.project));
+  // Record which hosts actually received managed assets so uninstall can tell
+  // a clean "nothing registered" state apart from "registrations exist but
+  // the engine is gone" (which must NOT silently orphan those files).
+  const hosts = new Set(prior.hosts || []);
+  if (Array.isArray(extra.hosts)) {
+    for (const h of extra.hosts) hosts.add(h);
+  }
   fs.writeFileSync(
     MANIFEST,
     JSON.stringify(
@@ -135,6 +148,7 @@ function writeManifest(version, extra = {}) {
         created: prior.created || new Date().toISOString(),
         updated: new Date().toISOString(),
         projects: [...projects],
+        hosts: [...hosts],
       },
       null,
       2
@@ -269,10 +283,17 @@ function cmdInstall(argv) {
   const installed = [];
   const skipped = [];
   const errors = [];
+  const registeredHosts = [];
   for (const r of payload.results) {
-    for (const p of r.installed) installed.push(`${r.display}: ${p}`);
+    for (const p of r.installed) {
+      installed.push(`${r.display}: ${p}`);
+      if (!registeredHosts.includes(r.host_id)) registeredHosts.push(r.host_id);
+    }
     for (const p of r.skipped) skipped.push(`${r.display}: ${p}`);
     for (const e of r.errors) errors.push(`${r.display}: ${e}`);
+  }
+  if (registeredHosts.length) {
+    writeManifest(version.replace(/^aperio\s+/, ""), { hosts: registeredHosts });
   }
 
   process.stdout.write("\nAperio Next installation\n\n");
@@ -416,11 +437,14 @@ function cmdUninstall() {
           removeErrors.push(`${r.display}: ${e}`);
         }
       }
-    } else if (!res.ok) {
-      // Could not parse a report AND the engine exited nonzero: treat as a
-      // removal failure rather than deleting the engine and leaving broken
-      // skill references pointing at a vanished executuable.
-      removeErrors.push(`engine removal failed: ${res.stderr.trim()}`);
+    } else {
+      // Broken engine OR unparseable output. Never treat this as success:
+      // keep the install root so the registered paths still resolve and the
+      // user can repair with 'aperio-next update'.
+      const detail = res.stderr.trim() || res.stdout.trim() || "no output";
+      removeErrors.push(
+        `engine did not return a removal report (exit ${res.code}): ${detail.slice(0, 300)}`
+      );
     }
     // Clean project-scope assets for every project this install registered.
     // This removes project skills and the AGENTS.md pointer only — never the
@@ -455,6 +479,11 @@ function cmdUninstall() {
             removeErrors.push(`project instructions: ${e}`);
           }
         }
+      } else if (!pr.ok || !ppayload) {
+        const detail = pr.stderr.trim() || pr.stdout.trim() || "no output";
+        removeErrors.push(
+          `project cleanup failed for ${proj} (exit ${pr.code}): ${detail.slice(0, 300)}`
+        );
       }
     }
   }
@@ -470,9 +499,26 @@ function cmdUninstall() {
     process.exit(1);
   }
   if (!engineRan) {
+    // The engine executable is gone, but the manifest shows hosts that DID
+    // receive managed assets. Deleting the install root would leave those
+    // skill/command files registered and pointing at a vanished engine.
+    // Refuse the destructive step and give repair instructions instead.
+    if (Array.isArray(manifest.hosts) && manifest.hosts.length) {
+      process.stderr.write(
+        "\naperio-next: the engine executable is missing, so registered " +
+          "host assets cannot be removed safely.\n" +
+          `Registered hosts still on disk: ${manifest.hosts.join(", ")}\n` +
+          `The engine at ${APERIO_HOME} was KEPT so nothing is half-removed.\n` +
+          "Repair and retry either way:\n" +
+          "  aperio-next update && aperio-next uninstall   (restore engine, then remove)\n" +
+          "  or delete the aperio-next skill/command files in those hosts, " +
+          "then re-run 'aperio-next uninstall'.\n"
+      );
+      process.exit(1);
+    }
     process.stdout.write(
-      "  engine executable missing; skipping host asset removal " +
-        "(nothing registered can resolve anyway)\n"
+      "  engine executable missing and no host assets were registered; " +
+        "safe to remove the install root\n"
     );
   }
   // Guard the destructive step: only delete APERIO_HOME when it carries our

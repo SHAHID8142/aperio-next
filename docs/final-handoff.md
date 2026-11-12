@@ -8,15 +8,19 @@ omitted. Chunk-level detail for the 1.2 program lives in
 
 > **Universal agent integration program (2026-11-12, branch
 > `feat/universal-agent-integration`):** added native skill registration
-> (`aperio integrations`, six hosts at their documented locations,
-> managed-marker ownership rules, 20 tests), a zero-dependency npm
+> (`aperio integrations`, **26 hosts** at their documented locations,
+> managed-marker ownership rules), a zero-dependency npm
 > launcher (`aperio-next install|doctor|update|uninstall`, clean-room
 > verified from the packed tgz), an actionable-error fix for
 > session-less onboarding commands, and the beginner-first README +
 > [docs/integrations.md](integrations.md). Per-scenario evidence:
 > **[universal-integration-evidence.md](universal-integration-evidence.md)**.
-> Live in-session skill activation is verified in ZCode only; all other
-> hosts are registration-verified. 1713 tests green.
+> Live in-session activation is verified end-to-end in Claude Code v2.1.322,
+> OpenCode v2.0.32 and Cline 3.0.74 (Goose discovery confirmed live); the
+> remaining hosts are registration/discovery-verified only on this machine.
+> 1763 Python tests and 17 Node launcher tests green.
+> The earlier "1761", "1758 / 16", "1747 / 16" and "1713 / 13" counts are
+> superseded (see the evidence doc's P0 remediation record).
 
 > **1.2 hardening audit:** an independent, adversarial audit of `main` @
 > `9773ba4` reproduced and fixed fourteen findings (including two critical),

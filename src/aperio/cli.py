@@ -4735,11 +4735,13 @@ def _cmd_integrations(args) -> None:
         "ok": all(r.ok for r in reports),
         "results": [r.to_dict() for r in reports],
     }
+    pi_errors: list[str] = []
     if getattr(args, "project_instructions", False) and project_root is not None:
         pi = remove_project_instructions(project_root)
         payload["project_instructions"] = pi
         if pi["errors"]:
             payload["ok"] = False
+            pi_errors = list(pi["errors"])
         if not args.as_json:
             for c in pi["cleaned"]:
                 print(f"\n  project pointer removed from: {c}")
@@ -4759,13 +4761,23 @@ def _cmd_integrations(args) -> None:
                 print(f"    pruned empty dir: {d}")
             for e in r.errors:
                 print(f"    error: {e}")
-    if any(not r.ok for r in reports):
+    if any(not r.ok for r in reports) or pi_errors:
         failed = [r.host_id for r in reports if not r.ok]
+        parts = []
+        if failed:
+            parts.append(
+                "one or more hosts could not be cleaned up "
+                f"({', '.join(failed)}); their managed files were left in "
+                "place"
+            )
+        if pi_errors:
+            parts.append(
+                "project instruction cleanup failed "
+                f"({'; '.join(pi_errors)})"
+            )
         raise IntegrationError(
-            "one or more hosts could not be cleaned up "
-            f"({', '.join(failed)}); their managed files were left in place. "
-            "Re-run 'aperio integrations remove' to retry, or remove the "
-            "named files yourself"
+            "; ".join(parts) + ". Re-run 'aperio integrations remove' to "
+            "retry, or remove the named files yourself"
         )
 
 
@@ -5586,6 +5598,12 @@ def _register_onboarding_parsers(subparsers) -> None:
         "--intent", metavar="TEXT",
         help="stated purpose for existing projects (recorded in the session)",
     )
+    confirm_parser.add_argument(
+        "--no-project-integration", action="store_true",
+        help="skip writing the persistent Aperio Next pointer into the "
+        "project's AGENTS.md (default: written on approval, as an owned "
+        "marker-delimited section that preserves existing content)",
+    )
 
     decline_parser = subparsers.add_parser(
         "onboarding-decline",
@@ -5847,7 +5865,11 @@ def _cmd_onboarding_confirm_init(args) -> None:
         }
         _emit_onboarding(doc, args.as_json)
         return
-    doc = _ob_confirm_initialization(_onboarding_workspace(args), intent=args.intent)
+    doc = _ob_confirm_initialization(
+        _onboarding_workspace(args),
+        intent=args.intent,
+        integrate=not getattr(args, "no_project_integration", False),
+    )
     _emit_onboarding(doc, args.as_json)
 
 

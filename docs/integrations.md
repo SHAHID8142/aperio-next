@@ -51,6 +51,30 @@ engine is missing, to install it.
 The npm installer passes `--project-instructions` automatically when you
 run `aperio-next install --project <dir>`.
 
+### Automatic integration during onboarding
+
+You do not have to run `--project-instructions` by hand for the normal flow.
+When onboarding is initialized with explicit approval
+(`aperio onboarding-confirm-init --approve`), Aperio also writes the owned
+pointer into the project's `AGENTS.md`. That approval **is** the consent:
+the write is non-destructive (existing instructions are preserved),
+idempotent (re-running onboarding never duplicates the section), and
+removable (`integrations remove --project-instructions`). Because the write
+happens at the consent gate, a later session finds a durable marker even if
+the operator never runs another integration command.
+
+Pass `--no-project-integration` to opt out of this write for a specific
+project. Reconstruction and discovery deliberately ignore the pointer, so it
+can never be mistaken for user-authored content.
+
+> **Identity note.** The rendered pointer and the native `/aperio-next`
+> command both embed the **validated absolute** engine path and verify it
+> with `aperio core-identity --json` (expecting `"product": "aperio-next"`)
+> before use. A bare `aperio` on `PATH` is never embedded, so a legacy
+> `~/.local/bin/aperio` cannot be invoked by accident. If the engine is
+> missing or was replaced, the command prints the exact repair step
+> (`npx aperio-next install`) instead of falling back silently.
+
 ## What is installed per host
 
 Every path below comes from that host's official documentation (verified
@@ -64,6 +88,26 @@ against the live doc sites on 2026-11-12):
 | Codex CLI | `~/.agents/skills/aperio-next/SKILL.md` | — (custom prompts are deprecated upstream) | — | `$aperio-next`, `/skills` |
 | Gemini CLI | `~/.gemini/skills/aperio-next/SKILL.md` | `~/.gemini/commands/aperio-next.toml` | — | `/aperio-next` |
 | Cursor | `~/.cursor/skills/aperio-next/SKILL.md` | — (global commands not documented upstream) | `.cursor/skills/…` | `/aperio-next` |
+| Cline | `~/.cline/skills/aperio-next/SKILL.md` | — | `.cline/skills/…` | skill auto-load by description |
+| Goose | `~/.goose/skills/aperio-next/SKILL.md` | — | `.goose/skills/…` | discovered via `~/.agents/skills` / `~/.goose/skills` |
+| Kilo Code | `~/.kilocode/skills/aperio-next/SKILL.md` | — | `.kilocode/skills/…` | `/aperio-next` |
+| Continue | `~/.continue/skills/aperio-next/SKILL.md` | — | `.continue/skills/…` | skill discovery |
+| Kiro | `~/.kiro/skills/aperio-next/SKILL.md` | — | `.kiro/skills/…` | skill discovery |
+| Qoder | `~/.qoder/skills/aperio-next/SKILL.md` | — | `.qoder/skills/…` | skill discovery |
+| Roo Code | `~/.roo/skills/aperio-next/SKILL.md` | — | `.roo/skills/…` | skill discovery |
+| Trae | `~/.trae/skills/aperio-next/SKILL.md` | — | `.trae/skills/…` | skill discovery |
+| Junie | `~/.junie/skills/aperio-next/SKILL.md` | — | `.junie/skills/…` | skill discovery |
+| OpenHands | `~/.openhands/skills/aperio-next/SKILL.md` | — | `.openhands/skills/…` | skill discovery |
+| Augment | `~/.augment/skills/aperio-next/SKILL.md` | — | `.augment/skills/…` | skill discovery |
+| Autohand | `~/.autohand/skills/aperio-next/SKILL.md` | — | `.autohand/skills/…` | skill discovery |
+| OpenClaw | `~/.openclaw/skills/aperio-next/SKILL.md` | — | `.openclaw/skills/…` | skill discovery |
+| Grok CLI | `~/.grok/skills/aperio-next/SKILL.md` | — | `.grok/skills/…` | skill discovery |
+| Hermes Agent | `~/.hermes/skills/aperio-next/SKILL.md` | — | `.hermes/skills/…` | skill discovery (`--skills`) |
+| Windsurf | `~/.windsurf/skills/aperio-next/SKILL.md` | — | `.windsurf/skills/…` | skill discovery |
+| Rovo Dev | `~/.rovodev/skills/aperio-next/SKILL.md` | — | `.rovodev/skills/…` | skill discovery |
+| GitHub Copilot | `~/.copilot/skills/aperio-next/SKILL.md` | — | `.copilot/skills/…` | skill discovery |
+| Crush | `~/.crush/skills/aperio-next/SKILL.md` | — | `.crush/skills/…` | skill discovery |
+| CodeBuddy | `~/.codebuddy/skills/aperio-next/SKILL.md` | — | `.codebuddy/skills/…` | skill discovery |
 
 Official sources: ZCode bundled configuration guide (user skills at
 `~/.zcode/skills`, commands at `~/.zcode/commands`, `~/.agents/*` scanned as
@@ -74,6 +118,15 @@ aliases, description ≤ 1024 chars); Claude Code
 cross-tool `~/.agents/skills` path; /docs/custom-prompts — deprecated);
 Gemini CLI (geminicli.com/docs/cli/skills, /docs/cli/custom-commands);
 Cursor (cursor.com/docs/skills).
+
+The Cline-through-Windsurf rows all use the open **Agent Skills**
+convention (`~/.<tool>/skills/<name>/SKILL.md`), the same layout and
+frontmatter aperio already emits. That directory catalog and its names are
+taken from the open `skills` CLI that Cline itself forwards to
+(`cline skill …` → `npx skills`), which targets the same per-agent skill
+directories. A host only receives files when its directory already exists
+(see *Detection is passive* below), so nothing is written to a path an
+unused tool never scans.
 
 Codex, Gemini, Cursor, and ZCode also scan `~/.agents/skills/` (directly or
 as a compatibility alias), so the Codex registration makes the skill
@@ -103,20 +156,30 @@ documented path only.
 
 ## Verification status (this release)
 
-- **File registration: verified** for all six hosts on macOS arm64 — via
-  the test suite (19 tests, fake HOMEs) and live installs on a real
-  machine (`~/.zcode`, `~/.claude`, `~/.config/opencode`, `~/.codex`,
-  `~/.agents`, `~/.gemini`, `~/.cursor` all present).
+- **File registration: verified** for all 26 supported hosts on macOS
+  arm64 — via the test suite (fake HOMEs) and live installs on a real
+  machine. On the real machine every one of the 26 documented home
+  directories exists and received a managed `aperio-next/SKILL.md`
+  (plus commands for the six command-capable hosts); `remove` then deleted
+  exactly those managed files and preserved unrelated sibling skills.
+- **Discovery: verified live** for Goose (`goose skills list` lists
+  `aperio-next`) and Cline (`cline skill list -g` lists `aperio-next`),
+  both resolving it from the cross-tool `~/.agents/skills/aperio-next`.
 - **Clean-room distribution: verified** — `npm install -g` from the packed
   tgz in an isolated HOME + prefix; engine bootstrap from the bundled
   wheel with no network; `doctor`, `uninstall` round-trips.
-- **Live in-session activation: verified in ZCode only** (this
-  documentation was written in that session; the skill/command assets are
-  installed in the real user scope and were validated by frontmatter and
-  marker checks plus the host's documented discovery rules). Activation in
-  Claude Code, OpenCode, Codex, Gemini, and Cursor has **not** been
-  exercised in live sessions on this machine — the npm package was not
-  published, and no claim beyond registration is made for them.
+- **Live in-session activation: verified in Claude Code v2.1.322,
+  OpenCode v2.0.32, and Cline 3.0.74.** Each was handed a natural-language
+  request referencing the `aperio-next` skill; each discovered the skill,
+  invoked the embedded verified engine (`core-identity` → `"product":
+  "aperio-next"`), ran `aperio next <project> --json`, and returned
+  `classification: aperio_project, action_required: answer_question`.
+  The remaining 23 hosts are **registration/discovery-verified only** on
+  this machine (their home directory exists and receives the managed
+  skill). Codex, Gemini, Cursor, ZCode and the other Agent Skills hosts
+  were not exercised in a live model turn here (no launchable binary, or
+  provider billing/HTTP-500 blocked the turn); no claim beyond
+  registration is made for them.
 - **Engine invocation from a skill: verified** — the protocol's commands
   (`aperio next --json`, `memory`, `recover`, the full scenario workflow)
   were executed in this session and by the test suite; the skill embeds

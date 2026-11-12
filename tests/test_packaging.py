@@ -56,39 +56,56 @@ def test_gemini_toml_template_is_present_on_disk():
     assert (ASSETS_DIR / "aperio-next-command.toml").is_file()
 
 
-def _build_wheel(out_dir: Path) -> Path | None:
-    """Build a wheel with uv or `python -m build`; None if no builder exists."""
+def _builder_available() -> bool:
+    if shutil.which("uv"):
+        return True
+    try:
+        import build  # noqa: F401
+    except ModuleNotFoundError:
+        return False
+    return True
+
+
+def _build_wheel(out_dir: Path) -> Path:
+    """Build a wheel; FAIL (not skip) if a builder exists but the build fails.
+
+    Skipping on a build failure would let a broken package silently pass CI.
+    Only a genuinely absent builder is a skip.
+    """
     if shutil.which("uv"):
         proc = subprocess.run(
             ["uv", "build", "--wheel", "--out-dir", str(out_dir), str(REPO_ROOT)],
             capture_output=True,
             text=True,
         )
-        if proc.returncode != 0:
-            pytest.skip(f"uv build failed: {proc.stderr[-400:]}")
+        assert proc.returncode == 0, (
+            "uv wheel build failed (packaging is a release blocker):\n"
+            f"{proc.stderr[-2000:]}"
+        )
     else:
         try:
             import build  # noqa: F401
         except ModuleNotFoundError:
-            pytest.skip("no wheel builder (uv / build) available")
+            pytest.skip("no wheel builder (uv / python-build) available")
         proc = subprocess.run(
             [sys.executable, "-m", "build", "--wheel", "--outdir", str(out_dir),
              str(REPO_ROOT)],
             capture_output=True,
             text=True,
         )
-        if proc.returncode != 0:
-            pytest.skip(f"build failed: {proc.stderr[-400:]}")
+        assert proc.returncode == 0, (
+            "wheel build failed (packaging is a release blocker):\n"
+            f"{proc.stderr[-2000:]}"
+        )
     wheels = sorted(out_dir.glob("*.whl"))
-    return wheels[0] if wheels else None
+    assert wheels, "builder reported success but produced no wheel"
+    return wheels[0]
 
 
 def test_wheel_contains_all_integration_assets():
     """The built wheel must contain every asset file, including the .toml."""
     with tempfile.TemporaryDirectory() as tmp:
         wheel = _build_wheel(Path(tmp))
-        if wheel is None:
-            pytest.skip("no wheel produced")
         names = set(zipfile.ZipFile(wheel).namelist())
         expected = {
             f"aperio/integration_assets/{p.name}"

@@ -121,7 +121,7 @@ marked *(read-only)*.
 | `aperio next [DIR] [--json]` | canonical read-only entry point; route through the onboarding facade and return exactly one next action |
 | `aperio start [DIR]` | **opt-in interactive wizard** for beginners: one step at a time, `/pause` `/quit` `/back`, explains consent before the first mutation, requires a real terminal (no `--json`) |
 | `aperio onboarding-start [DIR] [--json]` | classify the workspace and ask exactly one next thing *(read-only; resumes a session)* |
-| `aperio onboarding-confirm-init DIR --approve [--intent TEXT]` | operator-approved initialization (non-destructive; never overwrites) |
+| `aperio onboarding-confirm-init DIR --approve [--intent TEXT] [--no-project-integration]` | operator-approved initialization (non-destructive; never overwrites). On approval it also writes the owned Aperio Next pointer into the project's `AGENTS.md` so a fresh session recovers; `--no-project-integration` opts out of that write |
 | `aperio onboarding-decline [DIR]` | exit onboarding; change nothing |
 | `aperio onboarding-intent DIR --choice ID [--note TEXT]` | record the Rule-8 intent for an existing project |
 | `aperio onboarding-status DIR [--json]` | show session state *(read-only)* |

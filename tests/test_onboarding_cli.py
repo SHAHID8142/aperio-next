@@ -319,3 +319,93 @@ def test_intent_without_session_is_actionable_not_a_lock_error(run_cli, ws):
     assert code != 0
     assert "lock file" not in err
     assert "onboarding-start" in err
+
+
+# ---------------------------------------------------------------------------
+# FIX C: consent-based persistent project integration at the onboarding gate
+# ---------------------------------------------------------------------------
+
+def _validated_engine(monkeypatch, tmp_path, product="aperio-next"):
+    """Point resolve_engine_path at a controlled, validated, absolute path."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    engine = bin_dir / "aperio"
+    engine.write_text(
+        "#!/bin/sh\necho '{\"product\": \"" + product + "\"}'\n"
+        if product == "aperio-next"
+        else "#!/bin/sh\necho '{\"product\": \"aperio-legacy\"}'\n"
+    )
+    engine.chmod(0o755)
+    monkeypatch.setattr(
+        "aperio.integrations.resolve_engine_path",
+        lambda **kw: _quote(str(engine)),
+    )
+    return engine
+
+
+def _quote(p):
+    from aperio.integrations import _quote_for_shell
+
+    return _quote_for_shell(str(p))
+
+
+def test_confirm_init_writes_managed_pointer_on_approval(run_cli, ws, monkeypatch,
+                                                         tmp_path):
+    """FIX C: approved initialization also registers the durable pointer,
+    preserving any pre-existing AGENTS.md content."""
+    (ws / "AGENTS.md").write_text("# User's own\nKeep me.\n")
+    _validated_engine(monkeypatch, tmp_path)
+    code, out, err = run_cli("onboarding-confirm-init", str(ws), "--approve", "--json")
+    assert code == 0, err
+    doc = _json(out)
+    assert doc["project_integration"]["errors"] == []
+    assert doc["project_integration"]["written"]
+    text = (ws / "AGENTS.md").read_text()
+    assert "Keep me." in text  # user content preserved
+    assert text.count("aperio-next:project-instructions:begin") == 1
+
+
+def test_confirm_init_without_approval_writes_nothing(run_cli, ws, monkeypatch,
+                                                      tmp_path):
+    """Consent gate: no pointer is written until --approve."""
+    _validated_engine(monkeypatch, tmp_path)
+    code, out, _ = run_cli("onboarding-confirm-init", str(ws), "--json")
+    assert code == 0
+    doc = _json(out)
+    assert doc["action_required"] == "confirm_initialization"
+    assert "Nothing was modified" in doc["prompt"]
+    assert not (ws / "AGENTS.md").exists()
+    assert sorted((ws / ".aperio").glob("*")) == []
+
+
+def test_confirm_init_no_project_integration_opt_out(run_cli, ws, monkeypatch,
+                                                     tmp_path):
+    """FIX C: --no-project-integration skips the pointer even with approval."""
+    _validated_engine(monkeypatch, tmp_path)
+    code, out, err = run_cli(
+        "onboarding-confirm-init", str(ws), "--approve",
+        "--no-project-integration", "--json",
+    )
+    assert code == 0, err
+    doc = _json(out)
+    assert doc.get("project_integration") is None
+    assert not (ws / "AGENTS.md").exists()
+    assert (ws / ".aperio/state.json").is_file()
+
+
+def test_confirm_init_never_embeds_unvalidated_engine(run_cli, ws, monkeypatch,
+                                                      tmp_path):
+    """FIX A: if no validated engine exists, onboarding refuses to write a
+    pointer embedding a bare `aperio` and reports it, without failing init."""
+    monkeypatch.setattr(
+        "aperio.integrations.resolve_engine_path", lambda **kw: "aperio"
+    )
+    code, out, err = run_cli(
+        "onboarding-confirm-init", str(ws), "--approve", "--json"
+    )
+    assert code == 0, err
+    doc = _json(out)
+    assert doc["project_integration"]["written"] == []
+    assert doc["project_integration"]["errors"] == []
+    assert "not written" in doc["project_integration"]["note"]
+    assert not (ws / "AGENTS.md").exists()

@@ -30,7 +30,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from aperio.errors import NotInitializedError, StateError, ValidationError
+from aperio.errors import (
+    AperioError,
+    NotInitializedError,
+    StateError,
+    ValidationError,
+)
 from aperio.onboarding_discovery import (
     CLASS_APERIO_PROJECT,
     CLASS_EMPTY_NEW,
@@ -178,7 +183,47 @@ def resume(raw_path: str, discovery: DiscoveryResult | None = None) -> dict:
     return _next_step(discovery, session)
 
 
-def confirm_initialization(raw_path: str, intent: str | None = None) -> dict:
+def _persist_project_integration(workspace: Path) -> dict:
+    """Write the durable Aperio Next pointer into a just-approved project.
+
+    This is the persistent half of consent-based onboarding: after the
+    operator approves initialization, the project gets an owned,
+    marker-delimited pointer in AGENTS.md (and CLAUDE.md when it already has
+    one) so a *fresh* agent session recognizes it as Aperio-managed. Existing
+    instructions are preserved verbatim; the write is idempotent and
+    removable. A bare/unvalidated engine is never embedded (FIX A); in that
+    case nothing is written and a note is returned instead.
+    """
+    from aperio import __version__
+    from aperio.integrations import (
+        install_project_instructions,
+        resolve_engine_path,
+    )
+
+    engine = resolve_engine_path(validate=True)
+    if engine.strip("'\"") == "aperio":
+        return {
+            "written": [],
+            "section_present": [],
+            "errors": [],
+            "note": (
+                "no validated aperio-next engine found; the project pointer "
+                "was not written (run 'aperio-next install' or pass "
+                "'--project-instructions' explicitly later)"
+            ),
+        }
+    try:
+        report = install_project_instructions(
+            workspace, engine_path=engine, version=__version__
+        )
+    except (AperioError, OSError) as exc:  # best-effort: init already happened
+        return {"written": [], "section_present": [], "errors": [str(exc)]}
+    return report
+
+
+def confirm_initialization(
+    raw_path: str, intent: str | None = None, *, integrate: bool = True
+) -> dict:
     """Operator-approved initialization (the only sanctioned first mutation).
 
     For an empty workspace this runs the existing safe init mechanism and
@@ -187,10 +232,15 @@ def confirm_initialization(raw_path: str, intent: str | None = None) -> dict:
     can persist, records the stated intent, and proceeds to reconstruction.
     A repeated call never destroys data: init is idempotent and session
     creation refuses duplicates.
+
+    When ``integrate`` is true (default), the approved initialization also
+    writes the managed Aperio Next pointer into the project's AGENTS.md so
+    later sessions recognize it (see :func:`_persist_project_integration`).
     """
     discovery = discover_workspace(raw_path)
     workspace = discovery.workspace
     apdir = aperio_dir_for(workspace)
+    integration: dict | None = None
 
     if discovery.classification == CLASS_EMPTY_NEW:
         init_project(str(workspace))
@@ -206,8 +256,13 @@ def confirm_initialization(raw_path: str, intent: str | None = None) -> dict:
         # action via the CLI flag, not via repository content.
         record_approval(apdir, action=INIT_ACTION, scope="empty-workspace")
         set_stage(apdir, STAGE_INTERVIEW, detail="new project initialized")
+        if integrate:
+            integration = _persist_project_integration(workspace)
         session = read_session(apdir)
-        return _next_step(discovery, session)
+        doc = _next_step(discovery, session)
+        if integration is not None:
+            doc["project_integration"] = integration
+        return doc
 
     if discovery.classification == "ambiguous":
         raise StateError(
@@ -230,7 +285,12 @@ def confirm_initialization(raw_path: str, intent: str | None = None) -> dict:
     if intent:
         set_intent(apdir, intent)
     set_stage(apdir, STAGE_RECONSTRUCTION, detail="existing project onboarding")
+    if integrate:
+        integration = _persist_project_integration(workspace)
     session = read_session(apdir)
+    extra = {"init_created": list(init_result.created or [])}
+    if integration is not None:
+        extra["project_integration"] = integration
     return _protocol(
         str(workspace),
         discovery,
@@ -238,7 +298,7 @@ def confirm_initialization(raw_path: str, intent: str | None = None) -> dict:
         "Project context scaffolded (nothing existing was overwritten). Next: "
         "read-only reconstruction — run 'aperio onboarding-reconstruct'.",
         session_id=session.get("session_id"),
-        extra={"init_created": list(init_result.created or [])},
+        extra=extra,
     )
 
 

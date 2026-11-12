@@ -195,37 +195,31 @@ test("install never overwrites a foreign .claude skill slot", () => {
 // uninstall safety (P0-F): a removal failure keeps the engine
 // --------------------------------------------------------------------------
 
-test("uninstall keeps the engine when host asset removal fails", () => {
+test("uninstall keeps the engine and exits nonzero when host removal fails", () => {
   const sb = sandbox();
   const inst = runLauncher(["install"], sb);
   assert.strictEqual(inst.status, 0, inst.stderr);
 
-  // Register a host then corrupt the managed slot into a directory so the
-  // engine's removal errors out.
-  const claudeDir = path.join(sb.home, ".claude");
-  fs.mkdirSync(claudeDir, { recursive: true });
-  const res2 = runLauncher(["install"], sb);
-  assert.strictEqual(res2.status, 0, res2.stderr);
-
+  // Corrupt a managed host slot into a directory carrying a foreign file so
+  // the engine's own ownership check refuses to remove it. This deterministically
+  // triggers the removal-failure path (no --project was registered, so only
+  // host removal runs).
   const skill = path.join(sb.home, ".claude", "skills", "aperio-next", "SKILL.md");
-  if (fs.existsSync(skill)) {
-    fs.rmSync(skill);
-    fs.mkdirSync(skill, { recursive: true });
-    fs.writeFileSync(path.join(skill, "blocker"), "x");
-  }
+  assert.ok(fs.existsSync(skill), "install should have written the Claude skill");
+  fs.rmSync(skill);
+  fs.mkdirSync(skill, { recursive: true });
+  fs.writeFileSync(path.join(skill, "blocker"), "x");
 
   const un = runLauncher(["uninstall"], sb);
-  if (un.status === 1) {
-    // Removal failed: the install root MUST still exist (engine kept).
-    assert.ok(
-      fs.existsSync(sb.aperioHome),
-      "engine was deleted despite a removal failure"
-    );
-    assert.match(un.stderr, /KEPT/);
-  } else {
-    // If removal genuinely succeeded, the root may be gone; that's fine.
-    assert.strictEqual(un.status, 0);
-  }
+  // The failure MUST be surfaced: nonzero exit, engine kept, honest message.
+  assert.strictEqual(un.status, 1, un.stdout + un.stderr);
+  assert.match(un.stderr, /KEPT/);
+  assert.ok(
+    fs.existsSync(sb.aperioHome),
+    "engine was deleted despite a removal failure"
+  );
+  // The corrupt slot and its blocker are still present (not silently removed).
+  assert.ok(fs.existsSync(path.join(skill, "blocker")));
 });
 
 // --------------------------------------------------------------------------
@@ -278,4 +272,86 @@ test("project install writes AGENTS.md pointer and uninstall keeps .aperio/", ()
     fs.existsSync(path.join(proj, ".aperio", "state.json")),
     ".aperio/ data must survive uninstall"
   );
+});
+
+// --------------------------------------------------------------------------
+// FIX B: broken engine / malformed report must not delete the install root
+// --------------------------------------------------------------------------
+
+function breakEngine(sb, body) {
+  const bin = path.join(sb.aperioHome, "venv", "bin", "aperio");
+  fs.writeFileSync(bin, body, { mode: 0o755 });
+  return bin;
+}
+
+test("uninstall keeps the root when the engine executable is broken", () => {
+  const sb = sandbox();
+  const inst = runLauncher(["install"], sb);
+  assert.strictEqual(inst.status, 0, inst.stderr);
+
+  breakEngine(sb, "#!/bin/sh\nexit 7\n");
+  const un = runLauncher(["uninstall"], sb);
+  assert.strictEqual(un.status, 1, un.stdout + un.stderr);
+  assert.ok(
+    fs.existsSync(sb.aperioHome),
+    "install root must be kept when the engine cannot report removal"
+  );
+  assert.match(un.stderr, /KEPT/);
+});
+
+test("uninstall keeps the root when the engine prints garbage (exit 0)", () => {
+  const sb = sandbox();
+  const inst = runLauncher(["install"], sb);
+  assert.strictEqual(inst.status, 0, inst.stderr);
+
+  breakEngine(sb, "#!/bin/sh\necho 'not json at all'\nexit 0\n");
+  const un = runLauncher(["uninstall"], sb);
+  assert.strictEqual(un.status, 1, un.stdout + un.stderr);
+  assert.ok(fs.existsSync(sb.aperioHome));
+  assert.match(un.stderr, /did not return a removal report/);
+});
+
+test("uninstall refuses to orphan registrations when the engine bin is missing", () => {
+  const sb = sandbox();
+  const inst = runLauncher(["install"], sb);
+  assert.strictEqual(inst.status, 0, inst.stderr);
+
+  // At least one host received assets (the sandbox HOME is fresh, so the
+  // launcher creates the documented host dirs itself). Confirm the manifest
+  // recorded them, then destroy the engine executable.
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(sb.aperioHome, "install-root.json"), "utf8")
+  );
+  assert.ok(
+    Array.isArray(manifest.hosts) && manifest.hosts.length > 0,
+    "install must record the hosts it registered"
+  );
+  fs.rmSync(path.join(sb.aperioHome, "venv", "bin", "aperio"));
+
+  const un = runLauncher(["uninstall"], sb);
+  // Registrations exist but cannot be removed: never silently delete the root.
+  assert.strictEqual(un.status, 1, un.stdout + un.stderr);
+  assert.match(un.stderr, /engine executable is missing/);
+  assert.ok(
+    fs.existsSync(sb.aperioHome),
+    "install root must be kept so registrations are not orphaned"
+  );
+});
+
+test("uninstall removes the root when the engine bin is missing and nothing was registered", () => {
+  const sb = sandbox();
+  const inst = runLauncher(["install"], sb);
+  assert.strictEqual(inst.status, 0, inst.stderr);
+
+  // Simulate a host-less install: clear the recorded hosts so the launcher
+  // treats the removal as genuinely safe.
+  const manifestPath = path.join(sb.aperioHome, "install-root.json");
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  manifest.hosts = [];
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+
+  fs.rmSync(path.join(sb.aperioHome, "venv", "bin", "aperio"));
+  const un = runLauncher(["uninstall"], sb);
+  assert.strictEqual(un.status, 0, un.stderr);
+  assert.ok(!fs.existsSync(sb.aperioHome));
 });

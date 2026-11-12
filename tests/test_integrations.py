@@ -24,6 +24,7 @@ from aperio.integrations import (
     HOSTS,
     MANAGED_MARK_BEGIN,
     SKILL_ID,
+    host_by_id,
     install_integrations,
     integrations_status,
     remove_integrations,
@@ -325,15 +326,31 @@ def test_engine_repair_hint_mentions_install_for_bare_name():
     assert "aperio-next install" in engine_repair_hint("aperio")
 
 
-def test_install_warns_when_engine_is_unvalidated_bare_name(fake_home, monkeypatch):
-    """Installing with no validated engine surfaces repair guidance."""
+def test_install_refuses_when_engine_is_unvalidated_bare_name(fake_home, monkeypatch):
+    """No silent fallback: if no engine validates, install refuses (FIX A)."""
+    from aperio.integrations import IntegrationError
+
     (fake_home / ".zcode").mkdir()
     monkeypatch.delenv("APERIO_NEXT_HOME", raising=False)
-    # Make sure neither isolated path nor a validated binary resolves.
     monkeypatch.setattr("aperio.integrations.resolve_engine_path",
                         lambda **kw: "aperio")
-    reports = install_integrations(["zcode"], home=fake_home, version="9.9.9")
-    assert any("aperio-next install" in w for r in reports for w in r.warnings)
+    with pytest.raises(IntegrationError) as excinfo:
+        install_integrations(["zcode"], home=fake_home, version="9.9.9")
+    assert "aperio-next install" in str(excinfo.value)
+    # Nothing was written into the host slot.
+    assert not (
+        fake_home / ".zcode" / "skills" / SKILL_ID / "SKILL.md"
+    ).exists()
+
+
+def test_install_with_explicit_engine_path_is_not_validated(fake_home):
+    """An explicit engine_path is trusted (used by the CLI installer flow)."""
+    (fake_home / ".zcode").mkdir()
+    reports = install_integrations(
+        ["zcode"], home=fake_home, version="9.9.9",
+        engine_path="/opt/custom/aperio",
+    )
+    assert any(r.installed for r in reports)
 
 
 # --------------------------------------------------------------------------
@@ -434,6 +451,88 @@ def test_unknown_host_is_refused(fake_home):
 
     with _pytest.raises(SystemExit):
         main(["integrations", "install", "--host", "nonexistent"])
+
+
+# --------------------------------------------------------------------------
+# FIX A: native command templates embed the verified engine (never bare)
+# --------------------------------------------------------------------------
+
+def test_render_command_body_embeds_engine_path_md():
+    from aperio.integrations import host_by_id, render_command_body
+
+    body = render_command_body(
+        host_by_id("claude-code"),
+        engine_path="/opt/aperio-next/bin/aperio",
+        version="9.9.9",
+    )
+    assert "/opt/aperio-next/bin/aperio next" in body
+    assert "core-identity" in body
+    # No bare ``aperio next`` remains (a legacy PATH hit) except inside the
+    # quoted repair guidance text ('npx aperio-next install').
+    assert "\naperio next" not in body
+
+
+def test_render_command_body_embeds_engine_path_toml():
+    from aperio.integrations import host_by_id, render_command_body
+
+    body = render_command_body(
+        host_by_id("gemini-cli"),
+        engine_path="/opt/aperio-next/bin/aperio",
+        version="9.9.9",
+    )
+    assert "/opt/aperio-next/bin/aperio next" in body
+    assert "core-identity" in body
+    assert "\naperio next" not in body
+
+
+def test_render_command_body_quotes_paths_with_spaces():
+    from aperio.integrations import (
+        _quote_for_shell,
+        host_by_id,
+        render_command_body,
+    )
+
+    quoted = _quote_for_shell("/Users/me/My Tools/aperio")
+    assert quoted == "'/Users/me/My Tools/aperio'"
+    body = render_command_body(
+        host_by_id("claude-code"), engine_path=quoted, version="1"
+    )
+    assert "'/Users/me/My Tools/aperio' next" in body
+
+
+def test_install_command_never_embeds_legacy_path_over_isolated(
+    tmp_path, monkeypatch
+):
+    """A legacy ``aperio`` earlier on PATH must not be embedded in the
+    generated command asset when an isolated aperio-next install exists."""
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".claude").mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("APERIO_NEXT_HOME", raising=False)
+
+    legacy_dir = tmp_path / "legacy"
+    legacy_dir.mkdir()
+    legacy = legacy_dir / "aperio"
+    legacy.write_text("#!/bin/sh\nexit 0\n")
+    legacy.chmod(0o755)
+    monkeypatch.setenv("PATH", str(legacy_dir))
+
+    isolated = _fake_engine(
+        home / ".aperio-next" / "bin" / "aperio", product="aperio-next"
+    )
+
+    reports = install_integrations(
+        ["claude-code"], home=home, version="1"
+    )
+    report = reports[0]
+    # Claude Code has both a skill and a command; read the command asset.
+    cmd = home / ".claude" / "commands" / f"{SKILL_ID}.md"
+    assert cmd.is_file(), report.installed
+    text = cmd.read_text()
+    assert str(isolated) in text
+    assert str(legacy) not in text
+    assert "\naperio next" not in text
 
 
 def test_every_host_has_documented_paths_or_an_explicit_note():
@@ -623,10 +722,17 @@ def test_cli_project_instructions_roundtrip(tmp_path, run_cli, monkeypatch):
     assert not (proj / "AGENTS.md").exists()
 
 
-def test_fresh_session_can_recover_managed_project(tmp_path, monkeypatch):
-    """P0-D acceptance: after project-scope install, a brand-new process in the
-    project sees a durable marker (.aperio/ + AGENTS.md pointer) and `aperio
-    next` reports the project as Aperio-managed (resume, not re-init)."""
+def test_fresh_interpreter_process_recovers_managed_project(tmp_path, monkeypatch):
+    """Recovery across a *new Python process* (not a new AI-agent session).
+
+    Scope note (honesty): this proves the durable markers are readable by a
+    brand-new interpreter with zero in-process state. It is deliberately NOT
+    claimed as an "AI session" test — a real new host session (OpenCode /
+    Claude Code) is exercised separately in the live host checks, because a
+    fresh `python -m aperio` process is a weaker condition than a new agent
+    conversation.
+    """
+    import os
     import subprocess
     import sys
 
@@ -640,9 +746,9 @@ def test_fresh_session_can_recover_managed_project(tmp_path, monkeypatch):
     agents = (proj / "AGENTS.md").read_text()
     assert "aperio-next:project-instructions:begin" in agents
 
-    # A genuinely fresh interpreter (no in-process state) classifies the
-    # project as Aperio-managed and returns a machine-readable protocol.
-    env = dict(**__import__("os").environ)
+    # A genuinely separate interpreter (different PID) with no in-process
+    # state classifies the project as Aperio-managed.
+    env = dict(os.environ)
     env["PYTHONPATH"] = str(Path(__file__).resolve().parent.parent / "src")
     proc = subprocess.run(
         [sys.executable, "-m", "aperio", "next", str(proj), "--json"],
@@ -653,3 +759,337 @@ def test_fresh_session_can_recover_managed_project(tmp_path, monkeypatch):
     assert doc.get("classification") == "aperio_project"
     assert doc.get("format", "").startswith("aperio")
     assert any(".aperio" in r for r in doc.get("classification_reasons", []))
+
+
+# --------------------------------------------------------------------------
+# FIX B: safe removal / aggregate failure propagation
+# --------------------------------------------------------------------------
+
+def test_remove_refuses_symlinked_managed_file(fake_home):
+    """A managed file replaced by a symlink is refused, not silently unlinked."""
+    (fake_home / ".zcode").mkdir()
+    _install(fake_home, hosts=("zcode",))
+    skill = fake_home / ".zcode" / "skills" / SKILL_ID / "SKILL.md"
+    target = fake_home / "real-skill.md"
+    target.write_text(skill.read_text())
+    skill.unlink()
+    skill.symlink_to(target)
+
+    reports = remove_integrations(["zcode"], home=fake_home)
+    (report,) = reports
+    assert not report.ok
+    assert any("symlink" in e for e in report.errors)
+    # The symlink and its target both survive.
+    assert skill.is_symlink()
+    assert target.exists()
+
+
+def test_cli_remove_project_instruction_failure_is_nonzero(
+    tmp_path, run_cli, monkeypatch
+):
+    """Aggregate failure must include project-instruction cleanup errors even
+    when every host reports OK (FIX B)."""
+    from aperio.integrations import install_project_instructions
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    proj = _managed_project(tmp_path, "pi-fail")
+    install_project_instructions(proj, engine_path="aperio", version="1")
+
+    # Turn the pointer file into a directory so reading it fails on cleanup.
+    agents = proj / "AGENTS.md"
+    agents.unlink()
+    agents.mkdir()
+    (agents / "blocker").write_text("x")
+
+    code, out, err = run_cli(
+        "integrations", "remove", "--scope", "project",
+        "--project-instructions", "--json", str(proj),
+    )
+    assert code != 0, (out, err)
+    payload = json.loads(out)
+    assert payload["ok"] is False
+    # Prove *this* failure was triggered: the reported error names AGENTS.md
+    # and the directory-is-not-a-file cause, not some unrelated host error.
+    errors = payload["project_instructions"]["errors"]
+    assert errors
+    joined = " ".join(errors)
+    assert "AGENTS.md" in joined
+    assert "directory" in joined.casefold() or "Is a directory" in joined
+    # Nothing was destroyed: the blocking directory and its child survive.
+    assert agents.is_dir()
+    assert (agents / "blocker").read_text() == "x"
+
+
+# --------------------------------------------------------------------------
+# FIX C: automatic project integration at the consent gate
+# --------------------------------------------------------------------------
+
+def test_confirm_init_writes_managed_project_pointer(tmp_path, run_cli, monkeypatch):
+    """Approved onboarding writes the persistent pointer with no extra command."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    proj = tmp_path / "auto-proj"
+    proj.mkdir()
+
+    code, out, err = run_cli(
+        "onboarding-confirm-init", str(proj), "--approve", "--json"
+    )
+    assert code == 0, err
+    doc = json.loads(out)
+    assert "project_integration" in doc
+    assert doc["project_integration"]["errors"] == []
+    agents = proj / "AGENTS.md"
+    assert agents.is_file()
+    text = agents.read_text()
+    assert "aperio-next:project-instructions:begin" in text
+    # The embedded engine is the validated absolute path, not a bare name.
+    assert "core-identity" in text
+
+
+def test_confirm_init_no_project_integration_opt_out(tmp_path, run_cli, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    proj = tmp_path / "optout-proj"
+    proj.mkdir()
+    code, out, err = run_cli(
+        "onboarding-confirm-init", str(proj), "--approve",
+        "--no-project-integration", "--json",
+    )
+    assert code == 0, err
+    assert not (proj / "AGENTS.md").exists()
+
+
+def test_confirm_init_preserves_existing_agents_md(tmp_path, run_cli, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    proj = tmp_path / "existing-proj"
+    proj.mkdir()
+    (proj / "AGENTS.md").write_text("# My project rules\n\n- run tests first\n")
+
+    code, out, err = run_cli(
+        "onboarding-confirm-init", str(proj), "--approve", "--json"
+    )
+    assert code == 0, err
+    text = (proj / "AGENTS.md").read_text()
+    assert text.startswith("# My project rules")
+    assert "- run tests first" in text
+    assert "aperio-next:project-instructions:begin" in text
+
+
+def test_confirm_init_pointer_is_idempotent(tmp_path, run_cli, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    proj = tmp_path / "idem-proj"
+    proj.mkdir()
+    run_cli("onboarding-confirm-init", str(proj), "--approve", "--json")
+    first = (proj / "AGENTS.md").read_text()
+    run_cli("onboarding-confirm-init", str(proj), "--approve", "--json")
+    second = (proj / "AGENTS.md").read_text()
+    assert first == second
+    assert second.count("aperio-next:project-instructions:begin") == 1
+
+
+def test_reconstruction_ignores_managed_pointer(tmp_path, run_cli, monkeypatch):
+    """The pointer must not be analysed as a user-authored claim."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    proj = tmp_path / "recon-proj"
+    (proj).mkdir()
+    (proj / "README.md").write_text("# project\nlanguage: Python\n")
+
+    run_cli("onboarding-confirm-init", str(proj), "--approve", "--json")
+    code, out, err = run_cli("onboarding-reconstruct", str(proj), "--json")
+    assert code == 0, err
+    payload = json.loads(out)
+    # Our pointer mentions "plan"/"tasks"/"checkpoint" in prose; none of it
+    # should become a documented task or claim conflict.
+    assert payload["pending_tasks"] == []
+    assert payload["claim_conflicts"] == []
+
+
+# --------------------------------------------------------------------------
+# FIX A: legacy-PATH collision must never leak into skill OR command assets
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "host_id,detect_dir,asset_rel",
+    [
+        ("zcode", ".zcode", (".zcode", "skills", SKILL_ID, "SKILL.md")),
+        ("zcode", ".zcode", (".zcode", "commands", f"{SKILL_ID}.md")),
+        ("claude-code", ".claude", (".claude", "skills", SKILL_ID, "SKILL.md")),
+        ("claude-code", ".claude", (".claude", "commands", f"{SKILL_ID}.md")),
+        ("opencode", ".config/opencode",
+         (".config", "opencode", "skills", SKILL_ID, "SKILL.md")),
+        ("gemini-cli", ".gemini", (".gemini", "skills", SKILL_ID, "SKILL.md")),
+        ("gemini-cli", ".gemini", (".gemini", "commands", f"{SKILL_ID}.toml")),
+    ],
+)
+def test_legacy_path_never_leaks_into_skill_or_command(
+    host_id, detect_dir, asset_rel, tmp_path, monkeypatch
+):
+    """Both the skill AND the command asset must embed the verified isolated
+    engine, never a same-named legacy ``aperio`` earlier on PATH (FIX A)."""
+    home = tmp_path / "home"
+    home.mkdir()
+    # Ensure the host is "detected" by creating the directory it keys on.
+    (home / detect_dir).mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("APERIO_NEXT_HOME", raising=False)
+
+    legacy_dir = tmp_path / "legacy"
+    legacy_dir.mkdir()
+    legacy = legacy_dir / "aperio"
+    legacy.write_text("#!/bin/sh\n# legacy older aperio\n")
+    legacy.chmod(0o755)
+    monkeypatch.setenv("PATH", str(legacy_dir))
+
+    isolated = _fake_engine(
+        home / ".aperio-next" / "bin" / "aperio", product="aperio-next"
+    )
+    # resolve_engine_path must also see the isolated install even though the
+    # legacy executable is earlier on PATH.
+    resolved = resolve_engine_path(validate=True)
+    assert str(isolated) in resolved
+    assert str(legacy) not in resolved
+
+    report = install_integrations([host_id], home=home, version="1")[0]
+    asset = home.joinpath(*asset_rel)
+    assert asset.is_file(), (report.installed, report.errors)
+    text = asset.read_text(encoding="utf-8")
+    assert str(isolated) in text, f"{asset} did not embed the verified engine"
+    assert str(legacy) not in text, f"{asset} leaked the legacy PATH engine"
+
+
+# --------------------------------------------------------------------------
+# Expanded host catalog (FIX: universal coverage of installed agent tools)
+# --------------------------------------------------------------------------
+
+def test_every_host_id_is_unique_and_catalog_is_stable():
+    ids = [h.host_id for h in HOSTS]
+    assert len(ids) == len(set(ids)), "duplicate host ids"
+    # The catalog must cover the original six plus the Agent Skills hosts
+    # that share the ~/.<tool>/skills convention.
+    for required in (
+        "zcode", "claude-code", "opencode", "codex-cli", "gemini-cli",
+        "cursor", "cline", "goose", "kilocode", "continue", "kiro",
+        "qoder", "roo", "trae", "junie", "openhands", "augment",
+        "autohand", "openclaw", "grok", "hermes", "windsurf", "rovodev",
+        "copilot", "crush", "codebuddy",
+    ):
+        assert required in ids, f"missing host {required}"
+
+
+def test_agent_skills_hosts_use_the_documented_convention(tmp_path, monkeypatch):
+    """Every Agent Skills host must use ~/.<tool>/skills/<SKILL_ID>/SKILL.md
+    and be installable into that exact path when the dir exists."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("APERIO_NEXT_HOME", raising=False)
+    engine = _fake_engine(
+        home / ".aperio-next" / "bin" / "aperio", product="aperio-next"
+    )
+    agent_hosts = [
+        "cline", "goose", "kilocode", "continue", "kiro", "qoder", "roo",
+        "trae", "junie", "openhands", "augment", "autohand", "openclaw",
+        "grok", "hermes", "windsurf", "rovodev", "copilot", "crush",
+        "codebuddy",
+    ]
+    for hid in agent_hosts:
+        spec = host_by_id(hid)
+        assert spec.user_skill_dir == f".{hid}/skills", hid
+        # The skill is the discovery mechanism (no documented command file).
+        assert spec.user_command_dir is None, hid
+        (home / spec.user_skill_dir).mkdir(parents=True, exist_ok=True)
+
+    reports = install_integrations(agent_hosts, home=home, version="1")
+    for r in reports:
+        assert r.ok, (r.host_id, r.errors)
+        assert len(r.installed) == 1, r.host_id
+        skill = home / r.installed[0]
+        assert skill.name == "SKILL.md"
+        text = skill.read_text(encoding="utf-8")
+        assert str(engine) in text  # verified engine embedded
+        assert MANAGED_MARK_BEGIN in text
+
+
+def test_agent_skills_hosts_remove_only_managed_files(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("APERIO_NEXT_HOME", raising=False)
+    _fake_engine(
+        home / ".aperio-next" / "bin" / "aperio", product="aperio-next"
+    )
+    spec = host_by_id("hermes")
+    (home / spec.user_skill_dir).mkdir(parents=True)
+    # A foreign sibling skill must survive.
+    foreign = home / spec.user_skill_dir / "aperio-cms" / "SKILL.md"
+    foreign.parent.mkdir()
+    foreign.write_text("# mine\n")
+
+    reports = install_integrations(["hermes"], home=home, version="1")
+    assert reports[0].ok
+    reports = remove_integrations(["hermes"], home=home)
+    assert reports[0].ok and not reports[0].errors
+    assert foreign.exists(), "foreign sibling skill was deleted"
+    assert not (home / spec.user_skill_dir / "aperio-next").exists()
+
+
+# --------------------------------------------------------------------------
+# FIX B/E: onboarding-written pointers are recorded for launcher cleanup
+# --------------------------------------------------------------------------
+
+def test_install_project_instructions_records_project_in_manifest(
+    tmp_path, monkeypatch
+):
+    """A project pointer written through the engine is added to the isolated
+    install's manifest so `aperio-next uninstall` can clean it later."""
+    import json
+
+    root = tmp_path / "aperio-next"
+    (root / "bin").mkdir(parents=True)
+    manifest = root / "install-root.json"
+    manifest.write_text(json.dumps({
+        "product": "aperio-next", "version": "x",
+        "projects": [], "hosts": [],
+    }), encoding="utf-8")
+    monkeypatch.setenv("APERIO_NEXT_HOME", str(root))
+
+    proj = tmp_path / "proj"
+    (proj / ".aperio").mkdir(parents=True)
+    from aperio.integrations import install_project_instructions
+
+    report = install_project_instructions(
+        proj, engine_path="/abs/aperio", version="1"
+    )
+    assert report["errors"] == []
+    assert report["written"]
+    data = json.loads(manifest.read_text("utf-8"))
+    assert str(proj.resolve()) in data["projects"]
+
+
+def test_install_project_instructions_no_manifest_is_harmless(
+    tmp_path, monkeypatch
+):
+    """Without an isolated-install manifest (e.g. pip install) the writer
+    still succeeds and records nothing."""
+    monkeypatch.setenv("APERIO_NEXT_HOME", str(tmp_path / "does-not-exist"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    (tmp_path / "home").mkdir()
+    proj = tmp_path / "proj"
+    (proj / ".aperio").mkdir(parents=True)
+    from aperio.integrations import install_project_instructions
+
+    report = install_project_instructions(
+        proj, engine_path="/abs/aperio", version="1"
+    )
+    assert report["errors"] == []
+    assert (proj / "AGENTS.md").is_file()

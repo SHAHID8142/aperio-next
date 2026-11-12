@@ -11,7 +11,7 @@ named as a gap, not implied.
 | --- | --- |
 | main @ 9d4816b = 1.2.0rc2, PR #1 merged | `git log --oneline -3`, `gh pr list --state all` |
 | 1691 baseline tests green | `.venv/bin/python -m pytest` → `1691 passed in 78.15s` |
-| Hosts present | `~/.zcode`, `~/.claude`, `~/.config/opencode`, `~/.codex`, `~/.agents`, `~/.gemini`, `~/.cursor` dirs; `claude 2.1.322`, `opencode v2.0.32`; codex/gemini/cursor executables absent |
+| Hosts present | `~/.zcode`, `~/.claude`, `~/.config/opencode`, `~/.codex`, `~/.agents`, `~/.gemini`, `~/.cursor` plus `~/.cline`, `~/.goose`, `~/.kilocode`, `~/.continue`, `~/.kiro`, `~/.qoder`, `~/.roo`, `~/.trae`, `~/.junie`, `~/.openhands`, `~/.augment`, `~/.autohand`, `~/.openclaw`, `~/.grok`, `~/.hermes`, `~/.windsurf`, `~/.rovodev`, `~/.copilot`, `~/.crush`, `~/.codebuddy` dirs (26 skill homes); `claude 2.1.322`, `opencode v2.0.32`, `cline 3.0.74`, `goose 1.55.0`, `kilocode 7.8.15`, `hermes v0.22.5`; codex/gemini/cursor executables absent |
 | Legacy artifact | `~/.claude/skills/aperio/` = old "Aperio v2" skill (2026-11-01), separate product lineage; **left in place** (no name collision with `aperio-next`; removal is an owner decision) |
 
 ## Scenario A — fresh installation (clean room)
@@ -35,8 +35,13 @@ success claim: `cand.args.concat` TypeError in python discovery (twice).
 
 | Host | Registration | Activation |
 | --- | --- | --- |
-| ZCode | installed at real `~/.zcode/skills/aperio-next/SKILL.md` + `~/.zcode/commands/aperio-next.md`; frontmatter valid (name+description, 533 chars ≤ 1024 limit, regression-tested) | **this session's host** — assets installed in the live user scope and validated against the host's documented discovery rules; explicit re-invocation in a fresh session is the remaining manual check |
-| Claude Code / OpenCode / Codex / Gemini / Cursor | files written at documented locations (real machine: all six hosts) | **not exercised in live sessions** — honest gap |
+| ZCode | installed at real `~/.zcode/skills/aperio-next/SKILL.md` + `~/.zcode/commands/aperio-next.md`; frontmatter valid (name+description, 533 chars ≤ 1024 limit, regression-tested) | registration/discovery-verified; explicit in-session re-invocation not run in a fresh model turn on this machine |
+| Claude Code v2.1.322 | registered (`~/.claude/…`, skill + command) | **live end-to-end**: skill discovered, verified engine invoked, `aperio next --json` → `aperio_project` |
+| OpenCode v2.0.32 | registered (`~/.config/opencode/…`, skill + command) | **live end-to-end**: same, `aperio_project` |
+| Cline 3.0.74 | registered (`~/.cline/skills/aperio-next/SKILL.md`) | **live end-to-end**: skill auto-loaded, engine invoked, `aperio_project` |
+| Goose | registered (`~/.goose/skills/…`; also visible via `~/.agents/skills`) | **discovery live** (`goose skills list` shows `aperio-next`); model turn blocked by provider 500 |
+| Codex / Gemini / Cursor | files written at documented locations | **not exercised in a live model turn** (no launchable binary here) — honest gap |
+| 20 Agent Skills hosts (Kilo, Continue, Kiro, Qoder, Roo, Trae, Junie, OpenHands, Augment, Autohand, OpenClaw, Grok, Hermes, Windsurf, Rovo Dev, Copilot, Crush, CodeBuddy) | registered at `~/.<tool>/skills/aperio-next/SKILL.md` on the real machine | registration/discovery-verified; no live model turn (binary absent or provider billing/500 blocked the turn) |
 
 Engine invocation from the protocol (any host): verified — the skill's
 commands were executed live in this session (`aperio next --json`, `memory`,
@@ -125,15 +130,61 @@ project with no developer-machine dependencies.
 ## Test totals
 
 - Baseline: 1691 passed (main @ 9d4816b).
-- Final: **1713 passed** (`1713 passed in 78.41s`) = +20 integrations tests,
+- After universal-integration: **1713 passed** = +20 integrations tests,
   +2 onboarding regression tests; zero regressions.
+- After P0 remediation (FIX A–E): **1747 passed** (`1747 passed`),
+  **16 Node launcher tests** (`node --test packaging/npm/test/`, all pass).
+  The earlier "13 Node tests" figure is superseded.
+- After final hardening (this round, macOS arm64, Python 3.14.9):
+  **1763 passed** (`.venv/bin/python -m pytest`), **17 Node launcher tests**
+  (`node --test test/` in `packaging/npm`, `pass 17 / fail 0`). Additions this
+  round versus 1747: a parametrized legacy-PATH collision test covering both
+  skill and command assets for md and toml hosts (+7), onboarding
+  integration contract tests (+4), a rewritten/added pair of launcher
+  uninstall tests for the missing-engine case, catalog tests locking in
+  the expanded 26-host set (+3), and manifest-recording tests (+2).
+
+## Host catalog expansion (this round)
+
+The six originally documented hosts were extended to **26** so that the many
+agent tools already installed on a real machine receive the same managed
+skill. The additional 20 all use the open **Agent Skills** convention
+(`~/.<tool>/skills/<name>/SKILL.md`) — the exact layout/frontmatter aperio
+already emits and the same per-agent directory catalog the open `skills` CLI
+(which Cline itself forwards to via `cline skill`) targets. On the real
+test machine all 26 home directories exist and each received a managed
+`aperio-next/SKILL.md`; `remove` deleted exactly those files and preserved
+unrelated sibling skills. Live model-turn activation was reproduced in
+Claude Code, OpenCode and Cline; Goose discovery was confirmed live.
+Windows/Linux and live turns for the remaining hosts are not claimed.
+
+## P0 remediation record (FIX A–E)
+
+This round reproduced and fixed additional release-blocking defects after the
+1713-test state. Each fix carries failing-first tests.
+
+| Fix | Root cause | Files | Proof |
+| --- | --- | --- | --- |
+| A — engine identity | command templates hard-coded bare `aperio`, so a legacy `~/.local/bin/aperio` could be invoked | `render_command_body(..., engine_path=...)`, assets `*.md`/`*.toml`; `install_integrations` refuses an unvalidated bare engine | `test_render_command_body_embeds_engine_path_{md,toml}`, `..._quotes_paths_with_spaces`, `test_install_command_never_embeds_legacy_path_over_isolated`, `test_legacy_path_never_leaks_into_skill_or_command` (parametrized over skill+command for md/toml hosts), `test_install_refuses_when_engine_is_unvalidated_bare_name` |
+| B — safe uninstall | `cmdUninstall`/CLI accepted unparseable engine output and project-instruction-only failures exited 0; symlinked managed files were silently unlinked; a missing engine with live registrations deleted the root and orphaned them | `packaging/npm/bin/aperio-next.js`, `cli.py` `remove`, `integrations._delete_managed_file` | `uninstall keeps the root when the engine executable is broken`, `...prints garbage (exit 0)`, `uninstall refuses to orphan registrations when the engine bin is missing`, `uninstall removes the root when the engine bin is missing and nothing was registered`, `test_remove_refuses_symlinked_managed_file`, `test_cli_remove_project_instruction_failure_is_nonzero` |
+| B — removal-failure honesty | the previous launcher test accepted `exit 0` as a pass, so a silent half-removal could go green | `packaging/npm/test/launcher.test.js` | rewritten `uninstall keeps the engine and exits nonzero when host removal fails` — asserts exit 1, engine kept, foreign blocker still present (fails first without the guard) |
+| C — automatic project integration | the durable pointer required a separate manual command | `onboarding.confirm_initialization(integrate=...)` calls `_persist_project_integration`; `--no-project-integration` opt-out; reconstruction strips the owned section | `test_confirm_init_writes_managed_project_pointer`, `..._no_project_integration_opt_out`, `..._preserves_existing_agents_md`, `..._pointer_is_idempotent`, `test_reconstruction_ignores_managed_pointer` |
+| D — stronger tests | a wheel-build failure `skip`ped instead of failing; uninstall tests did not prove the intended failure | `tests/test_packaging.py` (`_build_wheel` asserts), `tests/test_integrations.py` | build failure now fails; `test_cli_remove_project_instruction_failure_is_nonzero` asserts the AGENTS.md/Is-a-directory error and that nothing was destroyed |
+| E — docs | stale counts and over-broad activation claims | `README.md`, `docs/install.md`, `docs/integrations.md`, this file, `docs/final-handoff.md` | this section; live-vs-registration wording kept separate |
 
 ## Not verified / open gaps
 
-- Live in-session activation outside ZCode (needs real sessions in Claude
-  Code, OpenCode, Codex, Gemini, Cursor).
+- Live in-session activation outside **Claude Code v2.1.322**, **OpenCode
+  v2.0.32** and **Cline 3.0.74** (these three were exercised end-to-end:
+  skill discovery → verified-engine invocation → `aperio next` →
+  `aperio_project`). The remaining hosts are registration/discovery-verified
+  only on this machine (no launchable binary, or the model turn was blocked
+  by provider billing — Hermes HTTP 402, Goose HTTP 500, Kilo "add credits",
+  `pi` no API key, `agy` headless permission prompt). Goose discovery is
+  confirmed live via `goose skills list`.
 - Windows and Linux execution (launcher + engine).
-- npm/PyPI publication (requires owner authorization).
+- npm/PyPI publication (requires owner authorization); `npx aperio-next` is
+  **not** publicly published.
 - CI (GitHub Actions billing lock persists — zero hosted runs; all
   verification above is local).
 - Removal of the legacy `~/.claude/skills/aperio/` v2 skill (owner

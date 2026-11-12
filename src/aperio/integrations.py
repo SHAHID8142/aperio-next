@@ -246,6 +246,257 @@ HOSTS: tuple[HostSpec, ...] = (
              "~/.cursor/skills/; global ~/.cursor/commands is not "
              "documented, so commands are not installed for Cursor",
     ),
+    # ------------------------------------------------------------------
+    # Additional Agent Skills hosts. These use the open cross-tool
+    # ``~/.<tool>/skills/<name>/SKILL.md`` convention, the same layout and
+    # frontmatter aperio already emits. The catalog of these directories is
+    # the one the open ``skills`` CLI (used by Cline via ``cline skill``)
+    # targets; ``docs`` names that source rather than claiming a live
+    # per-host session. A host only ever receives files when its directory
+    # already exists (detect_dirs), so nothing is written to an unused path.
+    # ------------------------------------------------------------------
+    HostSpec(
+        host_id="cline",
+        display="Cline",
+        user_skill_dir=".cline/skills",
+        user_command_dir=None,
+        project_skill_dir=".cline/skills",
+        detect_dirs=(".cline",),
+        detect_executables=("cline",),
+        invocation=(
+            "the aperio-next skill is discovered from ~/.cline/skills; ask "
+            "the agent to use it (Cline loads skills by description)"
+        ),
+        docs="Cline skills: ~/.cline/skills/<name>/SKILL.md via the open "
+             "Agent Skills convention (cline skill add/list forwards to "
+             "'npx skills')",
+    ),
+    HostSpec(
+        host_id="goose",
+        display="Goose",
+        user_skill_dir=".goose/skills",
+        user_command_dir=None,
+        project_skill_dir=".goose/skills",
+        detect_dirs=(".goose",),
+        detect_executables=("goose",),
+        invocation=(
+            "goose discovers skills from ~/.goose/skills (and ~/.agents/"
+            "skills); 'goose skills list' lists them"
+        ),
+        docs="Goose (block) skills: 'goose skills list' reports discovery "
+             "from ~/.agents/skills and ~/.goose/skills; Agent Skills "
+             "SKILL.md convention",
+    ),
+    HostSpec(
+        host_id="kilocode",
+        display="Kilo Code",
+        user_skill_dir=".kilocode/skills",
+        user_command_dir=None,
+        project_skill_dir=".kilocode/skills",
+        detect_dirs=(".kilocode", ".kilo"),
+        detect_executables=("kilocode", "kilo"),
+        invocation=(
+            "the aperio-next skill is discovered from ~/.kilocode/skills"
+        ),
+        docs="Kilo Code: ~/.kilocode/skills (and ~/.kilo/skills) via the "
+             "open Agent Skills convention",
+    ),
+    HostSpec(
+        host_id="continue",
+        display="Continue",
+        user_skill_dir=".continue/skills",
+        user_command_dir=None,
+        project_skill_dir=".continue/skills",
+        detect_dirs=(".continue",),
+        detect_executables=("continue", "cn"),
+        invocation="the aperio-next skill is discovered from ~/.continue/skills",
+        docs="Continue: ~/.continue/skills via the open Agent Skills "
+             "convention",
+    ),
+    HostSpec(
+        host_id="kiro",
+        display="Kiro",
+        user_skill_dir=".kiro/skills",
+        user_command_dir=None,
+        project_skill_dir=".kiro/skills",
+        detect_dirs=(".kiro",),
+        detect_executables=("kiro", "kiro-cli"),
+        invocation="the aperio-next skill is discovered from ~/.kiro/skills",
+        docs="Kiro: ~/.kiro/skills via the open Agent Skills convention",
+    ),
+    HostSpec(
+        host_id="qoder",
+        display="Qoder",
+        user_skill_dir=".qoder/skills",
+        user_command_dir=None,
+        project_skill_dir=".qoder/skills",
+        detect_dirs=(".qoder",),
+        detect_executables=("qoder", "qodercli"),
+        invocation="the aperio-next skill is discovered from ~/.qoder/skills",
+        docs="Qoder: ~/.qoder/skills via the open Agent Skills convention",
+    ),
+    HostSpec(
+        host_id="roo",
+        display="Roo Code",
+        user_skill_dir=".roo/skills",
+        user_command_dir=None,
+        project_skill_dir=".roo/skills",
+        detect_dirs=(".roo",),
+        detect_executables=("roo",),
+        invocation="the aperio-next skill is discovered from ~/.roo/skills",
+        docs="Roo Code: ~/.roo/skills via the open Agent Skills convention",
+    ),
+    HostSpec(
+        host_id="trae",
+        display="Trae",
+        user_skill_dir=".trae/skills",
+        user_command_dir=None,
+        project_skill_dir=".trae/skills",
+        detect_dirs=(".trae",),
+        detect_executables=("trae",),
+        invocation="the aperio-next skill is discovered from ~/.trae/skills",
+        docs="Trae: ~/.trae/skills via the open Agent Skills convention",
+    ),
+    HostSpec(
+        host_id="junie",
+        display="JetBrains Junie",
+        user_skill_dir=".junie/skills",
+        user_command_dir=None,
+        project_skill_dir=".junie/skills",
+        detect_dirs=(".junie",),
+        detect_executables=("junie",),
+        invocation="the aperio-next skill is discovered from ~/.junie/skills",
+        docs="Junie: ~/.junie/skills via the open Agent Skills convention",
+    ),
+    HostSpec(
+        host_id="openhands",
+        display="OpenHands",
+        user_skill_dir=".openhands/skills",
+        user_command_dir=None,
+        project_skill_dir=".openhands/skills",
+        detect_dirs=(".openhands",),
+        detect_executables=("openhands",),
+        invocation=("the aperio-next skill is discovered from "
+                    "~/.openhands/skills"),
+        docs="OpenHands: ~/.openhands/skills via the open Agent Skills "
+             "convention",
+    ),
+    HostSpec(
+        host_id="augment",
+        display="Augment Code",
+        user_skill_dir=".augment/skills",
+        user_command_dir=None,
+        project_skill_dir=".augment/skills",
+        detect_dirs=(".augment",),
+        detect_executables=("augment", "auggie"),
+        invocation="the aperio-next skill is discovered from ~/.augment/skills",
+        docs="Augment: ~/.augment/skills via the open Agent Skills convention",
+    ),
+    HostSpec(
+        host_id="autohand",
+        display="Autohand Code",
+        user_skill_dir=".autohand/skills",
+        user_command_dir=None,
+        project_skill_dir=".autohand/skills",
+        detect_dirs=(".autohand",),
+        detect_executables=("autohand",),
+        invocation="the aperio-next skill is discovered from ~/.autohand/skills",
+        docs="Autohand Code: ~/.autohand/skills via the open Agent Skills "
+             "convention",
+    ),
+    HostSpec(
+        host_id="openclaw",
+        display="OpenClaw",
+        user_skill_dir=".openclaw/skills",
+        user_command_dir=None,
+        project_skill_dir=".openclaw/skills",
+        detect_dirs=(".openclaw",),
+        detect_executables=("openclaw", "claw"),
+        invocation="the aperio-next skill is discovered from ~/.openclaw/skills",
+        docs="OpenClaw: ~/.openclaw/skills via the open Agent Skills convention",
+    ),
+    HostSpec(
+        host_id="grok",
+        display="Grok CLI",
+        user_skill_dir=".grok/skills",
+        user_command_dir=None,
+        project_skill_dir=".grok/skills",
+        detect_dirs=(".grok",),
+        detect_executables=("grok",),
+        invocation="the aperio-next skill is discovered from ~/.grok/skills",
+        docs="Grok: ~/.grok/skills via the open Agent Skills convention",
+    ),
+    HostSpec(
+        host_id="hermes",
+        display="Hermes Agent",
+        user_skill_dir=".hermes/skills",
+        user_command_dir=None,
+        project_skill_dir=".hermes/skills",
+        detect_dirs=(".hermes",),
+        detect_executables=("hermes", "hermes-agent"),
+        invocation=(
+            "the aperio-next skill is discovered from ~/.hermes/skills "
+            "(hermes --skills can narrow the set)"
+        ),
+        docs="Hermes Agent: ~/.hermes/skills via the open Agent Skills "
+             "convention; 'hermes --skills' selects a subset",
+    ),
+    HostSpec(
+        host_id="windsurf",
+        display="Windsurf",
+        user_skill_dir=".windsurf/skills",
+        user_command_dir=None,
+        project_skill_dir=".windsurf/skills",
+        detect_dirs=(".windsurf",),
+        detect_executables=("windsurf",),
+        invocation="the aperio-next skill is discovered from ~/.windsurf/skills",
+        docs="Windsurf: ~/.windsurf/skills via the open Agent Skills convention",
+    ),
+    HostSpec(
+        host_id="rovodev",
+        display="Rovo Dev",
+        user_skill_dir=".rovodev/skills",
+        user_command_dir=None,
+        project_skill_dir=".rovodev/skills",
+        detect_dirs=(".rovodev",),
+        detect_executables=("acli", "rovodev"),
+        invocation="the aperio-next skill is discovered from ~/.rovodev/skills",
+        docs="Rovo Dev: ~/.rovodev/skills via the open Agent Skills convention",
+    ),
+    HostSpec(
+        host_id="copilot",
+        display="GitHub Copilot",
+        user_skill_dir=".copilot/skills",
+        user_command_dir=None,
+        project_skill_dir=".copilot/skills",
+        detect_dirs=(".copilot", ".github"),
+        detect_executables=("copilot", "gh"),
+        invocation="the aperio-next skill is discovered from ~/.copilot/skills",
+        docs="GitHub Copilot: ~/.copilot/skills (and ~/.github/skills) via "
+             "the open Agent Skills convention",
+    ),
+    HostSpec(
+        host_id="crush",
+        display="Crush",
+        user_skill_dir=".crush/skills",
+        user_command_dir=None,
+        project_skill_dir=".crush/skills",
+        detect_dirs=(".crush",),
+        detect_executables=("crush",),
+        invocation="the aperio-next skill is discovered from ~/.crush/skills",
+        docs="Crush: ~/.crush/skills via the open Agent Skills convention",
+    ),
+    HostSpec(
+        host_id="codebuddy",
+        display="CodeBuddy",
+        user_skill_dir=".codebuddy/skills",
+        user_command_dir=None,
+        project_skill_dir=".codebuddy/skills",
+        detect_dirs=(".codebuddy",),
+        detect_executables=("codebuddy", "codebuddy-cli"),
+        invocation="the aperio-next skill is discovered from ~/.codebuddy/skills",
+        docs="CodeBuddy: ~/.codebuddy/skills via the open Agent Skills convention",
+    ),
 )
 
 
@@ -311,14 +562,24 @@ def render_skill_body(
     return text.rstrip() + "\n"
 
 
-def render_command_body(spec: HostSpec, *, version: str) -> str:
-    """Render the slash-command wrapper text for one host."""
+def render_command_body(
+    spec: HostSpec, *, engine_path: str, version: str
+) -> str:
+    """Render the slash-command wrapper text for one host.
+
+    ``engine_path`` is embedded exactly like the skill asset so a native
+    command invocation can never silently resolve a different ``aperio`` on
+    PATH. It is already shell-quoted by :func:`resolve_engine_path` when it
+    contains spaces or metacharacters.
+    """
     template_name = (
         _COMMAND_TEMPLATE_TOML
         if spec.command_extension == "toml"
         else _COMMAND_TEMPLATE_MD
     )
-    text = _load_template(template_name).substitute(VERSION=version)
+    text = _load_template(template_name).substitute(
+        APERIO_CLI=engine_path, VERSION=version
+    )
     return text.rstrip() + "\n"
 
 
@@ -526,8 +787,14 @@ def _prepare_managed_file(path: Path, text: str, *, what: str) -> bool:
 
 
 def _delete_managed_file(path: Path, *, what: str) -> bool:
-    if not path.exists():
+    if not path.exists() and not path.is_symlink():
         return False
+    # A symlinked target is never followed or silently removed: deleting a
+    # link that points elsewhere is ambiguous, so refuse and report it.
+    if path.is_symlink():
+        raise IntegrationError(
+            f"refusing to remove {what}: {path} is a symlink"
+        )
     if not is_managed_asset(path):
         raise IntegrationError(
             f"refusing to remove {what}: {path} was not created by aperio "
@@ -681,7 +948,9 @@ def install_for_host(
                     spec, engine_path=engine_path, version=version
                 )
             else:
-                body = render_command_body(spec, version=version)
+                body = render_command_body(
+                    spec, engine_path=engine_path, version=version
+                )
             _prepare_managed_file(path, body, what=f"{spec.host_id} {kind}")
         except IntegrationError as exc:
             report.errors.append(str(exc))
@@ -708,8 +977,14 @@ def install_integrations(
     specs = (
         [host_by_id(h) for h in host_ids] if host_ids else list(HOSTS)
     )
-    engine = engine_path or resolve_engine_path(validate=True)
-    engine_hint = engine_repair_hint(engine, version=version)
+    if engine_path is None:
+        engine = resolve_engine_path(validate=True)
+        # Never silently embed a bare/unvalidated ``aperio``: that is exactly
+        # how a legacy install earlier on PATH gets wired into our own assets.
+        if engine.strip("'\"") == "aperio":
+            raise IntegrationError(engine_repair_hint(engine, version=version))
+    else:
+        engine = engine_path
     reports: list[InstallReport] = []
     for spec in specs:
         report = install_for_host(
@@ -720,10 +995,6 @@ def install_integrations(
             project_root=project_root,
             scope=scope,
         )
-        # If the resolved engine is the bare unvalidated name, surface the
-        # repair guidance on every host that would actually call it.
-        if engine.strip("'\"") == "aperio" and report.installed:
-            report.warnings.append(engine_hint)
         reports.append(report)
     return reports
 
@@ -925,6 +1196,21 @@ def _upsert_section(existing: str, section: str) -> str:
     return existing.rstrip("\n") + "\n\n" + section
 
 
+def strip_project_instructions(text: str) -> str:
+    """Return ``text`` without Aperio's owned pointer section, if present.
+
+    Used when *analysing* user instruction files (e.g. reconstruction) so the
+    machine-written pointer can never be mistaken for a user-authored claim.
+    Content outside the markers is untouched.
+    """
+    if _SECTION_BEGIN not in text or _SECTION_END not in text:
+        return text
+    stripped = _strip_section(text)
+    # ``_strip_section`` returns None only when markers are absent; we already
+    # checked they are present.
+    return stripped if stripped is not None else text
+
+
 def _strip_section(existing: str) -> str | None:
     if _SECTION_BEGIN not in existing or _SECTION_END not in existing:
         return None
@@ -992,7 +1278,57 @@ def install_project_instructions(
         else:
             report["written"].append(str(path))
             report["section_present"].append(str(path))
+    # Record the project in the isolated install's manifest so a later
+    # `aperio-next uninstall` (run by the launcher) cleans this pointer.
+    # Without this, a project initialized via onboarding carried a dangling
+    # pointer after the engine was removed. Best-effort: never fails init.
+    if report["written"]:
+        _record_project_in_install_manifest(project_root)
     return report
+
+
+def _record_project_in_install_manifest(project_root: Path) -> None:
+    """Add ``project_root`` to the isolated install's manifest, if present.
+
+    The npm launcher keeps ``<root>/install-root.json`` with a ``projects``
+    list it uses to clean project-scope assets on uninstall. A project
+    onboarded directly through the engine is appended here so that a later
+    launcher-driven uninstall removes the owned pointer instead of leaving
+    it pointing at a vanished engine. Silently no-ops when the manifest does
+    not exist (e.g. a plain pip/pipx install).
+    """
+    import json as _json
+
+    roots: list[Path] = []
+    env_root = os.environ.get("APERIO_NEXT_HOME")
+    if env_root:
+        roots.append(Path(env_root))
+    roots.append(Path.home() / ".aperio-next")
+    target = str(Path(project_root).resolve())
+    for root in roots:
+        manifest_path = root / "install-root.json"
+        try:
+            data = _json.loads(manifest_path.read_text("utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, dict) or data.get("product") != "aperio-next":
+            continue
+        projects = data.get("projects")
+        if not isinstance(projects, list):
+            projects = []
+        if target in projects:
+            return
+        projects.append(target)
+        data["projects"] = projects
+        try:
+            _atomic_write(
+                manifest_path,
+                _json.dumps(data, indent=2) + "\n",
+                what="install manifest",
+            )
+        except IntegrationError:
+            pass
+        return
 
 
 def remove_project_instructions(project_root: Path) -> dict:
