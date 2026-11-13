@@ -4,14 +4,14 @@
 
 > **Release status:** `1.2.0rc2` on branch `feat/universal-agent-integration`, a
 > release candidate. The Python CLI, onboarding flow, installation, and the
-> new agent-skill registration were tested on macOS arm64 (Python 3.14; full
-> suite: 1758 tests; 17 Node launcher tests). **Skill registration** is
-> file-level verified for 26 agent hosts; **live in-session activation** has
-> been exercised end-to-end in **Claude Code v2.1.322**, **OpenCode v2.0.32**
-> and **Cline 3.0.74**, with discovery confirmed live for Goose as well. The
-> remaining hosts are registration/discovery-verified only (no launchable
-> binary or provider access here). Windows and Linux were **not** executed.
-> See [what is verified](docs/final-handoff.md).
+> new agent-skill registration were tested on macOS arm64 (Python 3.14;
+> **1769 Python tests and 34 Node tests passed**). Fresh **Codex CLI** sessions
+> verified native activation, consented initialization, a governed coding
+> task, independent review, and durable recovery. **OpenCode** verified
+> native activation and read-only cross-agent recovery. The current Claude
+> attempt was blocked by a configured-model diagnostic and timeout.
+> VS Code fresh-session automation, other hosts, Windows and Linux remain
+> unverified. See the [current release evidence](docs/release-candidate-evidence.md).
 
 ## What is Aperio?
 
@@ -87,7 +87,7 @@ cd aperio-next
 
 # 3. Install the freshly packed tarball. Do NOT use a bare `npx aperio-next`:
 #    there is no such published package yet.
-npx ./dist/aperio-next-<version>.tgz install
+npx --yes --package ./dist/aperio-next-1.2.0-rc.2.tgz aperio-next install
 ```
 
 The installer creates an isolated engine environment in `~/.aperio-next/`,
@@ -101,10 +101,10 @@ pending (never as installed), and the summary prints only verified facts.
 > a different `aperio` earlier on `PATH` is never invoked. If a legacy
 > Aperio is also installed, that isolation is what keeps them apart.
 
-After installing, `aperio-next doctor` reports engine, runtime, and
-per-host integration health; `aperio-next update` refreshes everything;
-`aperio-next uninstall` removes skills and the engine while **keeping every
-project's `.aperio/` data**.
+Use the same explicit npx package invocation with `doctor`, `update`, or
+`uninstall` in place of `install` for health, refresh, or removal. npx does
+not leave a permanent launcher command. Uninstall retains every project's
+`.aperio/` data.
 
 ### Direct Python install (alternative)
 
@@ -177,8 +177,9 @@ aperio next .
 ```
 
 Aperio tells you whether the folder is a new, existing, or ambiguous project,
-and the single next action. If it is an existing project, initialization only
-creates Aperio's own `.aperio/` scaffolding and never overwrites your files.
+and the next onboarding action. With consent, initialization creates
+`.aperio/` scaffolding and adds a managed section to `AGENTS.md`, preserving
+existing instructions and project files.
 Use `aperio onboarding-reconstruct .` to inventory what already exists.
 
 ## AI agent compatibility
@@ -191,10 +192,10 @@ it):
 
 | Host | Skill registered at | Activation | Live-activated tested |
 | --- | --- | --- | --- |
-| ZCode | `~/.zcode/skills/`, `~/.zcode/commands/` | `/aperio-next` or skill mention | yes (this host) |
-| Claude Code | `~/.claude/skills/`, `~/.claude/commands/` | `/aperio-next` | registration only |
-| OpenCode | `~/.config/opencode/skills/`, `commands/` | `/aperio-next`, `@aperio-next` | registration only |
-| Codex CLI | `~/.agents/skills/` | `$aperio-next` | registration only |
+| ZCode | `~/.zcode/skills/`, `~/.zcode/commands/` | `/aperio-next` or skill mention | no launchable binary in this run |
+| Claude Code | `~/.claude/skills/`, `~/.claude/commands/` | `/aperio-next` | current attempt blocked by model configuration/timeout |
+| OpenCode | `~/.config/opencode/skills/`, `commands/` | `/aperio-next`, `@aperio-next` | yes; read-only cross-agent recovery |
+| Codex CLI | `~/.agents/skills/`, repo `.agents/skills/` | `$aperio-next` | yes; coding, review and fresh recovery |
 | Gemini CLI | `~/.gemini/skills/`, `commands/` (TOML) | `/aperio-next` | registration only |
 | Cursor | `~/.cursor/skills/` | `/aperio-next` | registration only |
 
@@ -240,8 +241,8 @@ vocabulary.
 ## Upgrading and uninstalling
 
 ```sh
-aperio-next update       # refresh engine + skill assets
-aperio-next uninstall    # remove skills + engine (your project files stay)
+npx --yes --package ./dist/aperio-next-1.2.0-rc.2.tgz aperio-next update
+npx --yes --package ./dist/aperio-next-1.2.0-rc.2.tgz aperio-next uninstall
 
 # uv/pipx installs:
 uv tool upgrade aperio-next

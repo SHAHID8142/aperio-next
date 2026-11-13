@@ -1,0 +1,151 @@
+{
+  "objective": "Finish and independently verify the universal-agent-integration release candidate, fixing every reproduced release blocker without weakening Aperio Next governance or damaging user state.",
+  "expected_outcome": "An evidence-backed release candidate that is genuinely usable for the explicitly verified host and platform scope, with exact limitations for everything unverified.",
+  "scope": [
+    "Current feature branch implementation and diff against main",
+    "Python engine and native integration manager",
+    "Bundled npm installer and lifecycle",
+    "Supported native host assets and project persistence",
+    "Disposable real-user workflow, fresh-session recovery, security review, documentation, commit, and push"
+  ],
+  "exclusions": [
+    "Merging to main",
+    "Publishing npm or PyPI packages or public releases",
+    "Force-pushing or rewriting history",
+    "Deleting the legacy Aperio project, important user data, or foreign host configuration",
+    "Installing unrelated paid tools, bypassing permissions or governance, or claiming untested platforms and hosts"
+  ],
+  "assumptions": [
+    "The feature branch and existing untracked .aperio and audit-inputs content must be preserved",
+    "Live provider testing is bounded by installed binaries, authentication, quota, and host interfaces",
+    "macOS arm64 is the only locally executable operating-system scope unless another real environment is discovered"
+  ],
+  "risks": [
+    "Wrong-engine execution or identity spoofing",
+    "Destructive or falsely successful partial lifecycle operations",
+    "Missing or duplicated durable project integration",
+    "Source-only tests masking broken installed artifacts",
+    "Approval, review, or evidence gate bypass",
+    "Unsupported host, platform, CI, or registry claims"
+  ],
+  "strategy": "Verify the baseline, reproduce every named P0 and security risk with focused adversarial fixtures, fix only confirmed gaps test-first, then exercise built artifacts and bounded live hosts through the daily-use journey before independently reviewing the final diff and recording scoped evidence.",
+  "acceptance_criteria": [
+    "Inject failed engine installation/upgrade, failed skill/command regeneration, partial host-registration failure, and interrupted update; each must preserve or restore the last known-good engine and compatible integration assets, verify recovered identity and asset compatibility, and preserve previous project data and unrelated user configuration. Claim rollback only from actual injected-failure evidence.",
+    "Generated native integrations invoke the correct validated Aperio Next engine",
+    "A mandatory genuinely fresh Codex CLI session invokes native $aperio-next and proves discovery, activation, correct engine identity, actual aperio next execution, consented initialization, and a governed coding task in a disposable project. Another fresh session receives Continue the previous task and uses the engine to recover completed and pending work. Reading SKILL.md or launching a Python subprocess is insufficient. Codex is a primary mandatory acceptance target. Report Codex CLI and VS Code Codex extension results separately with exact blockers for unavailable environments; missing Codex evidence remains unmet.",
+    "Initialization, durable integration, governed execution, verification, and independent review work without bypasses",
+    "No known unresolved critical/high defect remains. A separate reviewer agent or independent fresh review session receives the complete final diff, acceptance criteria, and test evidence. The implementation author is not the sole reviewer. Require an explicit findings report with concrete security, reliability, and integration defects, file locations, reproduction steps, and assessment of governance/authorization boundaries, packaging, lifecycle, and persistent project instructions. Reproduce and fix all valid critical/high findings with regressions, repeat affected verification, and obtain independent follow-up review. If independence is unavailable, record the exact limitation and leave independent acceptance unmet; never self-certify independence. Independent review covers the complete final diff including final documentation; recheck subsequent changes before handoff. Report injected-failure rollback evidence, separate Codex CLI/VS Code results, and independent findings and resolutions. Missing mandatory evidence prevents a READY FOR DAILY USE verdict.",
+    "Final documentation, Git state, compatibility matrix, limitations, and quick-start are backed by newly executed evidence"
+  ],
+  "verification_strategy": "Run the full Python and Node suites; build and inspect clean wheel/npm artifacts; exercise isolated install, doctor, activation, update/repair, and uninstall; test new/existing projects and the governed coding workflow; launch bounded fresh native-agent sessions where available; run focused security regressions; and review the complete diff before commit and push.",
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "title": "Verify baseline and current implementation",
+      "objective": "Establish exact repository, test, package, and existing-fix evidence.",
+      "deliverables": ["Recorded branch/diff/baseline evidence and P0 implementation map"],
+      "acceptance_criteria": ["Exact Python and Node results are captured and pre-existing local content is preserved"],
+      "depends_on": [],
+      "priority": "critical"
+    },
+    {
+      "id": "TASK-002",
+      "title": "Reproduce P0 failure scenarios",
+      "objective": "Classify every named P0 through deterministic focused tests and adversarial fixtures.",
+      "deliverables": ["Per-P0 reproduction classification with concrete evidence"],
+      "acceptance_criteria": ["Every named P0 is reproduced, verified fixed, or explicitly blocked by unavailable infrastructure"],
+      "depends_on": ["TASK-001"],
+      "priority": "critical"
+    },
+    {
+      "id": "TASK-003",
+      "title": "Correct engine-resolution defects",
+      "objective": "Close reproduced wrong-engine or native-template gaps test-first.",
+      "deliverables": ["Minimal engine-resolution fixes and regression tests, if required"],
+      "acceptance_criteria": ["No generated native asset silently invokes an unverified PATH executable"],
+      "depends_on": ["TASK-002"],
+      "priority": "critical"
+    },
+    {
+      "id": "TASK-004",
+      "title": "Correct lifecycle error handling",
+      "objective": "Close reproduced lifecycle safety or aggregate error-propagation gaps test-first.",
+      "deliverables": ["Minimal install, repair, update, or uninstall fixes and regression tests, if required"],
+      "acceptance_criteria": ["Partial failures are nonzero, recoverable, and never remove unverified or foreign content", "Inject failed engine installation/upgrade, failed skill/command regeneration, partial host-registration failure, and interrupted update; each must preserve or restore the last known-good engine and compatible integration assets, verify recovered identity and asset compatibility, and preserve previous project data and unrelated user configuration. Claim rollback only from actual injected-failure evidence."],
+      "depends_on": ["TASK-002"],
+      "priority": "critical"
+    },
+    {
+      "id": "TASK-005",
+      "title": "Complete durable project activation",
+      "objective": "Close reproduced onboarding-to-project-persistence gaps test-first.",
+      "deliverables": ["Minimal persistence fixes and regression tests, if required"],
+      "acceptance_criteria": ["Authorized initialization creates one durable pointer while preserving existing instructions and state"],
+      "depends_on": ["TASK-002"],
+      "priority": "critical"
+    },
+    {
+      "id": "TASK-006",
+      "title": "Harden installed-artifact tests",
+      "objective": "Ensure wheel and npm packaging failures are deterministic and installed resources are tested.",
+      "deliverables": ["Clean packaging evidence and any required deterministic test hardening"],
+      "acceptance_criteria": ["Required build failures fail tests and all shipped native assets are verified from installed artifacts"],
+      "depends_on": ["TASK-003", "TASK-004", "TASK-005"],
+      "priority": "high"
+    },
+    {
+      "id": "TASK-007",
+      "title": "Verify clean-room lifecycle",
+      "objective": "Exercise real built artifacts through install, doctor, activation readiness, repair or update, and uninstall.",
+      "deliverables": ["Captured isolated lifecycle evidence"],
+      "acceptance_criteria": ["Correct identity and paths are preserved and project state survives safe uninstall and failure recovery", "Inject failed engine installation/upgrade, failed skill/command regeneration, partial host-registration failure, and interrupted update; each must preserve or restore the last known-good engine and compatible integration assets, verify recovered identity and asset compatibility, and preserve previous project data and unrelated user configuration. Claim rollback only from actual injected-failure evidence."],
+      "depends_on": ["TASK-006"],
+      "priority": "high"
+    },
+    {
+      "id": "TASK-008",
+      "title": "Verify governed workflow recovery",
+      "objective": "Exercise consented project onboarding, real coding workflow, checkpoint, verification, review, handoff, and fresh-session recovery.",
+      "deliverables": ["Disposable new/existing project workflow evidence"],
+      "acceptance_criteria": ["The fixture completes the governed sequence and a genuinely new agent session recovers it where feasible", "A mandatory genuinely fresh Codex CLI session invokes native $aperio-next and proves discovery, activation, correct engine identity, actual aperio next execution, consented initialization, and a governed coding task in a disposable project. Another fresh session receives Continue the previous task and uses the engine to recover completed and pending work. Reading SKILL.md or launching a Python subprocess is insufficient."],
+      "depends_on": ["TASK-007"],
+      "priority": "high"
+    },
+    {
+      "id": "TASK-009",
+      "title": "Verify native host compatibility",
+      "objective": "Probe all six requested hosts and run bounded native activation on available authenticated hosts.",
+      "deliverables": ["Evidence-separated six-host compatibility matrix"],
+      "acceptance_criteria": ["Registration, discovery, activation, engine invocation, initialization, and recovery are reported separately without unsupported claims", "Codex is a primary mandatory acceptance target. Report Codex CLI and VS Code Codex extension results separately with exact blockers for unavailable environments; missing Codex evidence remains unmet."],
+      "depends_on": ["TASK-007"],
+      "priority": "high"
+    },
+    {
+      "id": "TASK-010",
+      "title": "Perform security and final-diff review",
+      "objective": "Find and correct reproducible critical or high risks across the full feature diff.",
+      "deliverables": ["Security findings, regression evidence, and independent final-diff review"],
+      "acceptance_criteria": ["No known critical or high issue remains in the declared verified scope", "A separate reviewer agent or independent fresh review session receives the complete final diff, acceptance criteria, and test evidence. The implementation author is not the sole reviewer. Require an explicit findings report with concrete security, reliability, and integration defects, file locations, reproduction steps, and assessment of governance/authorization boundaries, packaging, lifecycle, and persistent project instructions. Reproduce and fix all valid critical/high findings with regressions, repeat affected verification, and obtain independent follow-up review. If independence is unavailable, record the exact limitation and leave independent acceptance unmet; never self-certify independence."],
+      "depends_on": ["TASK-008", "TASK-009"],
+      "priority": "critical"
+    },
+    {
+      "id": "TASK-011",
+      "title": "Update release evidence",
+      "objective": "Reconcile user documentation and evidence with newly executed results and limitations.",
+      "deliverables": ["Accurate README, integration, handoff, and release evidence updates"],
+      "acceptance_criteria": ["Counts, commands, host levels, platform limits, and publication status match observed evidence"],
+      "depends_on": ["TASK-010"],
+      "priority": "normal"
+    },
+    {
+      "id": "TASK-012",
+      "title": "Finalize release-candidate handoff",
+      "objective": "Run final verification, update durable state, commit, push, and deliver the required verdict and quick-start.",
+      "deliverables": ["Verified commit and push state, durable Aperio handoff, and required final report"],
+      "acceptance_criteria": ["Final results are exact, the working tree is intentional, and no merge or publication occurs", "Independent review covers the complete final diff including final documentation; recheck subsequent changes before handoff. Report injected-failure rollback evidence, separate Codex CLI/VS Code results, and independent findings and resolutions. Missing mandatory evidence prevents a READY FOR DAILY USE verdict."],
+      "depends_on": ["TASK-011"],
+      "priority": "normal"
+    }
+  ]
+}

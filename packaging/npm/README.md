@@ -1,11 +1,11 @@
 # aperio-next
 
-**One command. Any AI coding agent. Durable project orchestration.**
+**Native agent skills and durable project orchestration.**
 
 Aperio Next keeps a project's brief, decisions, plan, tasks, checkpoints,
-and handoffs inside the project's `.aperio/` folder — so every agent
-session (and every agent you switch to) recovers the full context instead
-of starting from zero.
+and handoffs inside the project's `.aperio/` folder so cooperating agent
+sessions can recover context. Host-specific verification is documented in
+the repository's release-candidate evidence.
 
 This npm package is the installer: it bootstraps the local Python engine
 (stdlib-only, no accounts, no services) and registers a native
@@ -14,8 +14,10 @@ machine.
 
 ## Install
 
+This release candidate is not published to npm. From a local packed artifact:
+
 ```sh
-npx aperio-next install
+npx --yes --package ./aperio-next-1.2.0-rc.2.tgz aperio-next install
 ```
 
 Requires Node 18+ and Python 3.11+ (no other dependencies). The installer:
@@ -54,10 +56,13 @@ approve); in an Aperio-managed project it resumes from durable state.
 ## Health, updates, removal
 
 ```sh
-aperio-next doctor      # engine, Python, and per-host integration health
-aperio-next update      # refresh engine + skill assets
-aperio-next uninstall   # remove skills + engine; your projects' .aperio/ data is kept
+npx --yes --package ./aperio-next-1.2.0-rc.2.tgz aperio-next doctor
+npx --yes --package ./aperio-next-1.2.0-rc.2.tgz aperio-next update
+npx --yes --package ./aperio-next-1.2.0-rc.2.tgz aperio-next uninstall
 ```
+
+npx does not leave a persistent launcher command. Each invocation above
+selects the same local artifact. Uninstall retains project `.aperio/` data.
 
 ## Honesty notes
 
@@ -65,5 +70,6 @@ aperio-next uninstall   # remove skills + engine; your projects' .aperio/ data i
   activates it depends on the host — `aperio-next doctor` separates
   registered from activated, and the engine never claims runtime
   enforcement inside a third-party host.
-- Not published to npm yet? Install from a local packed artifact:
-  `npm pack` this directory, then `npx ./aperio-next-<version>.tgz install`.
+- Public `npx aperio-next install` is a future interface, requiring
+  publication and registry verification. It is not the verified command
+  for this release candidate.

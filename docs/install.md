@@ -3,7 +3,9 @@
 Aperio is a **stdlib-only Python package** (no runtime dependencies). A fresh
 install needs only Node 18+ and Python 3.11+ (for the one-line installer) or
 just Python 3.11+ with a package manager that keeps it isolated.
-No services are contacted, and no global configuration is changed.
+The engine itself needs no service or account. npm/npx may contact its
+registry, and installation registers managed skill files in detected hosts'
+user configuration directories.
 
 The recommended method is the **npm launcher**: one command installs the
 engine AND registers the `aperio-next` skill in every supported coding agent
@@ -13,8 +15,8 @@ it finds on your machine.
 
 - Node **18 or newer** (`node --version`) — only for the npm launcher.
 - Python **3.11 or newer**. Check with `python3 --version` (macOS/Linux) or
-  `py --version` (Windows). The full test suite passes on 3.11, 3.12, 3.13 and
-  3.14 (macOS arm64 in this release).
+  `py --version` (Windows). This completion run executed the full suite on
+  Python 3.14/macOS arm64; other supported Python versions were not rerun.
 - For the Python-only alternative: one of
   [`uv`](https://docs.astral.sh/uv/getting-started/installation/) or
   [`pipx`](https://pipx.pypa.io/latest/installation/).
@@ -32,7 +34,7 @@ git clone --branch feat/universal-agent-integration \
   https://github.com/SHAHID8142/aperio-next.git
 cd aperio-next
 ./scripts/build-npm-package.sh          # builds the wheel + packs the tgz
-npx ./dist/aperio-next-<version>.tgz install
+npx --yes --package ./dist/aperio-next-1.2.0-rc.2.tgz aperio-next install
 ```
 
 The installer:
@@ -48,9 +50,9 @@ The installer:
 4. Prints only verified facts; undetected hosts are listed as pending.
 
 ```sh
-aperio-next doctor        # engine, runtime, and per-host integration health
-aperio-next update        # refresh engine + skill assets
-aperio-next uninstall     # remove skills + engine (project data is kept)
+npx --yes --package ./dist/aperio-next-1.2.0-rc.2.tgz aperio-next doctor
+npx --yes --package ./dist/aperio-next-1.2.0-rc.2.tgz aperio-next update
+npx --yes --package ./dist/aperio-next-1.2.0-rc.2.tgz aperio-next uninstall
 ```
 
 If `aperio` is not found in a new terminal, add the shim directory to PATH:
@@ -114,7 +116,7 @@ passive probe of documented provider CLIs. See
 ## 7. Upgrade
 
 ```sh
-aperio-next update        # npm installs: engine + skill assets
+npx --yes --package ./dist/aperio-next-1.2.0-rc.2.tgz aperio-next update
 uv tool upgrade aperio-next
 # or reinstall a specific ref:
 uv tool install --force "git+https://github.com/SHAHID8142/aperio-next.git@<NEW-REF>"
@@ -124,10 +126,33 @@ Project state is never touched by an upgrade. Inside a project,
 `aperio upgrade <project>` previews and applies only explicitly registered
 schema migrations, with backups.
 
+For an unpacked local release candidate, use the tarball explicitly for
+each lifecycle command (the npx invocation does not install a persistent
+`aperio-next` shell command):
+
+```sh
+npx --yes --package ./dist/aperio-next-1.2.0-rc.2.tgz aperio-next doctor
+npx --yes --package ./dist/aperio-next-1.2.0-rc.2.tgz aperio-next update
+npx --yes --package ./dist/aperio-next-1.2.0-rc.2.tgz aperio-next uninstall
+```
+
+An update snapshots the owned engine and compatible integration assets.
+Reported failure restores them; after an interrupted update, the next
+launcher invocation recovers before continuing. Committed cleanup uses a
+durable marker so interruption cannot restore a partially deleted backup.
+Regression tests inject failed engine installation, failed regeneration,
+partial host registration and real SIGKILL interruptions, including
+manifest and cleanup windows. Foreign files and unrelated instruction text
+are preserved. Missing/corrupt entry points can be repaired through the
+installed module only after its identity is verified. If the entire module
+is corrupt or a backup is incomplete, the launcher refuses rather than
+claiming successful repair; retain the diagnostic and backup for inspection.
+Power-loss durability and other operating systems have not been exercised.
+
 ## 8. Uninstall
 
 ```sh
-aperio-next uninstall            # npm installs
+npx --yes --package ./dist/aperio-next-1.2.0-rc.2.tgz aperio-next uninstall
 uv tool uninstall aperio-next    # or: pipx uninstall aperio-next
 ```
 
@@ -142,13 +167,12 @@ plans, and history.
   `~/.aperio-next/bin` to PATH; for uv/pipx run `uv tool update-shell` (or
   `pipx ensurepath`) and reopen the terminal. `uv tool list` shows what is
   installed.
-- **A different `aperio` runs** — an older script earlier on `PATH` is
-  shadowing the new one. `which -a aperio` (macOS/Linux) or `where aperio`
-  (Windows) shows the order; remove the stale entry.
+- **A different `aperio` runs** — use `~/.aperio-next/bin/aperio
+  core-identity --json` and require `product: aperio-next`. Native assets
+  embed a validated absolute path. Do not remove another product's install.
 - **`conflict: foreign file` from the doctor** — a file aperio did not
   create occupies the `aperio-next` skill slot; aperio never overwrites it.
   Rename or remove it yourself, then re-run the install.
 - **Install fails while building** — confirm Python ≥ 3.11 and that Git is
   available (the `git+https://` form needs Git). The npm launcher path never
   builds from source: it installs a bundled wheel offline.
-

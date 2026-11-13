@@ -1,5 +1,10 @@
 # Final handoff — Aperio Next 1.2.0rc2 (for independent audit)
 
+Current completion evidence: [release-candidate-evidence.md](release-candidate-evidence.md).
+The revision-2 run passed 1769 Python and 34 Node tests, verified native
+Codex coding and fresh recovery, and independently resolved eight HIGH
+findings. Earlier counts and host-access statements below are historical.
+
 Prepared per the product-completion directives. Every claim names its
 evidence location; unverifiable items are labeled unverifiable, not
 omitted. Chunk-level detail for the 1.2 program lives in

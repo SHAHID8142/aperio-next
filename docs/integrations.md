@@ -1,5 +1,10 @@
 # Agent integrations: native skill registration, honestly labeled
 
+Current acceptance results are in
+[release-candidate-evidence.md](release-candidate-evidence.md): native Codex
+coding/fresh recovery and OpenCode read-only recovery were verified; the
+current Claude attempt was blocked. Older verification notes below are historical.
+
 `aperio integrations` installs ONE managed skill asset (the activation
 protocol in `src/aperio/integration_assets/`) into the **officially
 documented** skills/commands locations of supported coding-agent hosts, so
@@ -85,7 +90,7 @@ against the live doc sites on 2026-11-12):
 | ZCode | `~/.zcode/skills/aperio-next/SKILL.md` | `~/.zcode/commands/aperio-next.md` | `.zcode/skills/…` | `/aperio-next`, skill mention |
 | Claude Code | `~/.claude/skills/aperio-next/SKILL.md` | `~/.claude/commands/aperio-next.md` | `.claude/skills/…` | `/aperio-next` |
 | OpenCode | `~/.config/opencode/skills/aperio-next/SKILL.md` | `~/.config/opencode/commands/aperio-next.md` | `.opencode/skills/…` | `/aperio-next`, `@aperio-next` |
-| Codex CLI | `~/.agents/skills/aperio-next/SKILL.md` | — (custom prompts are deprecated upstream) | — | `$aperio-next`, `/skills` |
+| Codex CLI | `~/.agents/skills/aperio-next/SKILL.md` | — (custom prompts are deprecated upstream) | `.agents/skills/aperio-next/SKILL.md` | `$aperio-next`, `/skills` |
 | Gemini CLI | `~/.gemini/skills/aperio-next/SKILL.md` | `~/.gemini/commands/aperio-next.toml` | — | `/aperio-next` |
 | Cursor | `~/.cursor/skills/aperio-next/SKILL.md` | — (global commands not documented upstream) | `.cursor/skills/…` | `/aperio-next` |
 | Cline | `~/.cline/skills/aperio-next/SKILL.md` | — | `.cline/skills/…` | skill auto-load by description |
@@ -154,7 +159,7 @@ documented path only.
   documented 1024-char discovery limit (regression-tested); Claude Code's
   combined description+`when_to_use` budget (1536 chars) is also guarded.
 
-## Verification status (this release)
+## Historical verification before revision-2 completion
 
 - **File registration: verified** for all 26 supported hosts on macOS
   arm64 — via the test suite (fake HOMEs) and live installs on a real

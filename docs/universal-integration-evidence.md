@@ -1,5 +1,11 @@
 # Universal agent integration — verification evidence
 
+Historical evidence below is retained. The subsequent approved revision-2
+completion run, including Codex native coding/recovery, rollback injections,
+current test totals and independent findings, is recorded in
+[release-candidate-evidence.md](release-candidate-evidence.md). Use that
+record for current release claims; old host/model availability is historical.
+
 Branch `feat/universal-agent-integration` (base: main @ `9d4816b`,
 1.2.0rc2). Recorded 2026-11-12 on macOS arm64 (Darwin 27.2.0). Every claim
 below names the exact command that produced it; anything not executed is
