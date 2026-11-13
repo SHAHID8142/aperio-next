@@ -32,8 +32,19 @@ const VENV_DIR = path.join(APERIO_HOME, "venv");
 const BIN_DIR = path.join(APERIO_HOME, "bin");
 const MANIFEST = path.join(APERIO_HOME, "install-root.json");
 const ENGINE_DIR = path.join(__dirname, "..", "engine");
+const BACKUP = path.join(APERIO_HOME, ".update-backup");
+const COMMITTED = path.join(APERIO_HOME, ".update-committed");
+let transactionActive = false;
+let moduleEngine = false;
 
 function fail(msg) {
+  if (transactionActive) {
+    try {
+      restoreUpdate();
+    } catch (error) {
+      msg += `\nRollback incomplete; backup retained at ${BACKUP}: ${error.message}`;
+    }
+  }
   process.stderr.write(`aperio-next: error: ${msg}\n`);
   process.exit(1);
 }
@@ -124,6 +135,168 @@ function readManifest() {
   }
 }
 
+function rejectSymlinkParents(target) {
+  for (let current = path.resolve(target); ; current = path.dirname(current)) {
+    try {
+      if (fs.lstatSync(current).isSymbolicLink()) {
+        const systemAlias = process.platform === "darwin" &&
+          ["/var", "/tmp", "/etc"].includes(current) &&
+          fs.realpathSync(current) === `/private${current}`;
+        if (!systemAlias) throw new Error(`symlink refused: ${current}`);
+      }
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    if (path.dirname(current) === current) break;
+  }
+}
+
+function validateInstallRoot() {
+  const root = path.resolve(APERIO_HOME);
+  if ([path.parse(root).root, os.homedir(), process.cwd()].includes(root)) {
+    throw new Error(`unsafe installation root: ${root}`);
+  }
+  rejectSymlinkParents(root);
+  const recoveryOwned = fs.existsSync(path.join(BACKUP, "install-root.json")) &&
+    JSON.parse(fs.readFileSync(path.join(BACKUP, "install-root.json"), "utf8")).product === "aperio-next";
+  if (fs.existsSync(root) && fs.readdirSync(root).length && readManifest()?.product !== "aperio-next" && !recoveryOwned) {
+    throw new Error(`foreign installation root: ${root}`);
+  }
+}
+
+function checkedReport(args, field) {
+  const result = engine(args);
+  let data;
+  try { data = JSON.parse(result.stdout); } catch { throw new Error("invalid engine JSON report"); }
+  if (!result.ok || !data || !Array.isArray(data[field])) throw new Error("engine operation failed: " + result.stderr);
+  return data;
+}
+
+function beginUpdate() {
+  const manifest = readManifest();
+  if (!manifest) return;
+  if (manifest.version === "installing" && !manifest.hosts?.length && !manifest.projects?.length) return;
+  const identity = checkedIdentity();
+  if (!identity) throw new Error("cannot snapshot an unverified engine; restore a known-good installation before updating");
+  const files = new Map();
+  const remember = (file, instruction = false) => {
+    rejectSymlinkParents(file);
+    if (fs.existsSync(file) && !fs.statSync(file).isFile()) throw new Error(`not a regular file: ${file}`);
+    files.set(file, fs.existsSync(file) ? { bytes: fs.readFileSync(file).toString("base64"), mode: fs.statSync(file).mode, instruction } : { bytes: null, instruction });
+  };
+  const collect = (args) => {
+    const status = checkedReport(args, "hosts");
+    for (const host of status.hosts) {
+      for (const [file, state] of Object.entries(host.files)) {
+        if (state === "managed" || state === "absent") remember(file);
+      }
+    }
+  };
+  collect(["integrations", "status", "--json"]);
+  for (const project of manifest.projects || []) {
+    if (!fs.existsSync(project)) continue;
+    collect(["integrations", "status", "--scope", "project", "--json", project]);
+    for (const name of ["AGENTS.md", "CLAUDE.md"]) remember(path.join(project, name), true);
+  }
+  fs.mkdirSync(BACKUP, { mode: 0o700 });
+  for (const name of ["venv", "bin", "install-root.json"]) {
+    fs.cpSync(path.join(APERIO_HOME, name), path.join(BACKUP, name), { recursive: true, verbatimSymlinks: true });
+  }
+  fs.writeFileSync(path.join(BACKUP, "journal.json"), JSON.stringify({ product: "aperio-next", pid: process.pid, files: [...files] }), { flag: "wx", mode: 0o600 });
+  transactionActive = true;
+}
+
+function restoreUpdate() {
+  const journal = JSON.parse(fs.readFileSync(path.join(BACKUP, "journal.json"), "utf8"));
+  if (journal.product !== "aperio-next") throw new Error("foreign rollback journal");
+  for (const name of ["venv", "bin", "install-root.json"]) {
+    const target = path.join(APERIO_HOME, name);
+    rejectSymlinkParents(name === "bin" ? APERIO_HOME : target);
+    fs.rmSync(target, { recursive: true, force: true });
+    fs.cpSync(path.join(BACKUP, name), target, { recursive: true, verbatimSymlinks: true });
+  }
+  for (const [file, prior] of journal.files) {
+    rejectSymlinkParents(file);
+    if (prior.instruction) {
+      const old = prior.bytes === null ? "" : Buffer.from(prior.bytes, "base64").toString("utf8");
+      const current = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
+      if (old === current) continue;
+      const section = /<!-- aperio-next:project-instructions:begin -->[\s\S]*?<!-- aperio-next:project-instructions:end -->/g;
+      const oldSection = old.match(section)?.[0] || "";
+      const restored = section.test(current) ? current.replace(section, () => oldSection) : current + (oldSection ? `\n\n${oldSection}\n` : "");
+      if (restored) fs.writeFileSync(file, restored);
+      else if (fs.existsSync(file)) fs.unlinkSync(file);
+    } else if (prior.bytes !== null) {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, Buffer.from(prior.bytes, "base64"), { mode: prior.mode });
+    } else if (fs.existsSync(file)) {
+      const current = fs.readFileSync(file, "utf8");
+      if (current.includes("<!-- aperio-next:managed v1 -->") && current.includes("<!-- /apario-next:managed v1 -->")) fs.unlinkSync(file);
+      else process.stderr.write(`Foreign file preserved during rollback: ${file}\n`);
+    }
+  }
+  commitUpdate();
+  process.stderr.write("Previous engine and integration assets restored from rollback backup.\n");
+}
+
+function recoverUpdate() {
+  if (fs.existsSync(COMMITTED)) {
+    rejectSymlinkParents(COMMITTED);
+    if (JSON.parse(fs.readFileSync(COMMITTED, "utf8")).product !== "aperio-next") throw new Error("foreign commit marker");
+    rejectSymlinkParents(BACKUP);
+    fs.rmSync(BACKUP, { recursive: true, force: true });
+    fs.unlinkSync(COMMITTED);
+    return;
+  }
+  if (!fs.existsSync(BACKUP)) return;
+  rejectSymlinkParents(BACKUP);
+  const journalFile = path.join(BACKUP, "journal.json");
+  if (!fs.existsSync(journalFile)) throw new Error(`incomplete backup at ${BACKUP}; no installation mutation was started; inspect before retrying`);
+  const journal = JSON.parse(fs.readFileSync(journalFile, "utf8"));
+  if (journal.pid !== process.pid) {
+    try { process.kill(journal.pid, 0); } catch (error) {
+      if (error.code === "ESRCH") return restoreUpdate();
+      throw error;
+    }
+    throw new Error("another installer operation is active");
+  }
+}
+
+function commitUpdate() {
+  if (fs.existsSync(BACKUP)) atomicJson(COMMITTED, { product: "aperio-next" });
+  transactionActive = false;
+  if (fs.existsSync(BACKUP)) fs.rmSync(BACKUP, { recursive: true });
+  if (fs.existsSync(COMMITTED)) fs.unlinkSync(COMMITTED);
+}
+
+function atomicJson(file, value) {
+  rejectSymlinkParents(file);
+  const temporary = `${file}.${process.pid}.tmp`;
+  const fd = fs.openSync(temporary, "wx", 0o600);
+  try {
+    fs.writeFileSync(fd, JSON.stringify(value, null, 2));
+    fs.fsyncSync(fd);
+  } finally { fs.closeSync(fd); }
+  fs.renameSync(temporary, file);
+}
+
+function checkedIdentity(allowFallback = true) {
+  const result = engine(["core-identity", "--json"]);
+  try {
+    if (result.ok && JSON.parse(result.stdout).product === "aperio-next") return true;
+  } catch {}
+  if (!allowFallback) return false;
+  const fallback = run(venvPython(), ["-I", "-m", "aperio", "core-identity", "--json"]);
+  try {
+    const identity = JSON.parse(fallback.stdout);
+    if (fallback.ok && identity.product === "aperio-next" && path.resolve(identity.python).startsWith(fs.realpathSync(VENV_DIR) + path.sep)) {
+      moduleEngine = true;
+      return true;
+    }
+  } catch {}
+  return false;
+}
+
 function writeManifest(version, extra = {}) {
   fs.mkdirSync(APERIO_HOME, { recursive: true });
   const prior = readManifest() || {};
@@ -139,9 +312,8 @@ function writeManifest(version, extra = {}) {
   if (Array.isArray(extra.hosts)) {
     for (const h of extra.hosts) hosts.add(h);
   }
-  fs.writeFileSync(
+  atomicJson(
     MANIFEST,
-    JSON.stringify(
       {
         product: "aperio-next",
         version,
@@ -149,10 +321,7 @@ function writeManifest(version, extra = {}) {
         updated: new Date().toISOString(),
         projects: [...projects],
         hosts: [...hosts],
-      },
-      null,
-      2
-    )
+      }
   );
 }
 
@@ -228,6 +397,7 @@ function bootstrapEngine({ quiet }) {
   if (!ver.ok) {
     fail(`engine executable did not run: ${ver.stderr.trim()}`);
   }
+  if (!checkedIdentity()) fail("engine identity is not aperio-next");
   if (!quiet) process.stdout.write(`* Engine verified: ${ver.stdout.trim()}\n`);
 
   const shim = ensureEngineShim();
@@ -237,6 +407,7 @@ function bootstrapEngine({ quiet }) {
 }
 
 function engine(args, opts) {
+  if (moduleEngine) return run(venvPython(), ["-I", "-m", "aperio", ...args], opts);
   return run(vengineBin(), args, opts);
 }
 
@@ -254,6 +425,8 @@ function cmdInstall(argv) {
   if (projectScope && !projectDir) {
     fail("--project needs a project directory argument");
   }
+  if (!readManifest()) writeManifest("installing");
+  beginUpdate();
   const version = bootstrapEngine({ quiet: false });
   writeManifest(version.replace(/^aperio\s+/, ""), { project: projectDir });
 
@@ -283,6 +456,8 @@ function cmdInstall(argv) {
   const installed = [];
   const skipped = [];
   const errors = [];
+  if (!res.ok) errors.push("engine reported registration failure");
+  if (payload.project_instructions?.errors?.length) errors.push(...payload.project_instructions.errors);
   const registeredHosts = [];
   for (const r of payload.results) {
     for (const p of r.installed) {
@@ -324,7 +499,8 @@ function cmdInstall(argv) {
       ? `Engine command: ${path.join(BIN_DIR, "aperio.cmd")}\n`
       : `Engine command: aperio  (add to PATH if missing: export PATH="${BIN_DIR}:$PATH")\n`)
   );
-  process.exit(errors.length ? 1 : 0);
+  if (errors.length) fail(errors.join("; "));
+  commitUpdate();
 }
 
 function cmdDoctor() {
@@ -378,6 +554,7 @@ function cmdUpdate() {
     process.stdout.write("Not installed yet — running a fresh install.\n\n");
     return cmdInstall([]);
   }
+  beginUpdate();
   const version = bootstrapEngine({ quiet: false });
   writeManifest(version.replace(/^aperio\s+/, ""));
   process.stdout.write("* Refreshing host skill registrations...\n");
@@ -400,6 +577,17 @@ function cmdUpdate() {
     for (const line of errors) process.stderr.write(`  ! ${line}\n`);
     fail("update incomplete: one or more hosts reported errors");
   }
+  for (const project of readManifest().projects || []) {
+    if (!fs.existsSync(project)) continue;
+    const status = checkedReport(["integrations", "status", "--scope", "project", "--json", project], "hosts");
+    const registered = status.hosts.filter(host => Object.values(host.files).includes("managed"));
+    if (!registered.length) continue;
+    const args = ["integrations", "install", "--scope", "project", "--project-instructions", "--json", project];
+    for (const host of registered) args.push("--host", host.host);
+    const report = checkedReport(args, "results");
+    if (report.results.some(r => r.errors.length) || report.project_instructions?.errors?.length) fail("project integration refresh failed");
+  }
+  commitUpdate();
   process.stdout.write(
     `Update complete: ${version.replace(/^aperio\s+/, "")}\n`
   );
@@ -419,7 +607,9 @@ function cmdUninstall() {
   let removeErrors = [];
   let engineRan = false;
   if (fs.existsSync(vengineBin())) {
+    if (!checkedIdentity(false)) fail("engine identity could not be verified; installation KEPT for repair");
     const res = engine(["integrations", "remove", "--json"]);
+    if (!res.ok) removeErrors.push(`engine removal failed (exit ${res.code})`);
     engineRan = true;
     let payload = null;
     try {
@@ -428,6 +618,7 @@ function cmdUninstall() {
       payload = null;
     }
     if (payload && Array.isArray(payload.results)) {
+      if (payload.ok === false) removeErrors.push("engine reported incomplete removal");
       for (const r of payload.results) {
         for (const p of r.removed) process.stdout.write(`  - ${r.display}: ${p}\n`);
         for (const p of r.kept)
@@ -457,6 +648,7 @@ function cmdUninstall() {
         "integrations", "remove", "--scope", "project",
         "--project-instructions", "--json", proj,
       ]);
+      if (!pr.ok) removeErrors.push(`project cleanup failed for ${proj} (exit ${pr.code})`);
       let ppayload = null;
       try {
         ppayload = JSON.parse(pr.stdout);
@@ -464,6 +656,7 @@ function cmdUninstall() {
         ppayload = null;
       }
       if (ppayload && Array.isArray(ppayload.results)) {
+        if (ppayload.ok === false) removeErrors.push(`project cleanup incomplete for ${proj}`);
         for (const r of ppayload.results) {
           for (const p of r.removed)
             process.stdout.write(`  - ${r.display} (project): ${p}\n`);
@@ -578,7 +771,13 @@ module.exports = {
     }
     const fn = COMMANDS[command];
     if (!fn) fail(`unknown command: ${command} (try: install, doctor, update, uninstall)`);
-    fn(rest);
+    try {
+      validateInstallRoot();
+      recoverUpdate();
+      fn(rest);
+    } catch (error) {
+      fail(error.message);
+    }
   },
 };
 

@@ -308,7 +308,7 @@ test("uninstall keeps the root when the engine prints garbage (exit 0)", () => {
   const un = runLauncher(["uninstall"], sb);
   assert.strictEqual(un.status, 1, un.stdout + un.stderr);
   assert.ok(fs.existsSync(sb.aperioHome));
-  assert.match(un.stderr, /did not return a removal report/);
+  assert.match(un.stderr, /engine identity could not be verified/);
 });
 
 test("uninstall refuses to orphan registrations when the engine bin is missing", () => {
