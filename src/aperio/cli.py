@@ -5871,6 +5871,9 @@ def _cmd_onboarding_confirm_init(args) -> None:
         integrate=not getattr(args, "no_project_integration", False),
     )
     _emit_onboarding(doc, args.as_json)
+    errors = (doc.get("project_integration") or {}).get("errors") or []
+    if errors:
+        raise IntegrationError("initialization completed but project integration failed: " + "; ".join(errors))
 
 
 def _cmd_onboarding_decline(args) -> None:

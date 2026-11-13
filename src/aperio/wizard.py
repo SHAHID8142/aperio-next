@@ -190,9 +190,9 @@ def run(
 
         if action == "confirm_initialization":
             prompter.say(protocol.get("prompt") or "Initialize this project?")
-            prompter.say("  This creates only Aperio's .aperio context folder "
+            prompter.say("  This creates Aperio's .aperio context folder "
                          "(state, onboarding session, empty plan/memory stores).")
-            prompter.say("  Existing files are never overwritten.")
+            prompter.say("  It also adds a managed workflow section to AGENTS.md, preserving existing instructions.")
             chosen = _ask_choice(
                 prompter,
                 [{"id": "yes", "label": "Yes, initialize"},
@@ -209,7 +209,7 @@ def run(
             if not _consent_granted(
                 request_approval,
                 "Initialize this project now? This creates .aperio/ "
-                "scaffolding only; no other files are touched.",
+                "scaffolding and adds a managed section to AGENTS.md, preserving existing instructions.",
             ):
                 prompter.say("Approval not given; nothing was changed.")
                 result.cancelled = True
@@ -236,10 +236,10 @@ def run(
             # consent first, then use the sanctioned initialization path.
             if not session_exists(apdir):
                 prompter.say("  Aperio needs to create its own .aperio/ folder here.")
-                prompter.say("  It contains only Aperio's notes; existing files are never overwritten.")
+                prompter.say("  It also adds a managed workflow section to AGENTS.md, preserving existing instructions.")
                 if not _consent_granted(
                     request_approval,
-                    "Create Aperio's .aperio/ scaffolding in this existing project?",
+                    "Create Aperio's .aperio/ scaffolding and add a managed workflow section to AGENTS.md, preserving existing instructions?",
                 ):
                     prompter.say("Approval not given; nothing was changed.")
                     result.cancelled = True

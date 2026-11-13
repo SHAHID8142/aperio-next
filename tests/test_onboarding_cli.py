@@ -37,6 +37,23 @@ def test_start_json_protocol(run_cli, ws):
     assert len(doc["choices"]) == 2
 
 
+def test_initialization_consent_discloses_persistent_instructions(run_cli, ws):
+    code, out, err = run_cli("next", str(ws), "--json")
+    assert code == 0, err
+    assert "AGENTS.md" in _json(out)["prompt"]
+    assert not (ws / "AGENTS.md").exists()
+
+
+def test_initialization_pointer_failure_is_nonzero_with_partial_state(run_cli, ws, monkeypatch, tmp_path):
+    _validated_engine(monkeypatch, tmp_path)
+    (ws / "AGENTS.md").mkdir()
+    code, out, err = run_cli("onboarding-confirm-init", str(ws), "--approve", "--json")
+    assert code != 0
+    assert _json(out)["project_integration"]["errors"]
+    assert (ws / ".aperio/state.json").exists()
+    assert (ws / "AGENTS.md").is_dir()
+
+
 def test_next_is_canonical_read_only_onboarding_entry(run_cli, ws):
     before = sorted(p.name for p in ws.iterdir())
     code, out, err = run_cli("next", str(ws), "--json")

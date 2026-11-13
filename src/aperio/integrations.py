@@ -198,7 +198,7 @@ HOSTS: tuple[HostSpec, ...] = (
         display="OpenAI Codex CLI",
         user_skill_dir=".agents/skills",
         user_command_dir=None,
-        project_skill_dir=None,
+        project_skill_dir=".agents/skills",
         detect_dirs=(".codex", ".agents"),
         detect_executables=("codex",),
         invocation=(
@@ -734,10 +734,17 @@ def engine_repair_hint(engine_path: str, *, version: str = "") -> str:
 # --------------------------------------------------------------------------
 
 def _reject_symlink(path: Path, what: str) -> None:
-    if path.is_symlink():
-        raise IntegrationError(
-            f"refusing to write {what}: {path} is a symlink"
-        )
+    for candidate in (path, *path.parents):
+        if candidate.is_symlink():
+            system_alias = (
+                sys.platform == "darwin"
+                and str(candidate) in ("/var", "/tmp", "/etc")
+                and candidate.resolve() == Path("/private" + str(candidate))
+            )
+            if not system_alias:
+                raise IntegrationError(
+                    f"refusing to modify {what}: {candidate} is a symlink"
+                )
 
 
 def _atomic_write(path: Path, text: str, *, what: str) -> None:
@@ -766,6 +773,7 @@ def _prepare_managed_file(path: Path, text: str, *, what: str) -> bool:
     Returns True when the file was written. An existing file without
     aperio's managed markers is foreign content and is never touched.
     """
+    _reject_symlink(path, what)
     if path.exists():
         if not is_managed_asset(path):
             raise IntegrationError(
@@ -787,6 +795,7 @@ def _prepare_managed_file(path: Path, text: str, *, what: str) -> bool:
 
 
 def _delete_managed_file(path: Path, *, what: str) -> bool:
+    _reject_symlink(path, what)
     if not path.exists() and not path.is_symlink():
         return False
     # A symlinked target is never followed or silently removed: deleting a

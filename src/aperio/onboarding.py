@@ -134,7 +134,9 @@ def start(raw_path: str) -> dict:
             discovery,
             "confirm_initialization",
             "Would you like to initialize a new project here? "
-            "(Approving creates only Aperio's .aperio context scaffolding; "
+            "(Approving creates Aperio's .aperio context scaffolding and "
+            "adds a managed workflow section to AGENTS.md, preserving "
+            "existing instructions; "
             "declining changes nothing.)",
             extra={
                 "choices": [

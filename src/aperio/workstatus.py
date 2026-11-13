@@ -95,13 +95,13 @@ def build_work_status(aperio_dir: Path, *,
             reviews_summary = {"present": True}
             pending_reviews = [
                 r for r in reviews_doc.get("reviews", [])
-                if r.get("decision") in (None, "pending")
+                if r.get("outcome") == "pending"
             ]
             for review in pending_reviews:
                 approval_requests.append({
                     "review_id": review.get("review_id"),
-                    "task_id": review.get("task_id"),
-                    "submitted_by": review.get("submitter"),
+                    "task_id": (review.get("target") or {}).get("task_id"),
+                    "submitted_by": review.get("submitted_by"),
                 })
         except (json.JSONDecodeError, UnicodeDecodeError):
             reviews_summary = {"present": True, "damaged": True}

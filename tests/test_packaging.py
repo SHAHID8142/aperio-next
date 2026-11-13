@@ -116,6 +116,28 @@ def test_wheel_contains_all_integration_assets():
         assert not missing, f"wheel is missing integration assets: {missing}"
 
 
+def test_built_wheel_resources_render_outside_checkout(tmp_path):
+    wheel = _build_wheel(tmp_path / "dist")
+    target = tmp_path / "installed"
+    installer = ["uv", "pip", "install", "--python", sys.executable] if shutil.which("uv") else [sys.executable, "-m", "pip", "install"]
+    installed = subprocess.run(
+        installer + ["--no-index", "--no-deps", "--target", str(target), str(wheel)],
+        capture_output=True, text=True, timeout=120,
+    )
+    assert installed.returncode == 0, installed.stderr
+    script = (
+        "import sys; sys.path.insert(0, sys.argv[1]); "
+        "import aperio; from aperio.integrations import host_by_id, render_command_body; "
+        "assert aperio.__file__.startswith(sys.argv[1]); "
+        "body = render_command_body(host_by_id('gemini-cli'), engine_path='/fixture/engine', version='fixture'); "
+        "import tomllib; tomllib.loads(body); print('installed Gemini TOML rendered')"
+    )
+    result = subprocess.run([sys.executable, "-I", "-c", script, str(target)], cwd=tmp_path,
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert "installed Gemini TOML rendered" in result.stdout
+
+
 def test_installed_asset_loads_toml_template():
     """The Gemini TOML template must render from whatever is importable now.
 

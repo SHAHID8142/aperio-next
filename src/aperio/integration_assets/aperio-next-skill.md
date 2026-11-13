@@ -30,10 +30,12 @@ services, no accounts). It keeps a project's brief, decisions, plan, task
 states, checkpoints, and handoff inside the project's `.aperio/` folder, so
 any agent session — this one or a future one — can recover the full context.
 
-You are the agent; the engine is the record-keeper and safety layer. Every
-rule below is enforced by the CLI itself: gates refuse out-of-order actions,
-the intake log is append-only, and dispatch needs explicit operator flags.
-Cooperate with it; never try to bypass it.
+You are the agent; the engine records state and enforces gates on its own
+commands: the intake log is append-only and subprocess dispatch requires
+explicit operator flags. These skill instructions are cooperative guidance;
+they cannot intercept direct filesystem edits or guarantee host compliance.
+Honor the gates and never bypass them. Do not assume a different actor's
+identity merely because that actor has a permission you need.
 
 ## Step 1 — Detect the project (read-only, no consent needed)
 

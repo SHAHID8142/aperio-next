@@ -36,6 +36,33 @@ from aperio.errors import AperioError, StateError
 from aperio.cli import main
 
 
+def test_symlinked_host_ancestor_never_writes_or_removes_outside_home(tmp_path):
+    from aperio.integrations import host_by_id, install_for_host, remove_for_host, managed_asset_body
+    home = tmp_path / "home"
+    outside = tmp_path / "outside"
+    home.mkdir()
+    outside.mkdir()
+    (home / ".claude").symlink_to(outside, target_is_directory=True)
+    spec = host_by_id("claude-code")
+    report = install_for_host(spec, home=home, engine_path="/fixture/aperio", version="1")
+    assert report.errors
+    assert not (outside / "skills").exists()
+    asset = outside / "skills" / "aperio-next" / "SKILL.md"
+    asset.parent.mkdir(parents=True)
+    asset.write_text(managed_asset_body("preserve me"))
+    removal = remove_for_host(spec, home=home)
+    assert removal.errors
+    assert asset.exists()
+
+
+def test_codex_project_registration_uses_documented_repo_skill_path(fake_home, tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    reports = _install(fake_home, hosts=("codex-cli",), project_root=project, scope="project")
+    assert reports[0].ok
+    assert reports[0].installed == [str(project / ".agents/skills/aperio-next/SKILL.md")]
+
+
 @pytest.fixture
 def fake_home(tmp_path, monkeypatch):
     home = tmp_path / "home"

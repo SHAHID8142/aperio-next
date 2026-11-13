@@ -123,6 +123,16 @@ def test_matching_approved_evidence_completes(
     assert plan["tasks"][0]["verification"]["evidence"] == "pytest: evidence A"
 
 
+def test_work_status_tracks_actual_review_target_submitter_and_outcome(run_cli, project_dir, tmp_path):
+    from aperio.workstatus import build_work_status
+    aperio_dir = _governed(run_cli, project_dir, tmp_path)
+    _submit(run_cli, project_dir, "pytest: evidence A")
+    pending = build_work_status(aperio_dir)["content"]["approvals"]["pending_reviews"]
+    assert pending == [{"review_id": "REV-0001", "task_id": "TASK-001", "submitted_by": "i"}]
+    assert _approve(run_cli, project_dir)[0] == 0
+    assert build_work_status(aperio_dir)["content"]["approvals"]["pending_reviews"] == []
+
+
 def test_changing_verification_after_approval_requires_new_review(
     run_cli, project_dir, tmp_path
 ):
