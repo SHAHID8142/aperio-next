@@ -35,9 +35,9 @@ Baseline and source audit
 
 ### Checkpoint: Baseline and Reproduction
 
-- [ ] Focused Python and Node suites pass.
-- [ ] Every alleged P0 is classified as reproduced, fixed already, or blocked by unavailable infrastructure, with evidence.
-- [ ] A durable Aperio checkpoint records the classification.
+- [x] Focused Python and Node suites pass.
+- [x] Every alleged P0 is classified as reproduced, fixed already, or blocked by unavailable infrastructure, with evidence.
+- [x] A durable Aperio checkpoint records the classification.
 
 ### Phase 2: Close Confirmed Release Blockers
 
@@ -48,9 +48,9 @@ Baseline and source audit
 
 ### Checkpoint: Implementation
 
-- [ ] Each code change has a failing regression test captured before the fix.
-- [ ] Focused suites and package builds pass.
-- [ ] No ownership, consent, approval, review, or evidence gate is weakened.
+- [x] Each code change has a failing regression test captured before the fix.
+- [x] Focused suites and package builds pass.
+- [x] No ownership, consent, approval, review, or evidence gate is weakened.
 
 ### Phase 3: Real-User Acceptance
 
@@ -61,21 +61,21 @@ Baseline and source audit
 
 ### Checkpoint: Acceptance
 
-- [ ] Full Python and Node suites pass.
-- [ ] Clean-room package lifecycle succeeds without touching real project state.
-- [ ] At least one real supported agent is natively activated and a genuine fresh session recovers the fixture, or the verdict remains below READY FOR DAILY USE.
-- [ ] Governance and independent-review gates are demonstrated with durable evidence.
+- [x] Full Python and Node suites pass.
+- [x] Clean-room package lifecycle succeeds without touching real project state.
+- [x] At least one real supported agent is natively activated and a genuine fresh session recovers the fixture, or the verdict remains below READY FOR DAILY USE.
+- [x] Governance and independent-review gates are demonstrated with durable evidence.
 
 ### Phase 4: Release-Candidate Handoff
 
 - [x] TASK-011: Update release documentation and evidence with only newly observed results and exact limitations.
-- [ ] TASK-012: Review the final diff, commit coherent verified changes, push the existing feature branch, and report GitHub/publication state without merging or publishing.
+- [x] TASK-012: Review the final diff, commit coherent verified changes, push the existing feature branch, and report GitHub/publication state without merging or publishing.
 
 ### Checkpoint: Complete
 
-- [ ] Required final report contains verdict, behavior, resolved issues, exact test results, six-host matrix, limitations, Git state, and a genuinely working quick-start.
-- [ ] Working tree contains no accidental generated artifacts or changes to pre-existing unrelated files.
-- [ ] Aperio task states, checkpoint, decisions, and handoff match the evidence.
+- [x] Required final report contains verdict, behavior, resolved issues, exact test results, six-host matrix, limitations, Git state, and a genuinely working quick-start.
+- [x] Working tree contains no accidental generated artifacts or changes to pre-existing unrelated files.
+- [x] Aperio task states, checkpoint, decisions, and handoff match the evidence.
 
 ## Risks and Mitigations
 

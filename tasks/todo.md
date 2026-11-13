@@ -3,8 +3,10 @@
 ## Execution status
 
 Approved release plan: revision 2, recorded through the engine after explicit
-owner approval. Tasks 001–011 have recorded completion evidence; task 012
-has final independent review approval and is performing the Git handoff.
+owner approval. All 12 tasks have verification evidence and final independent
+review; the feature commits were pushed. Final engine checkpoint and Git SHA
+are recorded through the engine and in the delivery report. Checked criteria
+apply only to the explicitly tested scope, not to unavailable environments.
 The engine-managed plan and checkpoints are authoritative. Detailed checklists
 below retain the approved acceptance contract; unavailable host/platform
 checks remain explicit limitations in docs/release-candidate-evidence.md.
@@ -15,15 +17,15 @@ checks remain explicit limitations in docs/release-candidate-evidence.md.
 
 **Acceptance criteria:**
 
-- [ ] Local/remote branch state and pre-existing untracked content are recorded and preserved.
-- [ ] Python and Node baseline suites finish with exact counts.
-- [ ] Current implementations of every named P0 target are traced to code and tests.
+- [x] Local/remote branch state and pre-existing untracked content are recorded and preserved.
+- [x] Python and Node baseline suites finish with exact counts.
+- [x] Current implementations of every named P0 target are traced to code and tests.
 
 **Verification:**
 
-- [ ] `.venv/bin/python -m pytest -q`
-- [ ] `node --test packaging/npm/test/launcher.test.js`
-- [ ] `git diff --check main...HEAD`
+- [x] `.venv/bin/python -m pytest -q`
+- [x] `node --test packaging/npm/test/launcher.test.js`
+- [x] `git diff --check main...HEAD`
 
 **Dependencies:** None
 
@@ -35,14 +37,14 @@ checks remain explicit limitations in docs/release-candidate-evidence.md.
 
 **Acceptance criteria:**
 
-- [ ] Each listed P0 scenario has a deterministic result.
-- [ ] Any failure is reproduced before source changes.
-- [ ] Non-reproduced claims are tied to concrete passing tests, not code inspection alone.
+- [x] Each listed P0 scenario has a deterministic result.
+- [x] Any failure is reproduced before source changes.
+- [x] Non-reproduced claims are tied to concrete passing tests, not code inspection alone.
 
 **Verification:**
 
-- [ ] Focused `tests/test_integrations.py`, `tests/test_packaging.py`, and Node launcher tests pass.
-- [ ] Disposable fixture outputs are saved in the release evidence/checkpoint.
+- [x] Focused `tests/test_integrations.py`, `tests/test_packaging.py`, and Node launcher tests pass.
+- [x] Disposable fixture outputs are saved in the release evidence/checkpoint.
 
 **Dependencies:** TASK-001
 
@@ -54,12 +56,12 @@ checks remain explicit limitations in docs/release-candidate-evidence.md.
 
 **Acceptance criteria:**
 
-- [ ] No generated native asset silently invokes an unverified PATH executable.
-- [ ] Correct isolated, spaced, missing, corrupt, wrong-product, upgrade, fresh, and project-scoped paths behave safely.
+- [x] No generated native asset silently invokes an unverified PATH executable.
+- [x] Correct isolated, spaced, missing, corrupt, wrong-product, upgrade, fresh, and project-scoped paths behave safely.
 
 **Verification:**
 
-- [ ] Focused Python integration tests pass from source and installed wheel.
+- [x] Focused Python integration tests pass from source and installed wheel.
 
 **Dependencies:** TASK-002
 
@@ -71,14 +73,14 @@ checks remain explicit limitations in docs/release-candidate-evidence.md.
 
 **Acceptance criteria:**
 
-- [ ] Required partial failures return nonzero and retain recoverable state.
-- [ ] Uninstall never strands known registrations or removes an unverified/foreign engine.
-- [ ] Repeated operations are safe and unrelated user configuration survives.
-- [ ] Inject failed engine installation/upgrade, failed skill/command regeneration, partial host-registration failure, and interrupted update; each must preserve or restore the last known-good engine and compatible integration assets, verify recovered identity and asset compatibility, and preserve previous project data and unrelated user configuration. Claim rollback only from actual injected-failure evidence.
+- [x] Required partial failures return nonzero and retain recoverable state.
+- [x] Uninstall never strands known registrations or removes an unverified/foreign engine.
+- [x] Repeated operations are safe and unrelated user configuration survives.
+- [x] Inject failed engine installation/upgrade, failed skill/command regeneration, partial host-registration failure, and interrupted update; each must preserve or restore the last known-good engine and compatible integration assets, verify recovered identity and asset compatibility, and preserve previous project data and unrelated user configuration. Claim rollback only from actual injected-failure evidence.
 
 **Verification:**
 
-- [ ] Focused Python and Node failure-injection tests pass.
+- [x] Focused Python and Node failure-injection tests pass.
 
 **Dependencies:** TASK-002
 
@@ -90,14 +92,14 @@ checks remain explicit limitations in docs/release-candidate-evidence.md.
 
 **Acceptance criteria:**
 
-- [ ] Authorized initialization creates the required pointer exactly once.
-- [ ] Existing `AGENTS.md`, `CLAUDE.md`, host rules, and `.aperio/` state remain intact.
-- [ ] Pointer write/removal failures propagate accurately.
+- [x] Authorized initialization creates the required pointer exactly once.
+- [x] Existing `AGENTS.md`, `CLAUDE.md`, host rules, and `.aperio/` state remain intact.
+- [x] Pointer write/removal failures propagate accurately.
 
 **Verification:**
 
-- [ ] Focused onboarding and integration tests pass.
-- [ ] New/existing disposable project checks pass.
+- [x] Focused onboarding and integration tests pass.
+- [x] New/existing disposable project checks pass.
 
 **Dependencies:** TASK-002
 
@@ -109,14 +111,14 @@ checks remain explicit limitations in docs/release-candidate-evidence.md.
 
 **Acceptance criteria:**
 
-- [ ] Required build failures fail tests rather than becoming skips.
-- [ ] Installed resources include every required Markdown/TOML native asset.
-- [ ] Node tests prove injected failure preconditions occurred.
+- [x] Required build failures fail tests rather than becoming skips.
+- [x] Installed resources include every required Markdown/TOML native asset.
+- [x] Node tests prove injected failure preconditions occurred.
 
 **Verification:**
 
-- [ ] `tests/test_packaging.py` passes against a clean build.
-- [ ] npm pack contents and Node suite pass.
+- [x] `tests/test_packaging.py` passes against a clean build.
+- [x] npm pack contents and Node suite pass.
 
 **Dependencies:** TASK-002, TASK-003, TASK-004, TASK-005
 
@@ -128,14 +130,14 @@ checks remain explicit limitations in docs/release-candidate-evidence.md.
 
 **Acceptance criteria:**
 
-- [ ] Engine identity and absolute paths are correct after install/update.
-- [ ] Project state survives uninstall.
-- [ ] Broken/partial lifecycle states produce honest, retryable failures.
-- [ ] Inject failed engine installation/upgrade, failed skill/command regeneration, partial host-registration failure, and interrupted update; each must preserve or restore the last known-good engine and compatible integration assets, verify recovered identity and asset compatibility, and preserve previous project data and unrelated user configuration. Claim rollback only from actual injected-failure evidence.
+- [x] Engine identity and absolute paths are correct after install/update.
+- [x] Project state survives uninstall.
+- [x] Broken/partial lifecycle states produce honest, retryable failures.
+- [x] Inject failed engine installation/upgrade, failed skill/command regeneration, partial host-registration failure, and interrupted update; each must preserve or restore the last known-good engine and compatible integration assets, verify recovered identity and asset compatibility, and preserve previous project data and unrelated user configuration. Claim rollback only from actual injected-failure evidence.
 
 **Verification:**
 
-- [ ] Captured clean-room commands and outputs support every claim.
+- [x] Captured clean-room commands and outputs support every claim.
 
 **Dependencies:** TASK-006
 
@@ -147,14 +149,14 @@ checks remain explicit limitations in docs/release-candidate-evidence.md.
 
 **Acceptance criteria:**
 
-- [ ] Existing files/instructions are preserved and pointer blocks are idempotent.
-- [ ] The coding task follows plan approval, execution authorization, evidence, and review gates.
-- [ ] A genuinely new Codex CLI session recovers pending/completed state; unavailable access is recorded as an unmet acceptance requirement.
-- [ ] A mandatory genuinely fresh Codex CLI session invokes native $aperio-next and proves discovery, activation, correct engine identity, actual aperio next execution, consented initialization, and a governed coding task in a disposable project. Another fresh session receives Continue the previous task and uses the engine to recover completed and pending work. Reading SKILL.md or launching a Python subprocess is insufficient.
+- [x] Existing files/instructions are preserved and pointer blocks are idempotent.
+- [x] The coding task follows plan approval, execution authorization, evidence, and review gates.
+- [x] A genuinely new Codex CLI session recovers pending/completed state; unavailable access is recorded as an unmet acceptance requirement.
+- [x] A mandatory genuinely fresh Codex CLI session invokes native $aperio-next and proves discovery, activation, correct engine identity, actual aperio next execution, consented initialization, and a governed coding task in a disposable project. Another fresh session receives Continue the previous task and uses the engine to recover completed and pending work. Reading SKILL.md or launching a Python subprocess is insufficient.
 
 **Verification:**
 
-- [ ] Real fixture tests and engine state reports demonstrate the sequence.
+- [x] Real fixture tests and engine state reports demonstrate the sequence.
 
 **Dependencies:** TASK-007
 
@@ -166,14 +168,14 @@ checks remain explicit limitations in docs/release-candidate-evidence.md.
 
 **Acceptance criteria:**
 
-- [ ] Registration/discovery/activation/engine/init/recovery statuses are separately recorded.
-- [ ] Missing or inaccessible hosts remain unverified.
-- [ ] Cross-agent continuation is tested only when two verified agents are safely available.
-- [ ] Codex is a primary mandatory acceptance target. Report Codex CLI and VS Code Codex extension results separately with exact blockers for unavailable environments; missing Codex evidence remains unmet.
+- [x] Registration/discovery/activation/engine/init/recovery statuses are separately recorded.
+- [x] Missing or inaccessible hosts remain unverified.
+- [x] Cross-agent continuation is tested only when two verified agents are safely available.
+- [x] Codex is a primary mandatory acceptance target. Report Codex CLI and VS Code Codex extension results separately with exact blockers for unavailable environments; missing Codex evidence remains unmet.
 
 **Verification:**
 
-- [ ] Host-doctor, integration status, and bounded fresh-session outputs support the matrix.
+- [x] Host-doctor, integration status, and bounded fresh-session outputs support the matrix.
 
 **Dependencies:** TASK-007
 
@@ -185,15 +187,15 @@ checks remain explicit limitations in docs/release-candidate-evidence.md.
 
 **Acceptance criteria:**
 
-- [ ] Every reproducible critical/high finding is fixed with a regression test.
-- [ ] No known critical/high issue remains in the declared verified scope.
-- [ ] Final diff has no accidental or unrelated changes.
-- [ ] A separate reviewer agent or independent fresh review session receives the complete final diff, acceptance criteria, and test evidence. The implementation author is not the sole reviewer. Require an explicit findings report with concrete security, reliability, and integration defects, file locations, reproduction steps, and assessment of governance/authorization boundaries, packaging, lifecycle, and persistent project instructions. Reproduce and fix all valid critical/high findings with regressions, repeat affected verification, and obtain independent follow-up review. If independence is unavailable, record the exact limitation and leave independent acceptance unmet; never self-certify independence.
+- [x] Every reproducible critical/high finding is fixed with a regression test.
+- [x] No known critical/high issue remains in the declared verified scope.
+- [x] Final diff has no accidental or unrelated changes.
+- [x] A separate reviewer agent or independent fresh review session receives the complete final diff, acceptance criteria, and test evidence. The implementation author is not the sole reviewer. Require an explicit findings report with concrete security, reliability, and integration defects, file locations, reproduction steps, and assessment of governance/authorization boundaries, packaging, lifecycle, and persistent project instructions. Reproduce and fix all valid critical/high findings with regressions, repeat affected verification, and obtain independent follow-up review. If independence is unavailable, record the exact limitation and leave independent acceptance unmet; never self-certify independence.
 
 **Verification:**
 
-- [ ] Security-focused suites and full regression suite pass.
-- [ ] `git diff --check` passes.
+- [x] Security-focused suites and full regression suite pass.
+- [x] `git diff --check` passes.
 
 **Dependencies:** TASK-007, TASK-008, TASK-009
 
@@ -205,13 +207,13 @@ checks remain explicit limitations in docs/release-candidate-evidence.md.
 
 **Acceptance criteria:**
 
-- [ ] Counts, versions, activation claims, and commands match current evidence.
-- [ ] Implemented/unit-tested/packaged/registered/activated/E2E/recovered levels remain distinct.
-- [ ] Public npm installation is not claimed before publication.
+- [x] Counts, versions, activation claims, and commands match current evidence.
+- [x] Implemented/unit-tested/packaged/registered/activated/E2E/recovered levels remain distinct.
+- [x] Public npm installation is not claimed before publication.
 
 **Verification:**
 
-- [ ] Documentation links/commands are checked against built artifacts and test results.
+- [x] Documentation links/commands are checked against built artifacts and test results.
 
 **Dependencies:** TASK-010
 
@@ -223,14 +225,14 @@ checks remain explicit limitations in docs/release-candidate-evidence.md.
 
 **Acceptance criteria:**
 
-- [ ] Full suites and package lifecycle pass with exact counts.
-- [ ] Commit and push state are accurately reported; no merge or publication occurs.
-- [ ] Final verdict and quick-start are limited to the verified scope.
-- [ ] Independent review covers the complete final diff including final documentation; recheck subsequent changes before handoff. Report injected-failure rollback evidence, separate Codex CLI/VS Code results, and independent findings and resolutions. Missing mandatory evidence prevents a READY FOR DAILY USE verdict.
+- [x] Full suites and package lifecycle pass with exact counts.
+- [x] Commit and push state are accurately reported; no merge or publication occurs.
+- [x] Final verdict and quick-start are limited to the verified scope.
+- [x] Independent review covers the complete final diff including final documentation; recheck subsequent changes before handoff. Report injected-failure rollback evidence, separate Codex CLI/VS Code results, and independent findings and resolutions. Missing mandatory evidence prevents a READY FOR DAILY USE verdict.
 
 **Verification:**
 
-- [ ] `git status`, final SHA, remote branch, and Aperio work status/checkpoint are captured.
+- [x] `git status`, final SHA, remote branch, and Aperio work status/checkpoint are captured.
 
 **Dependencies:** TASK-011
 
